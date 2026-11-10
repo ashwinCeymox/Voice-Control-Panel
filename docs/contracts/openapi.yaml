@@ -1,0 +1,281 @@
+openapi: 3.1.0
+info:
+  title: Voice AI Control Panel API
+  version: 2.0.0
+  description: Self-hosted Voice AI Gateway with Agent Management, Model Gallery & Web Audio Assistant.
+paths:
+  /health/live:
+    get:
+      summary: Liveness check
+      responses:
+        '200':
+          description: OK
+  /health/ready:
+    get:
+      summary: Readiness check across LocalAI and local-tts
+      responses:
+        '200':
+          description: Ready status
+  /v1/system/resources:
+    get:
+      summary: Host memory, CPU, disk and GPU presence
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      responses:
+        '200':
+          description: Host resource telemetry
+  /v1/gallery/models:
+    get:
+      summary: Filterable model gallery with memory fit scoring
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      parameters:
+        - name: category
+          in: query
+          schema: { type: string, enum: [all, stt, llm, tts] }
+        - name: fits_only
+          in: query
+          schema: { type: boolean, default: false }
+        - name: q
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: List of gallery models
+  /v1/models/install:
+    post:
+      summary: Start an asynchronous model download job
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model_id]
+              properties:
+                model_id: { type: string }
+                provider: { type: string, default: localai }
+      responses:
+        '202':
+          description: Job started, returns job_id
+  /v1/models/install/{job_id}:
+    get:
+      summary: Poll status of an ongoing model installation
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Job progress
+  /v1/models/{id}:
+    delete:
+      summary: Delete an installed model
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Model deleted
+  /v1/models/installed:
+    get:
+      summary: List all currently installed models across LocalAI and local-tts
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      responses:
+        '200':
+          description: Installed models
+  /v1/voices:
+    get:
+      summary: Extended voices listing with gender, language, and engine
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      parameters:
+        - name: model_id
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Voices with metadata
+  /v1/voices/{id}/meta:
+    put:
+      summary: Override voice gender and label metadata
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                gender: { type: string, enum: [male, female, unknown] }
+                name: { type: string }
+      responses:
+        '200':
+          description: Updated voice metadata
+  /v1/agents:
+    get:
+      summary: List all saved agents
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      responses:
+        '200':
+          description: Agents list
+    post:
+      summary: Create a new agent configuration
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentConfig'
+      responses:
+        '201':
+          description: Agent created
+  /v1/agents/{id}:
+    get:
+      summary: Get agent configuration
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Agent detail
+    put:
+      summary: Update agent configuration
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentConfig'
+      responses:
+        '200':
+          description: Agent updated
+    delete:
+      summary: Delete an agent
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Agent deleted
+  /v1/agents/{id}/duplicate:
+    post:
+      summary: Duplicate an existing agent
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '201':
+          description: Duplicated agent
+  /v1/agents/{id}/load:
+    post:
+      summary: Activate agent and verify memory fit
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Agent loaded
+  /v1/agents/active:
+    get:
+      summary: Retrieve currently loaded active agent and status
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      responses:
+        '200':
+          description: Active agent
+  /v1/agents/{id}/test-chat:
+    post:
+      summary: Test chat stream using an agent's configured prompt and LLM
+      security: [{ BearerAuth: [] }, { XiApiKeyAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string }
+      responses:
+        '200':
+          description: Streaming SSE response
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+    XiApiKeyAuth:
+      type: apiKey
+      in: header
+      name: xi-api-key
+  schemas:
+    AgentConfig:
+      type: object
+      required: [name, system_prompt, llm, stt, tts]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        system_prompt: { type: string }
+        llm:
+          type: object
+          required: [model]
+          properties:
+            model: { type: string }
+            temperature: { type: number, default: 0.7 }
+            max_tokens: { type: integer, default: 512 }
+        stt:
+          type: object
+          required: [model]
+          properties:
+            model: { type: string }
+            language: { type: string, default: auto }
+        tts:
+          type: object
+          required: [engine, voice_id]
+          properties:
+            engine: { type: string, default: kokoro }
+            voice_id: { type: string, default: af_heart }
+            speed: { type: number, default: 1.0 }
+        vad:
+          type: object
+          properties:
+            mode: { type: string, default: energy }
+            threshold: { type: number, default: 0.045 }
+            min_silence_ms: { type: integer, default: 650 }
+        audio:
+          type: object
+          properties:
+            echo_mode: { type: string, default: laptop_speakers }
+            barge_in: { type: boolean, default: true }

@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AgentConfiguration",
+  "type": "object",
+  "required": ["id", "name", "system_prompt", "llm", "stt", "tts", "vad", "audio", "schema_version"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "system_prompt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "llm": {
+      "type": "object",
+      "required": ["model"],
+      "properties": {
+        "model": { "type": "string" },
+        "temperature": { "type": "number", "minimum": 0.0, "maximum": 2.0, "default": 0.7 },
+        "max_tokens": { "type": "integer", "minimum": 1, "maximum": 4096, "default": 512 }
+      }
+    },
+    "stt": {
+      "type": "object",
+      "required": ["model"],
+      "properties": {
+        "model": { "type": "string" },
+        "language": { "type": "string", "default": "auto" }
+      }
+    },
+    "tts": {
+      "type": "object",
+      "required": ["engine", "voice_id"],
+      "properties": {
+        "engine": { "type": "string", "default": "kokoro" },
+        "voice_id": { "type": "string", "default": "af_heart" },
+        "speed": { "type": "number", "minimum": 0.5, "maximum": 2.0, "default": 1.0 }
+      }
+    },
+    "vad": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["energy", "silero", "push_to_talk"], "default": "energy" },
+        "threshold": { "type": "number", "default": 0.045 },
+        "min_silence_ms": { "type": "integer", "default": 650 }
+      }
+    },
+    "audio": {
+      "type": "object",
+      "required": ["echo_mode"],
+      "properties": {
+        "echo_mode": { "type": "string", "enum": ["laptop_speakers", "headphones", "half_duplex"], "default": "laptop_speakers" },
+        "barge_in": { "type": "boolean", "default": true }
+      }
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "last_used_at": { "type": ["string", "null"], "format": "date-time" },
+    "schema_version": { "type": "integer", "const": 1 }
+  }
+}

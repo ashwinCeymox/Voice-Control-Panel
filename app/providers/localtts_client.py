@@ -1,0 +1,157 @@
+"""local-tts provider client adhering to saghul/local-tts contracts."""
+import base64
+import json
+import logging
+from typing import AsyncGenerator, Dict, List, Optional
+import httpx
+import websockets
+from app.core.config import settings
+from app.core.errors import ProviderTimeoutError, ProviderUnavailableError
+from app.schemas.voice import Voice, VoiceSettings
+
+logger = logging.getLogger("voice_agent.providers.tts")
+
+
+class LocalTTSClient:
+    def __init__(
+        self,
+        http_base_url: Optional[str] = None,
+        ws_base_url: Optional[str] = None,
+    ):
+        self.http_base_url = (http_base_url or settings.LOCAL_TTS_HTTP_BASE_URL).rstrip("/")
+        self.ws_base_url = (ws_base_url or settings.LOCAL_TTS_WS_BASE_URL).rstrip("/")
+
+    async def synthesize_http(
+        self,
+        text: str,
+        voice_id: Optional[str] = None,
+        model_id: Optional[str] = None,
+        speed: float = 1.0,
+    ) -> bytes:
+        """One-shot HTTP speech synthesis returning raw PCM (24kHz, 16-bit signed mono)."""
+        target_voice = voice_id or settings.LOCAL_TTS_VOICE_ID
+        target_model = model_id or settings.LOCAL_TTS_MODEL
+        url = f"{self.http_base_url}/v1/text-to-speech/{target_voice}/stream"
+
+        payload = {
+            "text": text,
+            "model_id": target_model,
+            "voice_settings": {"speed": speed},
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(url, json=payload)
+                if resp.status_code == 200:
+                    return resp.content
+                else:
+                    logger.error("local-tts HTTP error %d: %s", resp.status_code, resp.text)
+                    raise ProviderUnavailableError("local-tts", details=resp.text)
+        except httpx.TimeoutException:
+            raise ProviderTimeoutError("local-tts")
+        except httpx.RequestError as exc:
+            raise ProviderUnavailableError("local-tts", details=str(exc))
+
+    async def stream_synthesis_ws(
+        self,
+        text_generator: AsyncGenerator[str, None],
+        voice_id: Optional[str] = None,
+        model_id: Optional[str] = None,
+        speed: float = 1.0,
+    ) -> AsyncGenerator[bytes, None]:
+        """Upstream WebSocket speech synthesis streaming raw PCM chunks."""
+        target_voice = voice_id or settings.LOCAL_TTS_VOICE_ID
+        target_model = model_id or settings.LOCAL_TTS_MODEL
+        ws_url = f"{self.ws_base_url}/v1/text-to-speech/{target_voice}/stream-input?model_id={target_model}"
+
+        try:
+            async with websockets.connect(ws_url) as ws:
+                # 1. Send Beginning of Stream (BOS)
+                bos_msg = json.dumps({"text": " ", "voice_settings": {"speed": speed}})
+                await ws.send(bos_msg)
+
+                # 2. Producer task: feed text chunks as they arrive
+                async def text_sender():
+                    try:
+                        async for chunk in text_generator:
+                            if chunk.strip():
+                                await ws.send(
+                                    json.dumps({"text": chunk, "try_trigger_generation": True})
+                                )
+                        # Send End of Stream (EOS)
+                        await ws.send(json.dumps({"text": ""}))
+                    except Exception as e:
+                        logger.error("Error in text sender to local-tts: %s", str(e))
+
+                import asyncio
+                sender_task = asyncio.create_task(text_sender())
+
+                # 3. Consumer loop: receive JSON frames containing base64 audio
+                try:
+                    async for raw_msg in ws:
+                        if isinstance(raw_msg, str):
+                            data = json.loads(raw_msg)
+                            audio_b64 = data.get("audio")
+                            if audio_b64:
+                                pcm_bytes = base64.b64decode(audio_b64)
+                                yield pcm_bytes
+                            if data.get("isFinal"):
+                                break
+                finally:
+                    sender_task.cancel()
+                    try:
+                        await sender_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+        except Exception as exc:
+            logger.error("local-tts WebSocket error: %s", str(exc))
+            raise ProviderUnavailableError("local-tts WebSocket", details=str(exc))
+
+    async def list_voices(self, model_id: Optional[str] = None) -> List[Voice]:
+        """Fetch available voices."""
+        target_model = model_id or settings.LOCAL_TTS_MODEL
+        url = f"{self.http_base_url}/v1/voices?model_id={target_model}"
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    voices_data = payload.get("voices", [])
+                    return [
+                        Voice(
+                            voice_id=v.get("voice_id", v.get("id")),
+                            name=v.get("name", "Unknown"),
+                            category=v.get("category", "premade"),
+                            settings=VoiceSettings(speed=v.get("settings", {}).get("speed", 1.0)),
+                        )
+                        for v in voices_data
+                    ]
+        except Exception:
+            logger.warning("Failed to reach local-tts for voices, returning default voice")
+
+        # Fallback to configured default
+        return [
+            Voice(
+                voice_id=settings.LOCAL_TTS_VOICE_ID,
+                name="Default Voice (Kokoro)",
+                category="premade",
+                settings=VoiceSettings(speed=settings.LOCAL_TTS_SPEED),
+            )
+        ]
+
+    async def list_models(self) -> List[Dict[str, str]]:
+        """Fetch available TTS engine models."""
+        url = f"{self.http_base_url}/v1/models"
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    return resp.json().get("models", [])
+        except Exception:
+            pass
+        return [
+            {"id": "kokoro", "name": "Kokoro (Default)"},
+            {"id": "pocket", "name": "Pocket"},
+            {"id": "kitten", "name": "Kitten"},
+            {"id": "qwen", "name": "Qwen"},
+        ]
