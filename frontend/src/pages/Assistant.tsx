@@ -15,8 +15,9 @@ import { StreamingPCMPlayer } from '../audio/pcmPlayer';
 import { BrowserVAD } from '../audio/vad';
 import { ServerEvent, Agent } from '../types/api';
 
-const API_BASE = 'http://127.0.0.1:8000';
-const WS_BASE = 'ws://127.0.0.1:8000';
+const host = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : '127.0.0.1';
+const API_BASE = `http://${host}:8000`;
+const WS_BASE = `ws://${host}:8000`;
 const DEFAULT_KEY = 'dev-voice-key-12345';
 const AUTH_HEADERS = { Authorization: `Bearer ${DEFAULT_KEY}` };
 
@@ -179,34 +180,60 @@ export const AssistantView: React.FC = () => {
     if (!ticketRes.ok) throw new Error('Failed to acquire WebSocket ticket');
     const { ticket } = await ticketRes.json();
 
-    const ws = new WebSocket(`${WS_BASE}/v1/voice/stream?ticket=${ticket}`);
-    ws.binaryType = 'arraybuffer';
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const ws = new WebSocket(`${WS_BASE}/v1/voice/stream?ticket=${ticket}`);
+      ws.binaryType = 'arraybuffer';
 
-    ws.onmessage = (event) => {
-      if (typeof event.data === 'string') {
-        const payload: ServerEvent = JSON.parse(event.data);
-        handleServerEvent(payload);
-      } else if (event.data instanceof ArrayBuffer) {
-        // Raw PCM chunk from server
-        pcmPlayerRef.current.feed(event.data);
-        if (vadRef.current) vadRef.current.setPlaybackState(true);
-        setState('speaking');
-      }
-    };
+      const timeout = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          try { ws.close(); } catch {}
+          reject(new Error('WebSocket connection timed out'));
+        }
+      }, 8000);
 
-    ws.onerror = (e) => {
-      console.error('WS Error:', e);
-      setErrorMsg('WebSocket connection error');
-      endSession();
-    };
+      ws.onopen = () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+          wsRef.current = ws;
+          resolve(ws);
+        }
+      };
 
-    ws.onclose = () => {
-      setState('idle');
-      if (vadRef.current) vadRef.current.setPlaybackState(false);
-    };
+      ws.onmessage = (event) => {
+        if (typeof event.data === 'string') {
+          try {
+            const payload: ServerEvent = JSON.parse(event.data);
+            handleServerEvent(payload);
+          } catch (err) {
+            console.error('Failed to parse WS text message:', err);
+          }
+        } else if (event.data instanceof ArrayBuffer) {
+          // Raw PCM chunk from server
+          pcmPlayerRef.current.feed(event.data);
+          if (vadRef.current) vadRef.current.setPlaybackState(true);
+          setState('speaking');
+        }
+      };
 
-    wsRef.current = ws;
-    return ws;
+      ws.onerror = (e) => {
+        console.error('WS Error:', e);
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+          reject(new Error('WebSocket connection error'));
+        }
+        setErrorMsg('WebSocket connection error. Please verify backend is running on port 8000.');
+        endSession();
+      };
+
+      ws.onclose = () => {
+        setState('idle');
+        if (vadRef.current) vadRef.current.setPlaybackState(false);
+      };
+    });
   };
 
   const handleServerEvent = (event: ServerEvent) => {

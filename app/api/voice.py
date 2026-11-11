@@ -122,6 +122,7 @@ async def voice_stream(
         system_prompt = _DEFAULT_SYSTEM_PROMPT
         llm_model: Optional[str] = None
         llm_temperature: Optional[float] = None
+        stt_model: Optional[str] = None
         tts_voice_id: Optional[str] = None
         tts_speed: Optional[float] = None
 
@@ -130,6 +131,8 @@ async def voice_stream(
             llm_cfg = turn_agent.get("llm") or {}
             llm_model = llm_cfg.get("model")
             llm_temperature = llm_cfg.get("temperature")
+            stt_cfg = turn_agent.get("stt") or {}
+            stt_model = stt_cfg.get("model")
             tts_cfg = turn_agent.get("tts") or {}
             tts_voice_id = tts_cfg.get("voice_id")
             tts_speed = tts_cfg.get("speed")
@@ -141,6 +144,7 @@ async def voice_stream(
                     audio_bytes=bytes(utterance_bytes),
                     filename=f"utterance.{input_container}",
                     content_type=f"audio/{input_container}",
+                    model=stt_model,
                 )
             except Exception as stt_exc:
                 logger.error("STT failure (localai) for turn %s: %s", turn_id, str(stt_exc))
@@ -275,7 +279,12 @@ async def voice_stream(
             if message.get("type") == "websocket.disconnect":
                 break
             if "text" in message:
-                event_data = json.loads(message["text"])
+                try:
+                    event_data = json.loads(message["text"])
+                except Exception as json_err:
+                    logger.warning("Malformed JSON in WebSocket text frame: %s", json_err)
+                    continue
+
                 event_type = event_data.get("type")
 
                 if event_type == "session.start":
