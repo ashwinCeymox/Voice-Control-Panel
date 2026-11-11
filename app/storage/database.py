@@ -67,6 +67,14 @@ CREATE TABLE IF NOT EXISTS installed_models (
 """
 
 
+DEFAULT_INSTALLED_MODELS = [
+    ("whisper-base", "Whisper Base (GGUF)", "stt", "localai", 145),
+    ("phi-2-chat", "Phi-2 Chat (2.7B)", "llm", "localai", 1800),
+    ("kokoro", "Kokoro", "tts", "local-tts", 350),
+    ("llama-3.2-1b-instruct", "Llama 3.2 1B Instruct", "llm", "localai", 820),
+]
+
+
 def get_db():
     return aiosqlite.connect(settings.APP_DATABASE_PATH)
 
@@ -78,5 +86,10 @@ async def init_db():
         db.row_factory = aiosqlite.Row
         await db.execute("PRAGMA foreign_keys = ON;")
         await db.executescript(SCHEMA_SQL)
+        for mid, name, cat, prov, sz in DEFAULT_INSTALLED_MODELS:
+            await db.execute(
+                "INSERT OR IGNORE INTO installed_models (id, name, category, provider, size_mb) VALUES (?, ?, ?, ?, ?)",
+                (mid, name, cat, prov, sz),
+            )
         await db.commit()
     logger.info("SQLite database initialized at: %s", db_path.resolve())

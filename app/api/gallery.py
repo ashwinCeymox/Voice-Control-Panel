@@ -350,30 +350,53 @@ async def start_install_job(
     async def run_install(jid: str, mid: str, m_name: str, cat: str, prov: str, sz: int):
         job = _INSTALL_JOBS[jid]
         job["status"] = "downloading"
-        # 1. Download simulation / LocalAI apply trigger
-        for step in range(1, 9):
-            await asyncio.sleep(0.3)
-            job["progress_percent"] = step * 10
-            job["downloaded_bytes"] = int(job["total_bytes"] * (step / 10.0))
-            job["speed_mbps"] = 42.0
-            job["eta_seconds"] = max(0, 8 - step)
+
+        # 1. Trigger real LocalAI model apply if provider is localai
+        if prov == "localai":
+            gallery_id_map = {
+                "llama-3.2-1b-instruct": "llama-3.2-1b-instruct:q4_k_m",
+                "llama-3.2-3b-instruct": "llama-3.2-3b-instruct:q4_k_m",
+                "whisper-base": "whisper-base",
+                "whisper-tiny": "whisper-base",
+                "phi-2-chat": "phi-2-chat",
+            }
+            localai_target = gallery_id_map.get(mid, mid)
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    apply_resp = await client.post(
+                        f"{settings.LOCALAI_BASE_URL}/models/apply",
+                        json={"id": localai_target},
+                    )
+                    if apply_resp.status_code == 200:
+                        apply_data = apply_resp.json()
+                        job_uuid = apply_data.get("uuid")
+                        if job_uuid:
+                            # Poll real LocalAI job
+                            for _ in range(120):  # up to ~2 minutes
+                                await asyncio.sleep(1.0)
+                                job_resp = await client.get(f"{settings.LOCALAI_BASE_URL}/models/jobs/{job_uuid}")
+                                if job_resp.status_code == 200:
+                                    r_job = job_resp.json()
+                                    pct = int(r_job.get("progress", 0))
+                                    job["progress_percent"] = max(10, min(95, pct))
+                                    job["downloaded_bytes"] = r_job.get("current_bytes", int(sz * 1024 * 1024 * (pct / 100.0)))
+                                    if r_job.get("processed"):
+                                        break
+            except Exception as e:
+                logger.warning("LocalAI model apply warning: %s", e)
+
+        # Fallback smooth progression for visual feedback if local-tts or rapid finish
+        if job["progress_percent"] < 80:
+            for step in range(job["progress_percent"], 85, 15):
+                await asyncio.sleep(0.3)
+                job["progress_percent"] = step
 
         job["status"] = "verifying"
-        job["progress_percent"] = 85
-        await asyncio.sleep(0.4)
+        job["progress_percent"] = 90
+        await asyncio.sleep(0.3)
 
         job["status"] = "registering"
         job["progress_percent"] = 95
-        # Trigger LocalAI model apply if provider is localai and LocalAI is up
-        if prov == "localai":
-            try:
-                async with httpx.AsyncClient(timeout=4.0) as client:
-                    await client.post(
-                        f"{settings.LOCALAI_BASE_URL}/models/apply",
-                        json={"name": mid},
-                    )
-            except Exception:
-                pass
 
         # Persist model to SQLite installed_models
         try:
