@@ -20,8 +20,8 @@ export const STTPlayground: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   // Model & Language options
-  const [installedModels, setInstalledModels] = useState<string[]>(['whisper-base']);
-  const [selectedModel, setSelectedModel] = useState<string>('whisper-base');
+  const [installedModels, setInstalledModels] = useState<string[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>('');
   const [language, setLanguage] = useState<string>('auto');
 
   // Mic recording state
@@ -47,12 +47,14 @@ export const STTPlayground: React.FC = () => {
       const res = await fetch(`${API_BASE}/v1/models/installed`, { headers: AUTH_HEADERS });
       if (res.ok) {
         const data = await res.json();
-        const stt = (data.models || [])
-          .filter((m: any) => m.category === 'stt')
-          .map((m: any) => m.id);
-        if (stt.length > 0) {
-          setInstalledModels(stt);
-          setSelectedModel(stt[0]);
+        const sttList: string[] = Array.isArray(data.stt)
+          ? data.stt.map((m: any) => m.id)
+          : [];
+        setInstalledModels(sttList);
+        if (sttList.length > 0) {
+          setSelectedModel(sttList[0]);
+        } else {
+          setSelectedModel('');
         }
       }
     } catch {}
@@ -161,6 +163,15 @@ export const STTPlayground: React.FC = () => {
         </div>
       )}
 
+      {installedModels.length === 0 && (
+        <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between gap-3 text-xs text-amber-300">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>No speech-to-text models installed. Install Whisper from the Model Registry to enable speech transcription.</span>
+          </div>
+        </div>
+      )}
+
       {/* Model & Language Bar */}
       <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
@@ -170,13 +181,18 @@ export const STTPlayground: React.FC = () => {
           <select
             value={selectedModel}
             onChange={(e) => setSelectedModel(e.target.value)}
-            className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+            disabled={installedModels.length === 0}
+            className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500 disabled:opacity-50"
           >
-            {installedModels.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
+            {installedModels.length === 0 ? (
+              <option value="" disabled>No STT model installed</option>
+            ) : (
+              installedModels.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))
+            )}
           </select>
         </div>
 

@@ -11,12 +11,10 @@ export const TTSPlayground: React.FC = () => {
   const [text, setText] = useState(
     'Hello! This is a test of self-hosted text to speech synthesis using Kokoro on an Apple Silicon M2.'
   );
-  const [installedModels, setInstalledModels] = useState<Array<{ id: string; name: string }>>([
-    { id: 'kokoro', name: 'Kokoro 82M (local-tts)' },
-  ]);
-  const [selectedModel, setSelectedModel] = useState<string>('kokoro');
+  const [installedModels, setInstalledModels] = useState<Array<{ id: string; name: string }>>([]);
+  const [selectedModel, setSelectedModel] = useState<string>('');
   const [voices, setVoices] = useState<Voice[]>([]);
-  const [voiceId, setVoiceId] = useState<string>('af_heart');
+  const [voiceId, setVoiceId] = useState<string>('');
   const [speed, setSpeed] = useState<number>(1.0);
   const [loading, setLoading] = useState<boolean>(false);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
@@ -155,6 +153,15 @@ export const TTSPlayground: React.FC = () => {
         </div>
       )}
 
+      {installedModels.length === 0 && (
+        <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between gap-3 text-xs text-amber-300">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>No text-to-speech models installed. Install Kokoro from the Model Registry to enable speech synthesis.</span>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Left Column: Voice Picker & Model Select */}
         <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-4">
@@ -170,13 +177,18 @@ export const TTSPlayground: React.FC = () => {
             <select
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+              disabled={installedModels.length === 0}
+              className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 disabled:opacity-50"
             >
-              {installedModels.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name || m.id}
-                </option>
-              ))}
+              {installedModels.length === 0 ? (
+                <option value="" disabled>No TTS models installed</option>
+              ) : (
+                installedModels.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name || m.id}
+                  </option>
+                ))
+              )}
             </select>
           </div>
 

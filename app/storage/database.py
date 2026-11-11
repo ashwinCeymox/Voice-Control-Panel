@@ -55,6 +55,15 @@ CREATE TABLE IF NOT EXISTS agents (
     last_used_at TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS installed_models (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    size_mb INTEGER DEFAULT 0,
+    installed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 """
 
 

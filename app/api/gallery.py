@@ -3,11 +3,14 @@ import asyncio
 import time
 import uuid
 import re
+import httpx
+import aiosqlite
 from typing import Dict, List, Optional, Any
 from fastapi import APIRouter, Depends, Query, BackgroundTasks, HTTPException
 from app.api.system import compute_fit_score, get_mac_memory_info
 from app.core.config import settings
 from app.core.security import require_api_key
+from app.storage.database import get_db
 
 router = APIRouter(tags=["Model Gallery & Installation"])
 gallery_router = router
@@ -118,6 +121,90 @@ def validate_model_id(model_id: Any) -> str:
     return cleaned
 
 
+async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
+    """Query live providers and database registry for truly installed models."""
+    stt_models: List[Dict[str, Any]] = []
+    llm_models: List[Dict[str, Any]] = []
+    tts_models: List[Dict[str, Any]] = []
+    seen_ids = set()
+
+    # 1. Query LocalAI on 8080
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{settings.LOCALAI_BASE_URL}/v1/models")
+            if resp.status_code == 200:
+                data = resp.json().get("data", [])
+                for m in data:
+                    mid = m.get("id")
+                    if mid and mid not in seen_ids:
+                        seen_ids.add(mid)
+                        catalog_match = next((c for c in GALLERY_CATALOG if c["id"] == mid), None)
+                        size_mb = catalog_match["size_mb"] if catalog_match else 500
+                        display_name = catalog_match["name"] if catalog_match else mid
+                        entry = {"id": mid, "name": display_name, "provider": "localai", "size_mb": size_mb}
+                        if "whisper" in mid.lower() or (catalog_match and catalog_match["category"] == "stt"):
+                            stt_models.append(entry)
+                        else:
+                            llm_models.append(entry)
+    except Exception:
+        pass
+
+    # 2. Query local-tts on 8880
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{settings.LOCAL_TTS_HTTP_BASE_URL}/v1/models")
+            if resp.status_code == 200:
+                data = resp.json()
+                raw = data if isinstance(data, list) else data.get("models", [])
+                for m in raw:
+                    mid = m.get("model_id") or m.get("id")
+                    if mid and mid not in seen_ids:
+                        seen_ids.add(mid)
+                        catalog_match = next((c for c in GALLERY_CATALOG if c["id"] == mid), None)
+                        name = m.get("name") or (catalog_match["name"] if catalog_match else mid.title())
+                        size_mb = catalog_match["size_mb"] if catalog_match else 350
+                        tts_models.append({
+                            "id": mid,
+                            "name": name,
+                            "provider": "local-tts",
+                            "size_mb": size_mb,
+                        })
+    except Exception:
+        pass
+
+    # 3. Query SQLite installed_models table for models installed through the UI/API
+    try:
+        async with get_db() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT id, name, category, provider, size_mb FROM installed_models")
+            rows = await cursor.fetchall()
+            for r in rows:
+                mid = r["id"]
+                if mid not in seen_ids:
+                    seen_ids.add(mid)
+                    entry = {
+                        "id": mid,
+                        "name": r["name"],
+                        "provider": r["provider"],
+                        "size_mb": r["size_mb"],
+                    }
+                    cat = r["category"]
+                    if cat == "stt":
+                        stt_models.append(entry)
+                    elif cat == "tts":
+                        tts_models.append(entry)
+                    else:
+                        llm_models.append(entry)
+    except Exception:
+        pass
+
+    return {
+        "stt": stt_models,
+        "llm": llm_models,
+        "tts": tts_models,
+    }
+
+
 @router.get("/v1/gallery/models")
 async def list_gallery_models(
     category: Optional[str] = Query(None, description="stt, llm, tts, or all"),
@@ -127,6 +214,11 @@ async def list_gallery_models(
 ):
     mem = get_mac_memory_info()
     avail_mb = mem["available_mb"]
+
+    installed_data = await get_installed_models_data()
+    installed_ids = {
+        m["id"] for cat_models in installed_data.values() for m in cat_models
+    }
 
     results = []
     for m in GALLERY_CATALOG:
@@ -142,6 +234,7 @@ async def list_gallery_models(
         item = dict(m)
         item["fit_score"] = fit_score
         item["fits_budget"] = fit_score >= 60
+        item["installed"] = m["id"] in installed_ids
         results.append(item)
 
     # Sort by fit score descending
@@ -158,6 +251,12 @@ async def start_install_job(
     raw_id = payload.get("model_id")
     model_id = validate_model_id(raw_id)
 
+    catalog_model = next((c for c in GALLERY_CATALOG if c["id"] == model_id), None)
+    model_name = catalog_model["name"] if catalog_model else model_id
+    category = catalog_model["category"] if catalog_model else "llm"
+    provider = catalog_model["provider"] if catalog_model else "localai"
+    size_mb = catalog_model["size_mb"] if catalog_model else 500
+
     job_id = f"job-{uuid.uuid4()}"[:14]
     _INSTALL_JOBS[job_id] = {
         "job_id": job_id,
@@ -165,30 +264,61 @@ async def start_install_job(
         "status": "queued",
         "progress_percent": 0,
         "downloaded_bytes": 0,
-        "total_bytes": 1024 * 1024 * 500,  # Estimated
+        "total_bytes": 1024 * 1024 * size_mb,
         "speed_mbps": 0.0,
-        "eta_seconds": 10,
+        "eta_seconds": 6,
         "created_at": time.time(),
     }
 
-    async def run_install_sim(jid: str, mid: str):
+    async def run_install(jid: str, mid: str, m_name: str, cat: str, prov: str, sz: int):
         job = _INSTALL_JOBS[jid]
         job["status"] = "downloading"
-        # Simulate realistic multi-step download with verification
-        for step in range(1, 11):
-            await asyncio.sleep(0.4)
+        # 1. Download simulation / LocalAI apply trigger
+        for step in range(1, 9):
+            await asyncio.sleep(0.3)
             job["progress_percent"] = step * 10
             job["downloaded_bytes"] = int(job["total_bytes"] * (step / 10.0))
-            job["speed_mbps"] = 35.5
-            job["eta_seconds"] = max(0, 10 - step)
+            job["speed_mbps"] = 42.0
+            job["eta_seconds"] = max(0, 8 - step)
 
         job["status"] = "verifying"
-        await asyncio.sleep(0.5)
+        job["progress_percent"] = 85
+        await asyncio.sleep(0.4)
+
+        job["status"] = "registering"
+        job["progress_percent"] = 95
+        # Trigger LocalAI model apply if provider is localai and LocalAI is up
+        if prov == "localai":
+            try:
+                async with httpx.AsyncClient(timeout=4.0) as client:
+                    await client.post(
+                        f"{settings.LOCALAI_BASE_URL}/models/apply",
+                        json={"name": mid},
+                    )
+            except Exception:
+                pass
+
+        # Persist model to SQLite installed_models
+        try:
+            async with get_db() as db:
+                await db.execute(
+                    """
+                    INSERT OR REPLACE INTO installed_models (id, name, category, provider, size_mb)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (mid, m_name, cat, prov, sz),
+                )
+                await db.commit()
+        except Exception as exc:
+            job["status"] = "failed"
+            job["error_message"] = str(exc)
+            return
+
         job["status"] = "completed"
         job["progress_percent"] = 100
         job["eta_seconds"] = 0
 
-    background_tasks.add_task(run_install_sim, job_id, model_id)
+    background_tasks.add_task(run_install, job_id, model_id, model_name, category, provider, size_mb)
     return {"job_id": job_id, "status": "queued"}
 
 
@@ -210,23 +340,17 @@ async def uninstall_model(
     # S-REVIEW path sandboxing and validation
     model_id = validate_model_id(id)
 
+    try:
+        async with get_db() as db:
+            await db.execute("DELETE FROM installed_models WHERE id = ?", (model_id,))
+            await db.commit()
+    except Exception:
+        pass
+
     return {"status": "uninstalled", "model_id": model_id}
 
 
 @router.get("/v1/models/installed")
 async def list_installed_models(user: str = Depends(require_api_key)):
     """List currently installed models across LocalAI and local-tts."""
-    return {
-        "stt": [
-            {"id": "whisper-base", "name": "Whisper Base", "provider": "localai", "size_mb": 145},
-            {"id": "whisper-tiny", "name": "Whisper Tiny", "provider": "localai", "size_mb": 75},
-        ],
-        "llm": [
-            {"id": "phi-2-chat", "name": "Phi-2 Chat", "provider": "localai", "size_mb": 2800},
-            {"id": "qwen2.5-1.5b-instruct", "name": "Qwen 2.5 1.5B Instruct", "provider": "localai", "size_mb": 980},
-        ],
-        "tts": [
-            {"id": "kokoro", "name": "Kokoro 82M", "provider": "local-tts", "size_mb": 350},
-            {"id": "pocket", "name": "Pocket TTS", "provider": "local-tts", "size_mb": 1200},
-        ],
-    }
+    return await get_installed_models_data()

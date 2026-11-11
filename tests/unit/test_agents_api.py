@@ -292,3 +292,17 @@ async def test_create_agent_missing_auth_returns_401():
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         r = await client.post("/v1/agents", json=AGENT_PAYLOAD)
         assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_create_agent_missing_model_returns_400_install_first():
+    """Attempting to create an agent referencing an uninstalled model must fail with 400."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        bad_payload = {
+            **AGENT_PAYLOAD,
+            "llm": {"model": "uninstalled-fake-model-xyz", "temperature": 0.7, "max_tokens": 256},
+        }
+        r = await client.post("/v1/agents", headers=HEADERS, json=bad_payload)
+        assert r.status_code == 400
+        assert "install the model first to proceed" in r.text.lower()

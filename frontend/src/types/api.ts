@@ -232,7 +232,7 @@ export interface GalleryModel {
 export interface InstallJob {
   job_id: string;
   model_id: string;
-  status: 'queued' | 'downloading' | 'verifying' | 'completed' | 'failed';
+  status: 'queued' | 'downloading' | 'verifying' | 'registering' | 'completed' | 'failed';
   progress_percent: number;      // API field name
   downloaded_bytes?: number;
   total_bytes?: number;

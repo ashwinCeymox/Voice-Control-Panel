@@ -116,7 +116,7 @@ class LocalTTSClient:
                 resp = await client.get(url)
                 if resp.status_code == 200:
                     payload = resp.json()
-                    voices_data = payload.get("voices", [])
+                    voices_data = payload if isinstance(payload, list) else payload.get("voices", [])
                     return [
                         Voice(
                             voice_id=v.get("voice_id", v.get("id")),
@@ -125,19 +125,12 @@ class LocalTTSClient:
                             settings=VoiceSettings(speed=v.get("settings", {}).get("speed", 1.0)),
                         )
                         for v in voices_data
+                        if v.get("voice_id") or v.get("id")
                     ]
-        except Exception:
-            logger.warning("Failed to reach local-tts for voices, returning default voice")
+        except Exception as exc:
+            logger.warning("Failed to reach local-tts for voices: %s", exc)
 
-        # Fallback to configured default
-        return [
-            Voice(
-                voice_id=settings.LOCAL_TTS_VOICE_ID,
-                name="Default Voice (Kokoro)",
-                category="premade",
-                settings=VoiceSettings(speed=settings.LOCAL_TTS_SPEED),
-            )
-        ]
+        return []
 
     async def list_models(self) -> List[Dict[str, str]]:
         """Fetch available TTS engine models."""
@@ -146,12 +139,16 @@ class LocalTTSClient:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(url)
                 if resp.status_code == 200:
-                    return resp.json().get("models", [])
+                    data = resp.json()
+                    raw_models = data if isinstance(data, list) else data.get("models", [])
+                    return [
+                        {
+                            "id": m.get("model_id") or m.get("id"),
+                            "name": m.get("name") or m.get("model_id") or m.get("id"),
+                        }
+                        for m in raw_models
+                        if (m.get("model_id") or m.get("id"))
+                    ]
         except Exception:
             pass
-        return [
-            {"id": "kokoro", "name": "Kokoro (Default)"},
-            {"id": "pocket", "name": "Pocket"},
-            {"id": "kitten", "name": "Kitten"},
-            {"id": "qwen", "name": "Qwen"},
-        ]
+        return []

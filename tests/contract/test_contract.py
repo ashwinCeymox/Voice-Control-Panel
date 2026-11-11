@@ -145,3 +145,33 @@ async def test_api_contract_agents_lifecycle():
         assert del_resp1.status_code == 200
         del_resp2 = await client.delete(f"/v1/agents/{dup_agent['id']}", headers=AUTH_HEADER)
         assert del_resp2.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_api_contract_installed_models_and_install_lifecycle():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Check installed models shape
+        resp = await client.get("/v1/models/installed", headers=AUTH_HEADER)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "stt" in data
+        assert "llm" in data
+        assert "tts" in data
+        assert isinstance(data["stt"], list)
+        assert isinstance(data["llm"], list)
+        assert isinstance(data["tts"], list)
+
+        # Trigger install
+        inst_resp = await client.post(
+            "/v1/models/install",
+            headers=AUTH_HEADER,
+            json={"model_id": "kitten-tts-micro"},
+        )
+        assert inst_resp.status_code == 202
+        job_id = inst_resp.json()["job_id"]
+
+        # Check job status
+        status_resp = await client.get(f"/v1/models/install/{job_id}", headers=AUTH_HEADER)
+        assert status_resp.status_code == 200
+        assert status_resp.json()["status"] in ["queued", "downloading", "verifying", "registering", "completed"]

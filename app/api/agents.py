@@ -17,6 +17,7 @@ from app.schemas.agent import (
     TestChatRequest,
 )
 from app.services.agent_manager import AgentManager, DEFAULT_AGENT
+from app.api.gallery import get_installed_models_data
 
 logger = logging.getLogger("voice_agent.api.agents")
 
@@ -24,6 +25,45 @@ router = APIRouter(prefix="/v1/agents", tags=["Agents"])
 agents_router = router  # Alias for explicit export
 
 llm_client = LocalAILLMClient()
+
+
+async def validate_agent_models(data: Dict[str, Any]):
+    """Verify that models referenced by the agent are installed."""
+    try:
+        installed = await get_installed_models_data()
+    except Exception:
+        return
+
+    installed_llms = {m["id"].lower() for m in installed.get("llm", [])}
+    installed_stts = {m["id"].lower() for m in installed.get("stt", [])}
+    installed_tts = {m["id"].lower() for m in installed.get("tts", [])}
+
+    missing = []
+
+    llm_cfg = data.get("llm") or {}
+    llm_model = (llm_cfg.get("model") or "").lower()
+    if installed_llms and llm_model:
+        if not any(llm_model in m or m in llm_model for m in installed_llms):
+            missing.append(f"LLM model '{llm_cfg.get('model')}'")
+
+    stt_cfg = data.get("stt") or {}
+    stt_model = (stt_cfg.get("model") or "").lower()
+    if installed_stts and stt_model:
+        if not any(stt_model in m or m in stt_model for m in installed_stts):
+            missing.append(f"STT model '{stt_cfg.get('model')}'")
+
+    tts_cfg = data.get("tts") or {}
+    tts_engine = (tts_cfg.get("engine") or "").lower()
+    if installed_tts and tts_engine:
+        if not any(tts_engine in m or m in tts_engine for m in installed_tts):
+            missing.append(f"TTS engine '{tts_cfg.get('engine')}'")
+
+    if missing:
+        detail_msg = f"Install the model first to proceed. Missing: {', '.join(missing)}"
+        raise HTTPException(
+            status_code=400,
+            detail=detail_msg,
+        )
 
 
 @router.get("", response_model=AgentListResponse)
@@ -42,6 +82,7 @@ async def create_agent(
 ):
     """Create a new agent configuration."""
     data = payload.model_dump()
+    await validate_agent_models(data)
     created = await AgentManager.create_agent(data)
     return created
 
@@ -101,6 +142,8 @@ async def update_agent(
         raise HTTPException(status_code=400, detail="Field 'name' cannot be empty")
     if not merged_data.get("system_prompt") or not str(merged_data["system_prompt"]).strip():
         raise HTTPException(status_code=400, detail="Field 'system_prompt' cannot be empty")
+
+    await validate_agent_models(merged_data)
 
     updated = await AgentManager.update_agent(id, merged_data)
     return updated

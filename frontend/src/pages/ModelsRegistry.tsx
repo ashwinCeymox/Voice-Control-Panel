@@ -336,7 +336,7 @@ export const ModelsRegistry: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filteredModels.map((model) => {
             const job = activeJobs[model.id];
-            const isInstalling = job && job.status === 'downloading';
+            const isInstalling = job && ['queued', 'downloading', 'verifying', 'registering'].includes(job.status);
 
             return (
               <div
@@ -374,8 +374,8 @@ export const ModelsRegistry: React.FC = () => {
 
                   {isInstalling ? (
                     <div className="space-y-1.5">
-                      <div className="flex justify-between text-[11px] text-indigo-400">
-                        <span>Downloading model weights...</span>
+                      <div className="flex justify-between text-[11px] text-indigo-400 capitalize">
+                        <span>{job.status === 'registering' ? 'Registering with engine...' : job.status === 'verifying' ? 'Verifying model...' : 'Downloading weights...'}</span>
                         <span>{job.progress_percent}%</span>
                       </div>
                       <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">

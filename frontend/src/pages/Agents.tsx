@@ -13,12 +13,37 @@ import {
   Sliders,
   Volume2,
   AlertCircle,
+  FileText,
+  X,
 } from 'lucide-react';
 import { Agent, Voice } from '../types/api';
 
 const API_BASE = 'http://127.0.0.1:8000';
 const DEFAULT_KEY = 'dev-voice-key-12345';
 const AUTH_HEADERS = { Authorization: `Bearer ${DEFAULT_KEY}` };
+
+const SYSTEM_PROMPT_PRESETS = [
+  {
+    name: 'Concise Conversational Assistant',
+    description: 'Natural, spoken dialogue in 1-2 concise sentences without markdown or lists.',
+    prompt: 'You are a warm, concise voice AI assistant. Respond in 1-2 natural spoken sentences. Avoid markdown formatting, bullet points, asterisks, or lists.',
+  },
+  {
+    name: 'Technical & Coding Specialist',
+    description: 'Direct, expert answers to engineering questions formatted for audio delivery.',
+    prompt: 'You are an expert software engineer voice assistant. Give direct, technically accurate answers in 2-3 clear spoken sentences.',
+  },
+  {
+    name: 'Customer Support Specialist',
+    description: 'Empathetic, polite agent ready to resolve queries calmly.',
+    prompt: 'You are a friendly, courteous customer support representative. Acknowledge user questions warmly and provide clear, helpful resolutions.',
+  },
+  {
+    name: 'Storyteller & Creative Persona',
+    description: 'Expressive and engaging narrator with dynamic tonal phrasing.',
+    prompt: 'You are a creative, expressive storyteller. Speak with vivid imagination, warm cadence, and engaging conversational pacing.',
+  },
+];
 
 export const AgentsPage: React.FC = () => {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -29,6 +54,8 @@ export const AgentsPage: React.FC = () => {
   const [saving, setSaving] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [showPromptModal, setShowPromptModal] = useState<boolean>(false);
+  const [customPromptInput, setCustomPromptInput] = useState<string>('');
 
   // Installed models & voices
   const [installedModels, setInstalledModels] = useState<{
@@ -36,11 +63,18 @@ export const AgentsPage: React.FC = () => {
     stt: string[];
     tts: string[];
   }>({
-    llm: ['phi-2-chat', 'qwen2.5-1.5b-instruct'],
-    stt: ['whisper-base', 'whisper-small'],
-    tts: ['kokoro'],
+    llm: [],
+    stt: [],
+    tts: [],
   });
   const [voices, setVoices] = useState<Voice[]>([]);
+
+  // Missing models guard
+  const missingModels: string[] = [];
+  if (installedModels.llm.length === 0) missingModels.push('LLM');
+  if (installedModels.stt.length === 0) missingModels.push('STT');
+  if (installedModels.tts.length === 0) missingModels.push('TTS');
+  const hasMissingModels = missingModels.length > 0;
 
   // Test-chat state
   const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
@@ -86,12 +120,10 @@ export const AgentsPage: React.FC = () => {
         const modRes = await fetch(`${API_BASE}/v1/models/installed`, { headers: AUTH_HEADERS });
         if (modRes.ok) {
           const modData = await modRes.json();
-          if (modData.models) {
-            const llms = modData.models.filter((m: any) => m.category === 'llm').map((m: any) => m.id);
-            const stts = modData.models.filter((m: any) => m.category === 'stt').map((m: any) => m.id);
-            if (llms.length > 0) setInstalledModels((prev) => ({ ...prev, llm: llms }));
-            if (stts.length > 0) setInstalledModels((prev) => ({ ...prev, stt: stts }));
-          }
+          const llms = Array.isArray(modData.llm) ? modData.llm.map((m: any) => m.id) : [];
+          const stts = Array.isArray(modData.stt) ? modData.stt.map((m: any) => m.id) : [];
+          const ttss = Array.isArray(modData.tts) ? modData.tts.map((m: any) => m.id) : [];
+          setInstalledModels({ llm: llms, stt: stts, tts: ttss });
         }
       } catch {}
 
@@ -142,6 +174,10 @@ export const AgentsPage: React.FC = () => {
 
   const handleSave = async () => {
     if (!selectedAgent) return;
+    if (hasMissingModels) {
+      setErrorMsg(`Install the model first to proceed. Missing: ${missingModels.join(', ')}`);
+      return;
+    }
     setSaving(true);
     setErrorMsg(null);
     setSuccessMsg(null);
@@ -224,20 +260,36 @@ export const AgentsPage: React.FC = () => {
   };
 
   const handleCreateNew = () => {
+    if (hasMissingModels) {
+      setErrorMsg(`Install the model first to proceed. Missing: ${missingModels.join(', ')}`);
+      return;
+    }
     const newAgent: Agent = {
       id: `agent-${Date.now().toString(36)}`,
       name: 'New Custom Assistant',
       description: 'A helpful voice AI agent.',
       system_prompt: 'You are a warm, concise voice AI assistant. Respond in 1-2 natural sentences.',
-      llm: { model: installedModels.llm[0] || 'phi-2-chat', temperature: 0.7, max_tokens: 512 },
-      stt: { model: installedModels.stt[0] || 'whisper-base', language: 'auto' },
-      tts: { engine: 'kokoro', voice_id: 'af_heart', speed: 1.0 },
+      llm: { model: installedModels.llm[0] || '', temperature: 0.7, max_tokens: 512 },
+      stt: { model: installedModels.stt[0] || '', language: 'auto' },
+      tts: { engine: installedModels.tts[0] || '', voice_id: voices[0]?.voice_id || '', speed: 1.0 },
       vad: { mode: 'energy', threshold: 0.045, min_silence_ms: 650 },
       audio: { echo_mode: 'laptop_speakers', barge_in: true },
       is_active: false,
     };
     setSelectedAgent(newAgent);
     setChatMessages([]);
+  };
+
+  const handleApplyPreset = (presetPrompt: string) => {
+    if (selectedAgent) {
+      setSelectedAgent({
+        ...selectedAgent,
+        system_prompt: presetPrompt,
+      });
+      setSuccessMsg('System prompt updated!');
+      setTimeout(() => setSuccessMsg(null), 3000);
+    }
+    setShowPromptModal(false);
   };
 
   const handleSendTestChat = async () => {
@@ -310,14 +362,41 @@ export const AgentsPage: React.FC = () => {
             Create, tune, load, and test voice personas with custom system prompts, models, and VAD parameters.
           </p>
         </div>
-        <button
-          onClick={handleCreateNew}
-          className="flex items-center gap-2 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition shadow-sm"
-        >
-          <Plus className="w-4 h-4" />
-          Create Agent
-        </button>
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => {
+              if (selectedAgent) setCustomPromptInput(selectedAgent.system_prompt);
+              setShowPromptModal(true);
+            }}
+            className="flex items-center gap-2 px-3.5 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 rounded-lg text-sm font-medium transition shadow-sm"
+          >
+            <FileText className="w-4 h-4 text-indigo-400" />
+            Add System Prompt
+          </button>
+          <button
+            onClick={handleCreateNew}
+            disabled={hasMissingModels}
+            className="flex items-center gap-2 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition shadow-sm"
+          >
+            <Plus className="w-4 h-4" />
+            Create Agent
+          </button>
+        </div>
       </div>
+
+      {hasMissingModels && (
+        <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between gap-3 text-xs text-amber-300">
+          <div className="flex items-center gap-2.5">
+            <AlertCircle className="w-5 h-5 text-amber-400 shrink-0" />
+            <div>
+              <p className="font-semibold text-amber-200">Install the model first to proceed.</p>
+              <p className="text-amber-300/80 mt-0.5">
+                Missing required models: <strong className="text-white">{missingModels.join(', ')}</strong>. You must install the models from the Model Registry before creating or configuring an agent.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {errorMsg && (
         <div className="p-3.5 bg-rose-500/10 border border-rose-500/30 rounded-lg flex items-center gap-2.5 text-sm text-rose-300">
@@ -440,6 +519,16 @@ export const AgentsPage: React.FC = () => {
 
                 <div className="flex items-center gap-2">
                   <button
+                    onClick={() => {
+                      setCustomPromptInput(selectedAgent.system_prompt);
+                      setShowPromptModal(true);
+                    }}
+                    className="p-2 text-slate-400 hover:text-indigo-400 hover:bg-slate-900 rounded-lg border border-slate-800"
+                    title="System Prompt Presets"
+                  >
+                    <FileText className="w-4 h-4" />
+                  </button>
+                  <button
                     onClick={() => handleDuplicate(selectedAgent.id)}
                     className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-900 rounded-lg border border-slate-800"
                     title="Duplicate Agent"
@@ -457,8 +546,8 @@ export const AgentsPage: React.FC = () => {
                   )}
                   <button
                     onClick={handleSave}
-                    disabled={saving}
-                    className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition shadow-sm ml-2"
+                    disabled={saving || hasMissingModels}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition shadow-sm ml-2"
                   >
                     {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save Changes'}
                   </button>
@@ -501,11 +590,15 @@ export const AgentsPage: React.FC = () => {
                       }
                       className="w-full bg-slate-950 border border-slate-800 rounded-md p-2 text-xs text-slate-200 focus:outline-none"
                     >
-                      {installedModels.llm.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
+                      {installedModels.llm.length === 0 ? (
+                        <option value="" disabled>No LLM installed</option>
+                      ) : (
+                        installedModels.llm.map((m) => (
+                          <option key={m} value={m}>
+                            {m}
+                          </option>
+                        ))
+                      )}
                     </select>
                   </div>
                   <div>
@@ -547,11 +640,15 @@ export const AgentsPage: React.FC = () => {
                       }
                       className="w-full bg-slate-950 border border-slate-800 rounded-md p-2 text-xs text-slate-200 focus:outline-none"
                     >
-                      {installedModels.stt.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
+                      {installedModels.stt.length === 0 ? (
+                        <option value="" disabled>No STT model installed</option>
+                      ) : (
+                        installedModels.stt.map((m) => (
+                          <option key={m} value={m}>
+                            {m}
+                          </option>
+                        ))
+                      )}
                     </select>
                   </div>
                   <div>
@@ -599,11 +696,7 @@ export const AgentsPage: React.FC = () => {
                           </option>
                         ))
                       ) : (
-                        <>
-                          <option value="af_heart">Heart (Female)</option>
-                          <option value="am_adam">Adam (Male)</option>
-                          <option value="af_bella">Bella (Female)</option>
-                        </>
+                        <option value="" disabled>No voices installed</option>
                       )}
                     </select>
                   </div>
@@ -776,6 +869,71 @@ export const AgentsPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* System Prompt Presets Modal */}
+      {showPromptModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-indigo-400">
+                <FileText className="w-5 h-5" />
+                <h3 className="font-semibold text-slate-100">Add System Prompt</h3>
+              </div>
+              <button
+                onClick={() => setShowPromptModal(false)}
+                className="text-slate-400 hover:text-slate-200"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Choose a vetted conversational preset or enter custom persona instructions to shape how your agent talks:
+            </p>
+
+            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+              {SYSTEM_PROMPT_PRESETS.map((p) => (
+                <div
+                  key={p.name}
+                  onClick={() => handleApplyPreset(p.prompt)}
+                  className="p-3 bg-slate-950 border border-slate-800 hover:border-indigo-500/50 rounded-lg cursor-pointer transition space-y-1 hover:bg-slate-800/40"
+                >
+                  <h4 className="text-xs font-semibold text-slate-200">{p.name}</h4>
+                  <p className="text-[11px] text-slate-400">{p.description}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-2 pt-2 border-t border-slate-800">
+              <label className="text-xs text-slate-300 font-medium block">Or customize prompt:</label>
+              <textarea
+                rows={3}
+                value={customPromptInput}
+                onChange={(e) => setCustomPromptInput(e.target.value)}
+                placeholder="Type custom instructions for this persona..."
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+              />
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  onClick={() => setShowPromptModal(false)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    if (customPromptInput.trim()) handleApplyPreset(customPromptInput.trim());
+                  }}
+                  disabled={!customPromptInput.trim()}
+                  className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg text-xs font-medium transition"
+                >
+                  Apply to Agent
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Mic,
-  Square,
+  MicOff,
+  PhoneOff,
   AlertCircle,
   Headphones,
   Laptop,
   Bot,
   Sparkles,
+  Volume2,
 } from 'lucide-react';
 import { AudioOrb, OrbState } from '../components/AudioOrb';
 import { StreamingPCMPlayer } from '../audio/pcmPlayer';
@@ -16,6 +18,7 @@ import { ServerEvent, Agent } from '../types/api';
 const API_BASE = 'http://127.0.0.1:8000';
 const WS_BASE = 'ws://127.0.0.1:8000';
 const DEFAULT_KEY = 'dev-voice-key-12345';
+const AUTH_HEADERS = { Authorization: `Bearer ${DEFAULT_KEY}` };
 
 type AssistantState = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
 
@@ -32,9 +35,13 @@ export const AssistantView: React.FC = () => {
   const [responseDelta, setResponseDelta] = useState<string>('');
   const [turns, setTurns] = useState<TurnRecord[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [isSpeakingVAD, setIsSpeakingVAD] = useState<boolean>(false);
 
-  // Active agent info
+  // Active and available agents
   const [activeAgent, setActiveAgent] = useState<Agent | null>(null);
+  const [availableAgents, setAvailableAgents] = useState<Agent[]>([]);
+  const [isSwitchingAgent, setIsSwitchingAgent] = useState<boolean>(false);
   const [audioMode, setAudioMode] = useState<'laptop_speakers' | 'headphones'>('laptop_speakers');
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -48,8 +55,9 @@ export const AssistantView: React.FC = () => {
 
   useEffect(() => {
     fetchActiveAgent();
+    fetchAllAgents();
 
-    // Spacebar listener for interrupt or toggle
+    // Spacebar listener for interruption or session start
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
         e.code === 'Space' &&
@@ -60,9 +68,7 @@ export const AssistantView: React.FC = () => {
         if (state === 'speaking') {
           handleInterrupt();
         } else if (state === 'idle') {
-          startListening();
-        } else if (state === 'listening') {
-          stopListening();
+          startSession();
         }
       }
     };
@@ -71,13 +77,17 @@ export const AssistantView: React.FC = () => {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       cleanupAudio();
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     };
   }, [state]);
 
   const fetchActiveAgent = async () => {
     try {
       const res = await fetch(`${API_BASE}/v1/agents/active`, {
-        headers: { Authorization: `Bearer ${DEFAULT_KEY}` },
+        headers: AUTH_HEADERS,
       });
       if (res.ok) {
         const data = await res.json();
@@ -89,6 +99,52 @@ export const AssistantView: React.FC = () => {
         }
       }
     } catch {}
+  };
+
+  const fetchAllAgents = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/v1/agents`, {
+        headers: AUTH_HEADERS,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAvailableAgents(data.agents || []);
+      }
+    } catch {}
+  };
+
+  const handleSwitchAgent = async (agentId: string) => {
+    if (!agentId || agentId === activeAgent?.id) return;
+    try {
+      setIsSwitchingAgent(true);
+      setErrorMsg(null);
+      const res = await fetch(`${API_BASE}/v1/agents/${agentId}/load`, {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Failed to switch agent');
+      }
+      const switched = availableAgents.find((a) => a.id === agentId);
+      if (switched) setActiveAgent(switched);
+
+      // If session is active, notify backend of switch
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: 'session.start',
+            agent_id: agentId,
+            input_audio: { container: 'webm', codec: 'opus' },
+            config: { echo_mode: audioMode, barge_in: true },
+          })
+        );
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    } finally {
+      setIsSwitchingAgent(false);
+    }
   };
 
   const cleanupAudio = () => {
@@ -114,12 +170,11 @@ export const AssistantView: React.FC = () => {
     pcmPlayerRef.current.stop();
   };
 
-  // Initialize and clean up WebSocket connection
+  // Connect WebSocket
   const connectWebSocket = async (): Promise<WebSocket> => {
-    // 1. Fetch short-lived ticket
     const ticketRes = await fetch(`${API_BASE}/v1/auth/ticket`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${DEFAULT_KEY}` },
+      headers: AUTH_HEADERS,
     });
     if (!ticketRes.ok) throw new Error('Failed to acquire WebSocket ticket');
     const { ticket } = await ticketRes.json();
@@ -142,8 +197,7 @@ export const AssistantView: React.FC = () => {
     ws.onerror = (e) => {
       console.error('WS Error:', e);
       setErrorMsg('WebSocket connection error');
-      setState('idle');
-      if (vadRef.current) vadRef.current.setPlaybackState(false);
+      endSession();
     };
 
     ws.onclose = () => {
@@ -174,7 +228,7 @@ export const AssistantView: React.FC = () => {
         if (vadRef.current) vadRef.current.setPlaybackState(true);
         break;
       case 'audio.completed':
-        setState('idle');
+        setState('listening');
         if (vadRef.current) vadRef.current.setPlaybackState(false);
         break;
       case 'turn.completed':
@@ -186,37 +240,40 @@ export const AssistantView: React.FC = () => {
             response: responseDelta,
           },
         ]);
-        setState('idle');
+        setState('listening');
         if (vadRef.current) vadRef.current.setPlaybackState(false);
         activeTurnIdRef.current = null;
         break;
       case 'turn.cancelled':
         pcmPlayerRef.current.stop();
-        setState('idle');
+        setState('listening');
         if (vadRef.current) vadRef.current.setPlaybackState(false);
         activeTurnIdRef.current = null;
         break;
       case 'error':
         setErrorMsg(`[${event.code}] ${event.message}`);
-        window.dispatchEvent(
-          new CustomEvent('voice-error', {
-            detail: { code: event.code, message: event.message },
-          })
-        );
-        setState('idle');
+        setState('listening');
         if (vadRef.current) vadRef.current.setPlaybackState(false);
         break;
     }
   };
 
-  // Start Voice Capture with VAD and Barge-In
-  const startListening = async () => {
+  // Autonomous VAD turn commit
+  const commitTurn = () => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'audio.commit' }));
+      setState('thinking');
+    }
+  };
+
+  // Start continuous conversational session
+  const startSession = async () => {
     try {
       setErrorMsg(null);
       setTranscript('');
       setResponseDelta('');
+      setIsMuted(false);
 
-      // Cleanup any dangling audio/mic resources from previous turns
       cleanupAudio();
 
       let ws = wsRef.current;
@@ -239,7 +296,7 @@ export const AssistantView: React.FC = () => {
         } else if (err instanceof DOMException && (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError')) {
           setErrorMsg('No microphone found. Please connect a microphone and try again.');
         } else {
-          setErrorMsg('Unable to access microphone. Please check your system audio permissions.');
+          setErrorMsg('Unable to access microphone. Please check system audio permissions.');
         }
         setState('idle');
         return;
@@ -265,12 +322,17 @@ export const AssistantView: React.FC = () => {
         micSource,
         {
           onSpeechStart: () => {
-            if (state === 'idle') setState('listening');
+            setIsSpeakingVAD(true);
+            if (state !== 'speaking') {
+              setState('listening');
+            }
           },
           onSpeechEnd: () => {
-            stopListening();
+            setIsSpeakingVAD(false);
+            commitTurn();
           },
           onBargeIn: () => {
+            setIsSpeakingVAD(true);
             handleInterrupt();
           },
         },
@@ -306,37 +368,33 @@ export const AssistantView: React.FC = () => {
       mediaRecorder.start(100);
       setState('listening');
     } catch (err: unknown) {
-      console.error('Audio initialization error:', err);
+      console.error('Session initialization error:', err);
       cleanupAudio();
-      setErrorMsg('Audio initialization failed. Please reload and try again.');
+      setErrorMsg('Voice session initialization failed. Please try again.');
       setState('idle');
     }
   };
 
-  const stopListening = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try {
-        mediaRecorderRef.current.stop();
-      } catch {}
-      mediaRecorderRef.current = null;
-    }
-    if (vadRef.current) {
-      vadRef.current.stop();
-      vadRef.current = null;
-    }
-    if (audioStreamRef.current) {
-      audioStreamRef.current.getTracks().forEach((t) => t.stop());
-      audioStreamRef.current = null;
-    }
-    if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
-      audioCtxRef.current.close().catch(() => {});
-      audioCtxRef.current = null;
-    }
-    micAnalyserRef.current = null;
-
+  const endSession = () => {
+    cleanupAudio();
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'audio.commit' }));
-      setState('transcribing');
+      try {
+        wsRef.current.send(JSON.stringify({ type: 'session.end' }));
+        wsRef.current.close();
+      } catch {}
+      wsRef.current = null;
+    }
+    setState('idle');
+    setIsSpeakingVAD(false);
+  };
+
+  const toggleMute = () => {
+    if (audioStreamRef.current) {
+      const nextMuted = !isMuted;
+      audioStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = !nextMuted;
+      });
+      setIsMuted(nextMuted);
     }
   };
 
@@ -351,7 +409,8 @@ export const AssistantView: React.FC = () => {
         })
       );
     }
-    setState('idle');
+    setResponseDelta('');
+    setState('listening');
   };
 
   const getOrbState = (): OrbState => {
@@ -368,19 +427,16 @@ export const AssistantView: React.FC = () => {
     }
   };
 
-  const getOrbAnalyser = (): AnalyserNode | null => {
+  const getOrbAnalyser = () => {
     if (state === 'speaking') {
       return pcmPlayerRef.current.getAnalyserNode();
     }
-    if (state === 'listening') {
-      return micAnalyserRef.current;
-    }
-    return null;
+    return micAnalyserRef.current;
   };
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      {/* Top Agent Bar */}
+      {/* Top Active Agent Header & Switcher */}
       <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-slate-950 border border-slate-800 rounded-xl">
         <div className="flex items-center gap-3">
           <div className="p-2.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
@@ -395,14 +451,36 @@ export const AssistantView: React.FC = () => {
                 Active Agent
               </span>
             </div>
-            <p className="text-xs text-slate-400 mt-0.5">
-              {activeAgent?.description || 'Concise voice assistant optimized for 8GB Mac'}
+            <p className="text-xs text-slate-400 mt-0.5 font-mono flex items-center gap-2">
+              <span>LLM: {activeAgent?.llm?.model || 'none'}</span>
+              <span>•</span>
+              <span>STT: {activeAgent?.stt?.model || 'none'}</span>
+              <span>•</span>
+              <span>Voice: {activeAgent?.tts?.voice_id || 'none'}</span>
             </p>
           </div>
         </div>
 
-        {/* Audio Mode Selector */}
-        <div className="flex items-center gap-2">
+        {/* Controls: Agent Switcher + Audio Mode */}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Switch Agent Dropdown */}
+          <div className="flex items-center gap-1.5 text-xs text-slate-400">
+            <span>Switch:</span>
+            <select
+              value={activeAgent?.id || ''}
+              onChange={(e) => handleSwitchAgent(e.target.value)}
+              disabled={isSwitchingAgent}
+              className="bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 disabled:opacity-50"
+            >
+              {availableAgents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Audio Output Mode */}
           <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-1 text-xs">
             <button
               onClick={() => setAudioMode('laptop_speakers')}
@@ -413,7 +491,7 @@ export const AssistantView: React.FC = () => {
               }`}
             >
               <Laptop className="w-3.5 h-3.5" />
-              Speakers (AEC)
+              Speakers
             </button>
             <button
               onClick={() => setAudioMode('headphones')}
@@ -445,7 +523,7 @@ export const AssistantView: React.FC = () => {
         </div>
       )}
 
-      {/* Main Orb Stage */}
+      {/* Main Animated Orb Stage */}
       <div className="flex flex-col items-center justify-center py-10 bg-slate-950 border border-slate-800 rounded-2xl relative overflow-hidden shadow-xl">
         <div className="absolute inset-0 bg-radial-gradient from-indigo-500/5 via-transparent to-transparent pointer-events-none" />
 
@@ -455,8 +533,7 @@ export const AssistantView: React.FC = () => {
           size={300}
           onClick={() => {
             if (state === 'speaking') handleInterrupt();
-            else if (state === 'idle') startListening();
-            else if (state === 'listening') stopListening();
+            else if (state === 'idle') startSession();
           }}
         />
 
@@ -478,43 +555,67 @@ export const AssistantView: React.FC = () => {
           </div>
           <span className="text-[11px] text-slate-500">
             {state === 'speaking'
-              ? 'Click orb or press Spacebar to interrupt'
+              ? 'Click orb or speak to interrupt (barge-in enabled)'
               : state === 'listening'
-              ? 'Speak naturally (VAD automatically commits on pause)'
-              : 'Click orb or press Spacebar to begin'}
+              ? isSpeakingVAD
+                ? 'Speech detected — speak naturally'
+                : 'Listening... (VAD automatically endpoints on silence)'
+              : state === 'thinking'
+              ? 'Processing speech...'
+              : 'Click Start Conversation to begin hands-free dialogue'}
           </span>
         </div>
 
-        {/* Action Controls */}
+        {/* Action Controls: Start/End Session + Mute Toggle */}
         <div className="mt-6 flex items-center gap-3">
           {state === 'idle' ? (
             <button
-              onClick={startListening}
+              onClick={startSession}
               className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full text-sm font-semibold transition shadow-lg hover:shadow-indigo-500/25"
             >
-              <Mic className="w-4 h-4" /> Start Speaking
-            </button>
-          ) : state === 'listening' ? (
-            <button
-              onClick={stopListening}
-              className="flex items-center gap-2 px-6 py-2.5 bg-sky-600 hover:bg-sky-500 text-white rounded-full text-sm font-semibold transition shadow-lg"
-            >
-              <Square className="w-4 h-4 fill-current" /> Done Speaking
+              <Mic className="w-4 h-4" /> Start Conversation
             </button>
           ) : (
-            <button
-              onClick={handleInterrupt}
-              className="flex items-center gap-2 px-6 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-full text-sm font-semibold transition shadow-lg"
-            >
-              <Square className="w-4 h-4 fill-current" /> Interrupt Assistant
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={toggleMute}
+                className={`p-3 rounded-full transition shadow-md border ${
+                  isMuted
+                    ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                    : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+                }`}
+                title={isMuted ? 'Unmute microphone' : 'Mute microphone'}
+              >
+                {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+              </button>
+
+              <button
+                onClick={endSession}
+                className="flex items-center gap-2 px-6 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-full text-sm font-semibold transition shadow-lg"
+              >
+                <PhoneOff className="w-4 h-4" /> End Conversation
+              </button>
+            </div>
           )}
         </div>
       </div>
 
-      {/* Live Transcript & Response Stream */}
-      {(transcript || responseDelta) && (
+      {/* Live Transcript & Realtime Streaming Response */}
+      {(state !== 'idle' || transcript || responseDelta) && (
         <div className="p-5 bg-slate-950 border border-slate-800 rounded-xl space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-900 pb-2.5">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+              <Volume2 className="w-4 h-4 text-indigo-400" />
+              Real-time Conversation
+            </h3>
+            {isSpeakingVAD && (
+              <span className="text-[11px] text-sky-400 font-medium animate-pulse flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
+                Listening to speech...
+              </span>
+            )}
+          </div>
+
           {transcript && (
             <div>
               <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-1">
@@ -525,6 +626,7 @@ export const AssistantView: React.FC = () => {
               </p>
             </div>
           )}
+
           {responseDelta && (
             <div>
               <div className="text-[11px] uppercase tracking-wider text-indigo-400 font-semibold mb-1 flex items-center gap-1.5">
@@ -549,13 +651,21 @@ export const AssistantView: React.FC = () => {
             {turns.slice().reverse().map((t, i) => (
               <div
                 key={t.id || i}
-                className="p-3 bg-slate-900/50 border border-slate-800/60 rounded-lg text-xs space-y-1.5"
+                className="bg-slate-900/40 border border-slate-800/60 rounded-lg p-3 text-xs space-y-1.5"
               >
-                <div className="text-slate-400">
-                  <span className="font-semibold text-slate-300">User:</span> {t.transcript}
+                <div className="flex items-center justify-between text-slate-500 text-[10px] font-mono">
+                  <span>Turn {turns.length - i}</span>
+                  <span>{t.id}</span>
                 </div>
                 <div className="text-slate-300">
-                  <span className="font-semibold text-indigo-400">Assistant:</span> {t.response}
+                  <span className="text-slate-500 font-semibold mr-1.5">You:</span>
+                  {t.transcript}
+                </div>
+                <div className="text-indigo-200">
+                  <span className="text-indigo-400 font-semibold mr-1.5">
+                    {activeAgent?.name || 'Assistant'}:
+                  </span>
+                  {t.response}
                 </div>
               </div>
             ))}
