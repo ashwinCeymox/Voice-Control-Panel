@@ -11,6 +11,7 @@ class Settings(BaseSettings):
 
     # LocalAI
     LOCALAI_BASE_URL: str = "http://127.0.0.1:8080"
+    LOCALAI_MODELS_PATH: Optional[str] = "/Users/hashhwin047icloud.com/Downloads/test-pro/arch/LocalAI/models"
     LOCALAI_API_KEY: Optional[str] = None
     LOCALAI_LLM_MODEL: str = "llama-3.2-3b-instruct"
     LOCALAI_STT_MODEL: str = "whisper-1"

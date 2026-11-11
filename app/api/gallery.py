@@ -1,4 +1,6 @@
 """Model gallery catalog, asynchronous installation jobs, and fit scoring."""
+import os
+import logging
 import asyncio
 import time
 import uuid
@@ -11,6 +13,8 @@ from app.api.system import compute_fit_score, get_mac_memory_info
 from app.core.config import settings
 from app.core.security import require_api_key
 from app.storage.database import get_db
+
+logger = logging.getLogger("voice_agent.api.gallery")
 
 router = APIRouter(tags=["Model Gallery & Installation"])
 gallery_router = router
@@ -561,15 +565,106 @@ async def uninstall_model(
     id: str,
     user: str = Depends(require_api_key),
 ):
-    # S-REVIEW path sandboxing and validation
+    """Fully uninstall a model: triggers engine deletion, removes weights/configs from disk, and purges registry."""
     model_id = validate_model_id(id)
 
+    # 1. Resolve exact target ID in LocalAI (e.g., llama-3.2-1b-instruct -> llama-3.2-1b-instruct:q4_k_m)
+    localai_target = model_id
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{settings.LOCALAI_BASE_URL}/v1/models")
+            if resp.status_code == 200:
+                models = [m.get("id") for m in resp.json().get("data", []) if m.get("id")]
+                if model_id in models:
+                    localai_target = model_id
+                else:
+                    for m in models:
+                        if m.split(":")[0] == model_id:
+                            localai_target = m
+                            break
+    except Exception:
+        pass
+
+    # 2. Trigger LocalAI model deletion API: POST /models/delete/{target}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            del_resp = await client.post(f"{settings.LOCALAI_BASE_URL}/models/delete/{localai_target}")
+            if del_resp.status_code == 200:
+                del_data = del_resp.json()
+                job_uuid = del_data.get("uuid")
+                if job_uuid:
+                    for _ in range(12):  # poll up to ~12s
+                        await asyncio.sleep(0.5)
+                        j_resp = await client.get(f"{settings.LOCALAI_BASE_URL}/models/jobs/{job_uuid}")
+                        if j_resp.status_code == 200 and j_resp.json().get("processed"):
+                            break
+    except Exception as e:
+        logger.warning("LocalAI deletion API warning for %s: %s", localai_target, e)
+
+    # 3. Direct disk cleanup fallback (ensures weights and YAML configs are removed)
+    models_dir = settings.LOCALAI_MODELS_PATH
+    if models_dir and os.path.isdir(models_dir):
+        try:
+            # Check for YAML config file to identify referenced binary files
+            yaml_candidates = [
+                os.path.join(models_dir, f"{model_id}.yaml"),
+                os.path.join(models_dir, f"{localai_target}.yaml"),
+                os.path.join(models_dir, f"._gallery_{model_id}.yaml"),
+                os.path.join(models_dir, f"._gallery_{localai_target}.yaml"),
+            ]
+            referenced_bins = set()
+            for ypath in yaml_candidates:
+                if os.path.isfile(ypath):
+                    try:
+                        with open(ypath, "r", encoding="utf-8", errors="ignore") as yf:
+                            content = yf.read()
+                            m_match = re.search(r"model:\s*([^\s\n]+)", content)
+                            if m_match:
+                                referenced_bins.add(m_match.group(1).strip())
+                    except Exception:
+                        pass
+                    try:
+                        os.remove(ypath)
+                        logger.info("Removed model config: %s", ypath)
+                    except Exception:
+                        pass
+
+            # Remove referenced binary files
+            for bname in referenced_bins:
+                bpath = os.path.join(models_dir, bname)
+                if os.path.isfile(bpath):
+                    try:
+                        os.remove(bpath)
+                        logger.info("Removed model binary: %s", bpath)
+                    except Exception:
+                        pass
+
+            # Also remove any partial downloads or stray files matching model_id
+            for fname in os.listdir(models_dir):
+                fpath = os.path.join(models_dir, fname)
+                if model_id in fname and (fname.endswith(".yaml") or fname.endswith(".partial")):
+                    try:
+                        os.remove(fpath)
+                    except Exception:
+                        pass
+        except Exception as fs_err:
+            logger.warning("Filesystem cleanup warning for %s: %s", model_id, fs_err)
+
+    # 4. Remove from SQLite installed_models
     try:
         async with get_db() as db:
-            await db.execute("DELETE FROM installed_models WHERE id = ?", (model_id,))
+            await db.execute(
+                "DELETE FROM installed_models WHERE id = ? OR id = ?",
+                (model_id, localai_target),
+            )
             await db.commit()
     except Exception:
         pass
+
+    # 5. Clear from in-memory install jobs if present
+    for jid, job in list(_INSTALL_JOBS.items()):
+        if job.get("model_id") in (model_id, localai_target):
+            _INSTALL_JOBS.pop(jid, None)
 
     return {"status": "uninstalled", "model_id": model_id}
 

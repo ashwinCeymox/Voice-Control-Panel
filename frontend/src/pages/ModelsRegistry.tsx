@@ -25,6 +25,7 @@ export const ModelsRegistry: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [activeJobs, setActiveJobs] = useState<Record<string, InstallJob>>({});
   const [warningModel, setWarningModel] = useState<GalleryModel | null>(null);
+  const [uninstallingId, setUninstallingId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
 
   useEffect(() => {
@@ -111,6 +112,7 @@ export const ModelsRegistry: React.FC = () => {
 
   const handleUninstall = async (modelId: string) => {
     if (!confirm(`Are you sure you want to uninstall ${modelId}?`)) return;
+    setUninstallingId(modelId);
     try {
       const res = await fetch(`${API_BASE}/v1/models/${encodeURIComponent(modelId)}`, {
         method: 'DELETE',
@@ -120,12 +122,14 @@ export const ModelsRegistry: React.FC = () => {
         const err = await res.json();
         throw new Error(err.detail || 'Uninstall failed');
       }
-      setFeedback({ type: 'success', msg: `Model ${modelId} uninstalled.` });
+      setFeedback({ type: 'success', msg: `Model ${modelId} uninstalled and freed from disk.` });
       setTimeout(() => setFeedback(null), 4000);
-      fetchData();
+      await fetchData();
     } catch (err: any) {
       setFeedback({ type: 'error', msg: err.message });
       setTimeout(() => setFeedback(null), 5000);
+    } finally {
+      setUninstallingId(null);
     }
   };
 
@@ -392,10 +396,15 @@ export const ModelsRegistry: React.FC = () => {
                       </span>
                       <button
                         onClick={() => handleUninstall(model.id)}
-                        className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-slate-900 rounded-md transition"
+                        disabled={uninstallingId === model.id}
+                        className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-slate-900 rounded-md transition disabled:opacity-50"
                         title="Uninstall Model"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        {uninstallingId === model.id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-400" />
+                        ) : (
+                          <Trash2 className="w-3.5 h-3.5" />
+                        )}
                       </button>
                     </div>
                   ) : (
