@@ -250,24 +250,14 @@ async def test_chat(
                 yield "data: [DONE]\n\n"
                 return
         except Exception as exc:
-            logger.warning("LocalAI streaming failed (%s); streaming fallback mock response.", exc)
-
-        # Fallback simulated response
-        mock_reply = (
-            f"Hello! I am {agent.get('name', 'Assistant')}. "
-            f"I received: \"{payload.message}\"."
-        )
-        words = mock_reply.split(" ")
-        for i, word in enumerate(words):
-            token = word if i == 0 else f" {word}"
-            chunk_data = {
-                "id": f"chatcmpl-mock-{id}",
+            logger.error("LocalAI streaming failed (%s)", exc)
+            err_data = {
+                "id": f"chatcmpl-err-{id}",
                 "object": "chat.completion.chunk",
-                "choices": [{"delta": {"content": token}}],
+                "choices": [{"delta": {"content": f"LLM error: {exc}"}}],
             }
-            yield f"data: {json.dumps(chunk_data)}\n\n"
-            await asyncio.sleep(0.02)
-        yield "data: [DONE]\n\n"
+            yield f"data: {json.dumps(err_data)}\n\n"
+            yield "data: [DONE]\n\n"
 
     return StreamingResponse(
         event_generator(),

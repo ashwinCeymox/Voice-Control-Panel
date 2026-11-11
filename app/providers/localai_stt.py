@@ -14,6 +14,31 @@ class LocalAISTTClient:
         self.base_url = (base_url or settings.LOCALAI_BASE_URL).rstrip("/")
         self.timeout = timeout or settings.LOCALAI_REQUEST_TIMEOUT_SECONDS
 
+    async def resolve_model(self, requested_model: Optional[str]) -> str:
+        """Resolve friendly model names to the exact model ID registered in LocalAI."""
+        target = requested_model or settings.LOCALAI_STT_MODEL
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                headers = {}
+                if settings.LOCALAI_API_KEY:
+                    headers["Authorization"] = f"Bearer {settings.LOCALAI_API_KEY}"
+                resp = await client.get(f"{self.base_url}/v1/models", headers=headers)
+                if resp.status_code == 200:
+                    models = [m.get("id") for m in resp.json().get("data", []) if m.get("id")]
+                    if target in models:
+                        return target
+                    target_lower = target.lower().replace("-", "").replace("_", "")
+                    for m in models:
+                        m_clean = m.lower().replace("-", "").replace("_", "")
+                        if target_lower in m_clean or m_clean in target_lower:
+                            return m
+                    stt_models = [m for m in models if "whisper" in m.lower()]
+                    if stt_models:
+                        return stt_models[0]
+        except Exception:
+            pass
+        return target
+
     async def transcribe(
         self,
         audio_bytes: bytes,
@@ -23,7 +48,7 @@ class LocalAISTTClient:
         language: Optional[str] = None,
     ) -> TranscriptResponse:
         """Upload audio to LocalAI and return normalized transcript."""
-        target_model = model or settings.LOCALAI_STT_MODEL
+        target_model = await self.resolve_model(model)
         url = f"{self.base_url}/v1/audio/transcriptions"
 
         files = {
