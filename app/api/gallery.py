@@ -81,8 +81,32 @@ GALLERY_CATALOG: List[Dict[str, Any]] = [
         "tags": ["high-iq"],
     },
     {
-        "id": "kokoro-82m",
+        "id": "phi-2-chat",
+        "name": "Phi-2 Chat (2.7B)",
+        "category": "llm",
+        "provider": "localai",
+        "size_mb": 1800,
+        "ram_required_mb": 2200,
+        "description": "Microsoft's 2.7B compact language model pre-loaded in LocalAI. Fast, structured voice replies.",
+        "license": "MIT",
+        "quantization": "Q4_K_M",
+        "tags": ["default", "compact", "preloaded"],
+    },
+    {
+        "id": "kokoro",
         "name": "Kokoro 82M TTS",
+        "category": "tts",
+        "provider": "local-tts",
+        "size_mb": 350,
+        "ram_required_mb": 380,
+        "description": "Studio-grade 24kHz American and British voices via local-tts engine.",
+        "license": "Apache 2.0",
+        "quantization": "BF16",
+        "tags": ["recommended", "default", "studio-quality"],
+    },
+    {
+        "id": "kokoro-82m",
+        "name": "Kokoro 82M TTS (Catalog)",
         "category": "tts",
         "provider": "local-tts",
         "size_mb": 350,
@@ -91,6 +115,30 @@ GALLERY_CATALOG: List[Dict[str, Any]] = [
         "license": "Apache 2.0",
         "quantization": "BF16",
         "tags": ["recommended", "default", "studio-quality"],
+    },
+    {
+        "id": "kitten",
+        "name": "KittenTTS (15M)",
+        "category": "tts",
+        "provider": "local-tts",
+        "size_mb": 60,
+        "ram_required_mb": 150,
+        "description": "Ultra-low-latency speech synthesis engine in local-tts.",
+        "license": "Apache 2.0",
+        "quantization": "BF16",
+        "tags": ["ultra-light"],
+    },
+    {
+        "id": "pocket",
+        "name": "Pocket TTS",
+        "category": "tts",
+        "provider": "local-tts",
+        "size_mb": 120,
+        "ram_required_mb": 200,
+        "description": "Lightweight, responsive speech synthesis engine in local-tts.",
+        "license": "Apache 2.0",
+        "quantization": "BF16",
+        "tags": ["fast", "lightweight"],
     },
     {
         "id": "kitten-tts-micro",
@@ -236,6 +284,35 @@ async def list_gallery_models(
         item["fits_budget"] = fit_score >= 60
         item["installed"] = m["id"] in installed_ids
         results.append(item)
+
+    # Ensure any model currently installed in providers is visible if not already in catalog
+    existing_ids = {r["id"] for r in results}
+    for cat_name, cat_models in installed_data.items():
+        if category and category != "all" and category != cat_name:
+            continue
+        for im in cat_models:
+            if im["id"] not in existing_ids:
+                if q and q.lower() not in im.get("name", "").lower() and q.lower() not in im["id"].lower():
+                    continue
+                sz = im.get("size_mb", 500)
+                ram_req = int(sz * 1.3)
+                score = compute_fit_score(ram_req, avail_mb)
+                results.append({
+                    "id": im["id"],
+                    "name": im.get("name", im["id"]),
+                    "category": cat_name,
+                    "provider": im.get("provider", "localai"),
+                    "size_mb": sz,
+                    "ram_required_mb": ram_req,
+                    "description": f"Installed {cat_name.upper()} model in {im.get('provider')}.",
+                    "license": "Open",
+                    "quantization": "Metal/Native",
+                    "tags": ["installed", "active"],
+                    "fit_score": score,
+                    "fits_budget": score >= 60,
+                    "installed": True,
+                })
+                existing_ids.add(im["id"])
 
     # Sort by fit score descending
     results.sort(key=lambda x: x["fit_score"], reverse=True)
