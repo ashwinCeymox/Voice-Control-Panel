@@ -20,7 +20,7 @@ export const STTPlayground: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   // Model & Language options
-  const [installedModels, setInstalledModels] = useState<string[]>([]);
+  const [installedModels, setInstalledModels] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [language, setLanguage] = useState<string>('auto');
 
@@ -47,12 +47,12 @@ export const STTPlayground: React.FC = () => {
       const res = await fetch(`${API_BASE}/v1/models/installed`, { headers: AUTH_HEADERS });
       if (res.ok) {
         const data = await res.json();
-        const sttList: string[] = Array.isArray(data.stt)
-          ? data.stt.map((m: any) => m.id)
+        const sttList: Array<{ id: string; name: string }> = Array.isArray(data.stt)
+          ? data.stt.map((m: any) => ({ id: m.id, name: m.name || m.id }))
           : [];
         setInstalledModels(sttList);
         if (sttList.length > 0) {
-          setSelectedModel(sttList[0]);
+          setSelectedModel(sttList[0].id);
         } else {
           setSelectedModel('');
         }
@@ -188,8 +188,8 @@ export const STTPlayground: React.FC = () => {
               <option value="" disabled>No STT model installed</option>
             ) : (
               installedModels.map((m) => (
-                <option key={m} value={m}>
-                  {m}
+                <option key={m.id} value={m.id}>
+                  {m.name !== m.id ? `${m.name} (${m.id})` : m.id}
                 </option>
               ))
             )}

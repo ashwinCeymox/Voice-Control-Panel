@@ -48,6 +48,8 @@ export const AssistantView: React.FC = () => {
   const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
+  const currentTranscriptRef = useRef<string>('');
+  const currentResponseRef = useRef<string>('');
   const audioCtxRef = useRef<AudioContext | null>(null);
   const micAnalyserRef = useRef<AnalyserNode | null>(null);
   const pcmPlayerRef = useRef<StreamingPCMPlayer>(new StreamingPCMPlayer(24000));
@@ -274,10 +276,12 @@ export const AssistantView: React.FC = () => {
         }
         break;
       case 'transcript.completed':
+        currentTranscriptRef.current = event.text;
         setTranscript(event.text);
         setState('thinking');
         break;
       case 'response.text.delta':
+        currentResponseRef.current += event.delta;
         setResponseDelta((prev) => prev + event.delta);
         break;
       case 'audio.started':
@@ -290,14 +294,22 @@ export const AssistantView: React.FC = () => {
         startRecording();
         break;
       case 'turn.completed':
-        setTurns((prev) => [
-          ...prev,
-          {
-            id: event.turn_id,
-            transcript: transcript,
-            response: responseDelta,
-          },
-        ]);
+        {
+          const savedTranscript = currentTranscriptRef.current || transcript;
+          const savedResponse = currentResponseRef.current || responseDelta;
+          if (savedTranscript || savedResponse) {
+            setTurns((prev) => [
+              ...prev,
+              {
+                id: event.turn_id,
+                transcript: savedTranscript,
+                response: savedResponse,
+              },
+            ]);
+          }
+        }
+        currentTranscriptRef.current = '';
+        currentResponseRef.current = '';
         setState('listening');
         if (vadRef.current) vadRef.current.setPlaybackState(false);
         activeTurnIdRef.current = null;
@@ -305,6 +317,8 @@ export const AssistantView: React.FC = () => {
         break;
       case 'turn.cancelled':
         pcmPlayerRef.current.stop();
+        currentTranscriptRef.current = '';
+        currentResponseRef.current = '';
         setState('listening');
         if (vadRef.current) vadRef.current.setPlaybackState(false);
         activeTurnIdRef.current = null;
@@ -312,6 +326,8 @@ export const AssistantView: React.FC = () => {
         break;
       case 'error':
         setErrorMsg(`[${event.code}] ${event.message}`);
+        currentTranscriptRef.current = '';
+        currentResponseRef.current = '';
         setState('listening');
         if (vadRef.current) vadRef.current.setPlaybackState(false);
         startRecording();
@@ -351,6 +367,10 @@ export const AssistantView: React.FC = () => {
   // Autonomous VAD turn commit
   const commitTurn = () => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      currentTranscriptRef.current = '';
+      currentResponseRef.current = '';
+      setTranscript('');
+      setResponseDelta('');
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         mediaRecorderRef.current.onstop = () => {
           if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {

@@ -59,9 +59,9 @@ export const AgentsPage: React.FC = () => {
 
   // Installed models & voices
   const [installedModels, setInstalledModels] = useState<{
-    llm: string[];
-    stt: string[];
-    tts: string[];
+    llm: Array<{ id: string; name: string }>;
+    stt: Array<{ id: string; name: string }>;
+    tts: Array<{ id: string; name: string }>;
   }>({
     llm: [],
     stt: [],
@@ -120,9 +120,9 @@ export const AgentsPage: React.FC = () => {
         const modRes = await fetch(`${API_BASE}/v1/models/installed`, { headers: AUTH_HEADERS });
         if (modRes.ok) {
           const modData = await modRes.json();
-          const llms = Array.isArray(modData.llm) ? modData.llm.map((m: any) => m.id) : [];
-          const stts = Array.isArray(modData.stt) ? modData.stt.map((m: any) => m.id) : [];
-          const ttss = Array.isArray(modData.tts) ? modData.tts.map((m: any) => m.id) : [];
+          const llms = Array.isArray(modData.llm) ? modData.llm.map((m: any) => ({ id: m.id, name: m.name || m.id })) : [];
+          const stts = Array.isArray(modData.stt) ? modData.stt.map((m: any) => ({ id: m.id, name: m.name || m.id })) : [];
+          const ttss = Array.isArray(modData.tts) ? modData.tts.map((m: any) => ({ id: m.id, name: m.name || m.id })) : [];
           setInstalledModels({ llm: llms, stt: stts, tts: ttss });
         }
       } catch {}
@@ -269,9 +269,9 @@ export const AgentsPage: React.FC = () => {
       name: 'New Custom Assistant',
       description: 'A helpful voice AI agent.',
       system_prompt: 'You are a warm, concise voice AI assistant. Respond in 1-2 natural sentences.',
-      llm: { model: installedModels.llm[0] || '', temperature: 0.7, max_tokens: 512 },
-      stt: { model: installedModels.stt[0] || '', language: 'auto' },
-      tts: { engine: installedModels.tts[0] || '', voice_id: voices[0]?.voice_id || '', speed: 1.0 },
+      llm: { model: installedModels.llm[0]?.id || '', temperature: 0.7, max_tokens: 512 },
+      stt: { model: installedModels.stt[0]?.id || '', language: 'auto' },
+      tts: { engine: installedModels.tts[0]?.id || '', voice_id: voices[0]?.voice_id || '', speed: 1.0 },
       vad: { mode: 'energy', threshold: 0.045, min_silence_ms: 650 },
       audio: { echo_mode: 'laptop_speakers', barge_in: true },
       is_active: false,
@@ -594,8 +594,8 @@ export const AgentsPage: React.FC = () => {
                         <option value="" disabled>No LLM installed</option>
                       ) : (
                         installedModels.llm.map((m) => (
-                          <option key={m} value={m}>
-                            {m}
+                          <option key={m.id} value={m.id}>
+                            {m.name !== m.id ? `${m.name} (${m.id})` : m.id}
                           </option>
                         ))
                       )}
@@ -644,8 +644,8 @@ export const AgentsPage: React.FC = () => {
                         <option value="" disabled>No STT model installed</option>
                       ) : (
                         installedModels.stt.map((m) => (
-                          <option key={m} value={m}>
-                            {m}
+                          <option key={m.id} value={m.id}>
+                            {m.name !== m.id ? `${m.name} (${m.id})` : m.id}
                           </option>
                         ))
                       )}

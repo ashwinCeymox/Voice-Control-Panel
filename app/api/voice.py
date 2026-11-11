@@ -142,8 +142,8 @@ async def voice_stream(
 
         try:
             # Step A: STT
-            if not utterance_bytes:
-                logger.info("Ignoring empty utterance for turn %s", turn_id)
+            if not utterance_bytes or (input_container == "webm" and len(utterance_bytes) < 1200):
+                logger.info("Ignoring empty/sub-threshold utterance (%d bytes) for turn %s", len(utterance_bytes) if utterance_bytes else 0, turn_id)
                 await websocket.send_text(
                     TranscriptCompletedEvent(turn_id=turn_id, text="(no speech detected)").model_dump_json()
                 )
@@ -160,6 +160,16 @@ async def voice_stream(
                     model=stt_model,
                 )
             except Exception as stt_exc:
+                err_str = str(stt_exc).lower()
+                if any(k in err_str for k in ("end of file", "invalid data found", "could not find codec", "truncating packet", "silence")):
+                    logger.info("STT encountered unparseable/silent audio frame for turn %s, handling gracefully", turn_id)
+                    await websocket.send_text(
+                        TranscriptCompletedEvent(turn_id=turn_id, text="(no speech detected)").model_dump_json()
+                    )
+                    await websocket.send_text(
+                        TurnCompletedEvent(turn_id=turn_id).model_dump_json()
+                    )
+                    return
                 logger.error("STT failure (localai) for turn %s: %s", turn_id, str(stt_exc))
                 await websocket.send_text(
                     ErrorEvent(
