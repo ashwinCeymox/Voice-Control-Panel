@@ -49,7 +49,8 @@ async def validate_agent_models(data: Dict[str, Any]):
     stt_cfg = data.get("stt") or {}
     stt_model = (stt_cfg.get("model") or "").lower()
     if installed_stts and stt_model:
-        if not any(stt_model in m or m in stt_model for m in installed_stts):
+        is_whisper_alias = stt_model in ("whisper-1", "whisper") and any("whisper" in m for m in installed_stts)
+        if not is_whisper_alias and not any(stt_model in m or m in stt_model for m in installed_stts):
             missing.append(f"STT model '{stt_cfg.get('model')}'")
 
     tts_cfg = data.get("tts") or {}

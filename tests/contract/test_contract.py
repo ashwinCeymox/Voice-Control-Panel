@@ -117,7 +117,7 @@ async def test_api_contract_agents_lifecycle():
             "name": "Contract Test Agent",
             "description": "Used for OpenAPI contract test",
             "system_prompt": "You are a test agent.",
-            "llm": {"model": "phi-2-chat", "temperature": 0.5, "max_tokens": 256},
+            "llm": {"model": "llama-3.2-1b-instruct", "temperature": 0.5, "max_tokens": 256},
             "stt": {"model": "whisper-base", "language": "en"},
             "tts": {"engine": "kokoro", "voice_id": "af_heart", "speed": 1.1},
             "vad": {"mode": "energy", "threshold": 0.045, "min_silence_ms": 650},

@@ -13,7 +13,7 @@ DEFAULT_AGENT = {
     "name": "Default Voice Assistant",
     "description": "Standard concise conversational voice assistant optimized for 8GB Mac.",
     "system_prompt": "You are a concise, helpful voice AI assistant. Keep responses natural, direct, and under two sentences.",
-    "llm": {"model": "phi-2-chat", "temperature": 0.7, "max_tokens": 512},
+    "llm": {"model": "llama-3.2-1b-instruct", "temperature": 0.7, "max_tokens": 512},
     "stt": {"model": "whisper-base", "language": "auto"},
     "tts": {"engine": "kokoro", "voice_id": "af_heart", "speed": 1.0},
     "vad": {"mode": "energy", "threshold": 0.045, "min_silence_ms": 650},

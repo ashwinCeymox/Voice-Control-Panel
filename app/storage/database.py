@@ -69,9 +69,9 @@ CREATE TABLE IF NOT EXISTS installed_models (
 
 DEFAULT_INSTALLED_MODELS = [
     ("whisper-base", "Whisper Base (GGUF)", "stt", "localai", 145),
-    ("phi-2-chat", "Phi-2 Chat (2.7B)", "llm", "localai", 1800),
-    ("kokoro", "Kokoro", "tts", "local-tts", 350),
+    ("whisper-tiny", "Whisper Tiny (GGUF)", "stt", "localai", 75),
     ("llama-3.2-1b-instruct", "Llama 3.2 1B Instruct", "llm", "localai", 820),
+    ("kokoro", "Kokoro", "tts", "local-tts", 350),
 ]
 
 

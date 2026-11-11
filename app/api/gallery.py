@@ -183,17 +183,23 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
             if resp.status_code == 200:
                 data = resp.json().get("data", [])
                 for m in data:
-                    mid = m.get("id")
-                    if mid and mid not in seen_ids:
-                        seen_ids.add(mid)
-                        catalog_match = next((c for c in GALLERY_CATALOG if c["id"] == mid), None)
-                        size_mb = catalog_match["size_mb"] if catalog_match else 500
-                        display_name = catalog_match["name"] if catalog_match else mid
-                        entry = {"id": mid, "name": display_name, "provider": "localai", "size_mb": size_mb}
-                        if "whisper" in mid.lower() or (catalog_match and catalog_match["category"] == "stt"):
-                            stt_models.append(entry)
-                        else:
-                            llm_models.append(entry)
+                    raw_id = m.get("id")
+                    if not raw_id:
+                        continue
+                    base_id = raw_id.split(":")[0] if ":" in raw_id else raw_id
+                    if raw_id in seen_ids or base_id in seen_ids:
+                        continue
+                    seen_ids.add(raw_id)
+                    seen_ids.add(base_id)
+                    catalog_match = next((c for c in GALLERY_CATALOG if c["id"] == raw_id or c["id"] == base_id), None)
+                    effective_id = catalog_match["id"] if catalog_match else raw_id
+                    size_mb = catalog_match["size_mb"] if catalog_match else 500
+                    display_name = catalog_match["name"] if catalog_match else effective_id
+                    entry = {"id": effective_id, "name": display_name, "provider": "localai", "size_mb": size_mb}
+                    if "whisper" in raw_id.lower() or (catalog_match and catalog_match["category"] == "stt"):
+                        stt_models.append(entry)
+                    else:
+                        llm_models.append(entry)
     except Exception:
         pass
 

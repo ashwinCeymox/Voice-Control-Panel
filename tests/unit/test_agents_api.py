@@ -17,8 +17,8 @@ HEADERS = {"Authorization": "Bearer dev-voice-key-12345"}
 AGENT_PAYLOAD = {
     "name": "Test Agent",
     "system_prompt": "You are a helpful assistant.",
-    "llm": {"model": "phi-2", "temperature": 0.7, "max_tokens": 512},
-    "stt": {"model": "whisper-1", "language": "auto"},
+    "llm": {"model": "llama-3.2-1b-instruct", "temperature": 0.7, "max_tokens": 512},
+    "stt": {"model": "whisper-base", "language": "auto"},
     "tts": {"engine": "kokoro", "voice_id": "af_heart", "speed": 1.0},
     "vad": {"mode": "energy", "threshold": 0.045, "min_silence_ms": 650},
     "audio": {"echo_mode": "laptop_speakers", "barge_in": True},

@@ -54,11 +54,24 @@ export const AssistantView: React.FC = () => {
   const vadRef = useRef<BrowserVAD | null>(null);
   const activeTurnIdRef = useRef<string | null>(null);
 
+  const stateRef = useRef<AssistantState>(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  const activeAgentRef = useRef<Agent | null>(activeAgent);
+  useEffect(() => {
+    activeAgentRef.current = activeAgent;
+  }, [activeAgent]);
+
+  // Initial load: fetch active and all agents
   useEffect(() => {
     fetchActiveAgent();
     fetchAllAgents();
+  }, []);
 
-    // Spacebar listener for interruption or session start
+  // Spacebar listener for interruption or session start
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
         e.code === 'Space' &&
@@ -66,9 +79,9 @@ export const AssistantView: React.FC = () => {
         (e.target as HTMLElement).tagName !== 'TEXTAREA'
       ) {
         e.preventDefault();
-        if (state === 'speaking') {
+        if (stateRef.current === 'speaking') {
           handleInterrupt();
-        } else if (state === 'idle') {
+        } else if (stateRef.current === 'idle') {
           startSession();
         }
       }
@@ -77,13 +90,22 @@ export const AssistantView: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+
+  // Cleanup on component unmount ONLY
+  useEffect(() => {
+    return () => {
       cleanupAudio();
       if (wsRef.current) {
-        wsRef.current.close();
+        try {
+          wsRef.current.send(JSON.stringify({ type: 'session.end' }));
+          wsRef.current.close();
+        } catch {}
         wsRef.current = null;
       }
     };
-  }, [state]);
+  }, []);
 
   const fetchActiveAgent = async () => {
     try {
@@ -109,7 +131,9 @@ export const AssistantView: React.FC = () => {
       });
       if (res.ok) {
         const data = await res.json();
-        setAvailableAgents(data.agents || []);
+        const list: Agent[] = data.agents || [];
+        setAvailableAgents(list);
+        setActiveAgent((prev) => prev || list.find((a) => a.is_active) || list[0] || null);
       }
     } catch {}
   };
@@ -237,9 +261,13 @@ export const AssistantView: React.FC = () => {
   };
 
   const handleServerEvent = (event: ServerEvent) => {
+    if ('turn_id' in event && (event as any).turn_id) {
+      activeTurnIdRef.current = (event as any).turn_id;
+    }
+
     switch (event.type) {
       case 'session.created':
-        if (event.agent_name && activeAgent) {
+        if (event.agent_name) {
           setActiveAgent((prev) => (prev ? { ...prev, name: event.agent_name! } : null));
         }
         break;
@@ -344,19 +372,32 @@ export const AssistantView: React.FC = () => {
       micSource.connect(analyser);
       micAnalyserRef.current = analyser;
 
+      const currentAgent = activeAgentRef.current;
+
       const vad = new BrowserVAD(
         audioCtx,
         micSource,
         {
           onSpeechStart: () => {
             setIsSpeakingVAD(true);
-            if (state !== 'speaking') {
+            if (stateRef.current !== 'speaking') {
               setState('listening');
             }
           },
           onSpeechEnd: () => {
             setIsSpeakingVAD(false);
-            commitTurn();
+            if (stateRef.current === 'listening') {
+              if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+                try {
+                  mediaRecorderRef.current.requestData();
+                } catch {}
+              }
+              setTimeout(() => {
+                if (stateRef.current === 'listening') {
+                  commitTurn();
+                }
+              }, 50);
+            }
           },
           onBargeIn: () => {
             setIsSpeakingVAD(true);
@@ -364,24 +405,43 @@ export const AssistantView: React.FC = () => {
           },
         },
         {
-          silenceMs: activeAgent?.vad?.min_silence_ms || 650,
-          idleThreshold: activeAgent?.vad?.threshold || 0.045,
+          silenceMs: currentAgent?.vad?.min_silence_ms || 650,
+          idleThreshold: currentAgent?.vad?.threshold || 0.045,
           bargeInThreshold: audioMode === 'headphones' ? 0.06 : 0.14,
         }
       );
       vad.start();
       vadRef.current = vad;
 
+      let mimeType = '';
+      let container: 'webm' | 'mp4' | 'ogg' = 'webm';
+      if (typeof MediaRecorder !== 'undefined' && typeof MediaRecorder.isTypeSupported === 'function') {
+        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+          mimeType = 'audio/webm;codecs=opus';
+          container = 'webm';
+        } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+          mimeType = 'audio/webm';
+          container = 'webm';
+        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          mimeType = 'audio/mp4';
+          container = 'mp4';
+        } else if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
+          mimeType = 'audio/ogg;codecs=opus';
+          container = 'ogg';
+        }
+      }
+
       ws.send(
         JSON.stringify({
           type: 'session.start',
-          agent_id: activeAgent?.id,
-          input_audio: { container: 'webm', codec: 'opus' },
+          agent_id: currentAgent?.id,
+          input_audio: { container, codec: 'opus' },
           config: { echo_mode: audioMode, barge_in: true },
         })
       );
 
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      const recorderOptions = mimeType ? { mimeType } : undefined;
+      const mediaRecorder = recorderOptions ? new MediaRecorder(stream, recorderOptions) : new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (e) => {
@@ -394,10 +454,10 @@ export const AssistantView: React.FC = () => {
 
       mediaRecorder.start(100);
       setState('listening');
-    } catch (err: unknown) {
+    } catch (err: any) {
       console.error('Session initialization error:', err);
       cleanupAudio();
-      setErrorMsg('Voice session initialization failed. Please try again.');
+      setErrorMsg(err?.message || 'Voice session initialization failed. Please try again.');
       setState('idle');
     }
   };
@@ -479,11 +539,11 @@ export const AssistantView: React.FC = () => {
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5 font-mono flex items-center gap-2">
-              <span>LLM: {activeAgent?.llm?.model || 'none'}</span>
+              <span>LLM: {activeAgent?.llm?.model || 'llama-3.2-1b-instruct'}</span>
               <span>•</span>
-              <span>STT: {activeAgent?.stt?.model || 'none'}</span>
+              <span>STT: {activeAgent?.stt?.model || 'whisper-base'}</span>
               <span>•</span>
-              <span>Voice: {activeAgent?.tts?.voice_id || 'none'}</span>
+              <span>Voice: {activeAgent?.tts?.voice_id || 'af_heart'}</span>
             </p>
           </div>
         </div>
