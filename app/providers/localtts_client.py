@@ -1,10 +1,12 @@
 """local-tts provider client adhering to saghul/local-tts contracts."""
+import asyncio
 import base64
 import json
 import logging
 from typing import AsyncGenerator, Dict, List, Optional
 import httpx
 import websockets
+from websockets.exceptions import ConnectionClosed, ConnectionClosedOK, ConnectionClosedError
 from app.core.config import settings
 from app.core.errors import ProviderTimeoutError, ProviderUnavailableError
 from app.schemas.voice import Voice, VoiceSettings
@@ -59,10 +61,13 @@ class LocalTTSClient:
         model_id: Optional[str] = None,
         speed: float = 1.0,
     ) -> AsyncGenerator[bytes, None]:
-        """Upstream WebSocket speech synthesis streaming raw PCM chunks."""
+        """Upstream WebSocket speech synthesis streaming raw PCM chunks with HTTP fallback."""
         target_voice = voice_id or settings.LOCAL_TTS_VOICE_ID
         target_model = model_id or settings.LOCAL_TTS_MODEL
         ws_url = f"{self.ws_base_url}/v1/text-to-speech/{target_voice}/stream-input?model_id={target_model}"
+
+        buffered_text: List[str] = []
+        yielded_any_pcm = False
 
         try:
             async with websockets.connect(ws_url) as ws:
@@ -70,20 +75,22 @@ class LocalTTSClient:
                 bos_msg = json.dumps({"text": " ", "voice_settings": {"speed": speed}})
                 await ws.send(bos_msg)
 
-                # 2. Producer task: feed text chunks as they arrive
+                # 2. Producer task: feed text chunks with flush=True to trigger real-time synthesis
                 async def text_sender():
                     try:
                         async for chunk in text_generator:
+                            buffered_text.append(chunk)
                             if chunk.strip():
                                 await ws.send(
-                                    json.dumps({"text": chunk, "try_trigger_generation": True})
+                                    json.dumps({"text": chunk, "flush": True})
                                 )
                         # Send End of Stream (EOS)
                         await ws.send(json.dumps({"text": ""}))
+                    except asyncio.CancelledError:
+                        pass
                     except Exception as e:
                         logger.error("Error in text sender to local-tts: %s", str(e))
 
-                import asyncio
                 sender_task = asyncio.create_task(text_sender())
 
                 # 3. Consumer loop: receive JSON frames containing base64 audio
@@ -94,6 +101,7 @@ class LocalTTSClient:
                             audio_b64 = data.get("audio")
                             if audio_b64:
                                 pcm_bytes = base64.b64decode(audio_b64)
+                                yielded_any_pcm = True
                                 yield pcm_bytes
                             if data.get("isFinal"):
                                 break
@@ -103,8 +111,49 @@ class LocalTTSClient:
                         await sender_task
                     except (asyncio.CancelledError, Exception):
                         pass
+
+        except (ConnectionClosedOK, asyncio.CancelledError):
+            logger.info("local-tts WebSocket session closed or cancelled cleanly")
+            return
+        except ConnectionClosed as cc:
+            if cc.rcvd and cc.rcvd.code == 1000:
+                return
+            logger.warning("local-tts WebSocket disconnected unexpectedly (%s)", cc)
+            if not yielded_any_pcm:
+                full_text = "".join(buffered_text).strip()
+                if full_text:
+                    logger.info("Executing HTTP fallback speech synthesis (%d chars)", len(full_text))
+                    try:
+                        fallback_pcm = await self.synthesize_http(
+                            text=full_text,
+                            voice_id=target_voice,
+                            model_id=target_model,
+                            speed=speed,
+                        )
+                        if fallback_pcm:
+                            yield fallback_pcm
+                            return
+                    except Exception as http_exc:
+                        logger.error("HTTP synthesis fallback also failed: %s", http_exc)
+            raise ProviderUnavailableError("local-tts WebSocket", details=str(cc))
         except Exception as exc:
-            logger.error("local-tts WebSocket error: %s", str(exc))
+            logger.error("local-tts WebSocket error (%s)", exc)
+            if not yielded_any_pcm:
+                full_text = "".join(buffered_text).strip()
+                if full_text:
+                    logger.info("Executing HTTP fallback speech synthesis (%d chars)", len(full_text))
+                    try:
+                        fallback_pcm = await self.synthesize_http(
+                            text=full_text,
+                            voice_id=target_voice,
+                            model_id=target_model,
+                            speed=speed,
+                        )
+                        if fallback_pcm:
+                            yield fallback_pcm
+                            return
+                    except Exception as http_exc:
+                        logger.error("HTTP synthesis fallback also failed: %s", http_exc)
             raise ProviderUnavailableError("local-tts WebSocket", details=str(exc))
 
     async def list_voices(self, model_id: Optional[str] = None) -> List[Voice]:

@@ -126,6 +126,7 @@ async def voice_stream(
         stt_model: Optional[str] = None
         tts_voice_id: Optional[str] = None
         tts_speed: Optional[float] = None
+        tts_engine: Optional[str] = None
 
         if turn_agent:
             system_prompt = turn_agent.get("system_prompt") or _DEFAULT_SYSTEM_PROMPT
@@ -137,6 +138,7 @@ async def voice_stream(
             tts_cfg = turn_agent.get("tts") or {}
             tts_voice_id = tts_cfg.get("voice_id")
             tts_speed = tts_cfg.get("speed")
+            tts_engine = tts_cfg.get("engine")
 
         try:
             # Step A: STT
@@ -222,12 +224,14 @@ async def voice_stream(
                     return
 
             # Step C: Stream through local-tts WebSocket
-            # Build TTS kwargs for voice_id/speed overrides
+            # Build TTS kwargs for voice_id/speed/model overrides
             tts_kwargs: Dict[str, Any] = {}
             if tts_voice_id:
                 tts_kwargs["voice_id"] = tts_voice_id
             if tts_speed is not None:
                 tts_kwargs["speed"] = tts_speed
+            if tts_engine:
+                tts_kwargs["model_id"] = tts_engine
 
             try:
                 async for pcm_chunk in orchestrator.tts.stream_synthesis_ws(phrase_generator(), **tts_kwargs):
@@ -244,12 +248,15 @@ async def voice_stream(
 
                     # Send binary PCM frame to client
                     await websocket.send_bytes(pcm_chunk)
+            except asyncio.CancelledError:
+                raise
             except Exception as tts_exc:
                 logger.error("TTS failure (local-tts) for turn %s: %s", turn_id, str(tts_exc))
+                error_msg = getattr(tts_exc, "details", None) or str(tts_exc)
                 await websocket.send_text(
                     ErrorEvent(
                         code="TTS_ERROR",
-                        message=f"Text-to-speech synthesis failed (local-tts): {str(tts_exc)}",
+                        message=f"Text-to-speech synthesis failed (local-tts): {error_msg}",
                         turn_id=turn_id,
                     ).model_dump_json()
                 )
