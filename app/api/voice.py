@@ -363,6 +363,7 @@ async def voice_stream(
                     if current_turn_task and not current_turn_task.done():
                         current_turn_task.cancel()
                     orchestrator.cancel_stream_task(session_id)
+                    audio_buffer.clear()
 
                 elif event_type == "session.end":
                     break

@@ -38,12 +38,22 @@ export const AssistantView: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [isSpeakingVAD, setIsSpeakingVAD] = useState<boolean>(false);
+  const [bargeInNotice, setBargeInNotice] = useState<boolean>(false);
 
   // Active and available agents
   const [activeAgent, setActiveAgent] = useState<Agent | null>(null);
   const [availableAgents, setAvailableAgents] = useState<Agent[]>([]);
   const [isSwitchingAgent, setIsSwitchingAgent] = useState<boolean>(false);
   const [audioMode, setAudioMode] = useState<'laptop_speakers' | 'headphones'>('laptop_speakers');
+
+  const handleAudioModeChange = (mode: 'laptop_speakers' | 'headphones') => {
+    setAudioMode(mode);
+    if (vadRef.current) {
+      vadRef.current.updateConfig({
+        bargeInThreshold: mode === 'headphones' ? 0.045 : 0.065,
+      });
+    }
+  };
 
   const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -448,7 +458,10 @@ export const AssistantView: React.FC = () => {
         {
           onSpeechStart: () => {
             setIsSpeakingVAD(true);
-            if (stateRef.current !== 'speaking') {
+            if (stateRef.current === 'thinking') {
+              // User spoke while the agent was processing/thinking -> interrupt immediately!
+              handleInterrupt();
+            } else if (stateRef.current !== 'speaking') {
               setState('listening');
             }
           },
@@ -466,7 +479,8 @@ export const AssistantView: React.FC = () => {
         {
           silenceMs: currentAgent?.vad?.min_silence_ms || 650,
           idleThreshold: currentAgent?.vad?.threshold || 0.045,
-          bargeInThreshold: audioMode === 'headphones' ? 0.06 : 0.14,
+          bargeInThreshold: audioMode === 'headphones' ? 0.045 : 0.065,
+          bargeInHoldMs: 100,
         }
       );
       vad.start();
@@ -548,6 +562,8 @@ export const AssistantView: React.FC = () => {
     }
     setResponseDelta('');
     setState('listening');
+    setBargeInNotice(true);
+    setTimeout(() => setBargeInNotice(false), 2500);
     startRecording();
   };
 
@@ -621,7 +637,7 @@ export const AssistantView: React.FC = () => {
           {/* Audio Output Mode */}
           <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-1 text-xs">
             <button
-              onClick={() => setAudioMode('laptop_speakers')}
+              onClick={() => handleAudioModeChange('laptop_speakers')}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md transition ${
                 audioMode === 'laptop_speakers'
                   ? 'bg-indigo-600 text-white font-medium shadow-sm'
@@ -632,7 +648,7 @@ export const AssistantView: React.FC = () => {
               Speakers
             </button>
             <button
-              onClick={() => setAudioMode('headphones')}
+              onClick={() => handleAudioModeChange('headphones')}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md transition ${
                 audioMode === 'headphones'
                   ? 'bg-indigo-600 text-white font-medium shadow-sm'
@@ -665,6 +681,13 @@ export const AssistantView: React.FC = () => {
       <div className="flex flex-col items-center justify-center py-10 bg-slate-950 border border-slate-800 rounded-2xl relative overflow-hidden shadow-xl">
         <div className="absolute inset-0 bg-radial-gradient from-indigo-500/5 via-transparent to-transparent pointer-events-none" />
 
+        {state === 'speaking' && (
+          <div className="absolute top-4 right-4 flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-400 font-mono shadow-sm">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+            Barge-in Active (Speak to interrupt)
+          </div>
+        )}
+
         <AudioOrb
           state={getOrbState()}
           analyser={getOrbAnalyser()}
@@ -692,15 +715,27 @@ export const AssistantView: React.FC = () => {
             <span className="text-slate-300 font-semibold">{state}</span>
           </div>
           <span className="text-[11px] text-slate-500">
-            {state === 'speaking'
-              ? 'Click orb or speak to interrupt (barge-in enabled)'
-              : state === 'listening'
-              ? isSpeakingVAD
-                ? 'Speech detected — speak naturally'
-                : 'Listening... (VAD automatically endpoints on silence)'
-              : state === 'thinking'
-              ? 'Processing speech...'
-              : 'Click Start Conversation to begin hands-free dialogue'}
+            {state === 'speaking' ? (
+              <span className="text-emerald-400 font-medium">
+                Speaking... (Speak to interrupt or press Space)
+              </span>
+            ) : state === 'listening' ? (
+              isSpeakingVAD ? (
+                <span className="text-sky-300 font-medium">Speech detected — speak naturally</span>
+              ) : bargeInNotice ? (
+                <span className="text-amber-400 font-medium animate-pulse">
+                  ⚡ Interrupted by user — listening to you...
+                </span>
+              ) : (
+                'Listening... (VAD automatically endpoints on silence)'
+              )
+            ) : state === 'thinking' ? (
+              <span className="text-purple-300">
+                Processing speech... (Speak to cancel & re-prompt)
+              </span>
+            ) : (
+              'Click Start Conversation to begin hands-free dialogue'
+            )}
           </span>
         </div>
 

@@ -88,11 +88,11 @@ export class BrowserVAD {
   private readonly callbacks: VADCallbacks;
 
   // Config with R1/R2 decision defaults
-  private readonly idleThreshold: number;
-  private readonly bargeInThreshold: number;
-  private readonly bargeInHoldMs: number;
-  private readonly silenceMs: number;
-  private readonly pollIntervalMs: number;
+  private idleThreshold: number;
+  private bargeInThreshold: number;
+  private bargeInHoldMs: number;
+  private silenceMs: number;
+  private pollIntervalMs: number;
 
   // State
   private state: VADState = 'idle';
@@ -100,6 +100,8 @@ export class BrowserVAD {
   private silenceStartTime: number = 0;
   private bargeInHoldStart: number = 0;
   private bargeInHoldActive: boolean = false;
+  private bargeInConsecutiveFrames: number = 0;
+  private bargeInDropoutFrames: number = 0;
   private isPlayingBack: boolean = false;
   private bargeInFired: boolean = false;
 
@@ -112,10 +114,13 @@ export class BrowserVAD {
     this.callbacks = callbacks;
     this.sourceNode = source;
 
-    // Merge defaults with caller config
+    // Merge defaults with caller config:
+    // idleThreshold: 0.045
+    // bargeInThreshold: 0.065 (tuned for responsive interruption with echo cancellation)
+    // bargeInHoldMs: 100ms (fast conversational reaction without false triggers)
     this.idleThreshold = config.idleThreshold ?? 0.045;
-    this.bargeInThreshold = config.bargeInThreshold ?? 0.14;
-    this.bargeInHoldMs = config.bargeInHoldMs ?? 240;
+    this.bargeInThreshold = config.bargeInThreshold ?? 0.065;
+    this.bargeInHoldMs = config.bargeInHoldMs ?? 100;
     this.silenceMs = config.silenceMs ?? 650;
     this.pollIntervalMs = config.pollIntervalMs ?? 20;
 
@@ -133,8 +138,19 @@ export class BrowserVAD {
   }
 
   /**
+   * Dynamically update VAD thresholds and timings on a running instance.
+   */
+  public updateConfig(config: Partial<VADConfig>): void {
+    if (config.idleThreshold !== undefined) this.idleThreshold = config.idleThreshold;
+    if (config.bargeInThreshold !== undefined) this.bargeInThreshold = config.bargeInThreshold;
+    if (config.bargeInHoldMs !== undefined) this.bargeInHoldMs = config.bargeInHoldMs;
+    if (config.silenceMs !== undefined) this.silenceMs = config.silenceMs;
+    if (config.pollIntervalMs !== undefined) this.pollIntervalMs = config.pollIntervalMs;
+  }
+
+  /**
    * Notify the VAD whether the assistant is currently playing audio back.
-   * When true, the elevated barge-in threshold (0.14, 240ms hold) is active.
+   * When true, the elevated barge-in threshold (0.065, 100ms hold) is active.
    * When false, the idle threshold (0.045, 650ms silence) is active.
    */
   public setPlaybackState(isPlaying: boolean): void {
@@ -143,6 +159,8 @@ export class BrowserVAD {
       // Reset barge-in hold state when playback stops
       this.bargeInHoldActive = false;
       this.bargeInHoldStart = 0;
+      this.bargeInConsecutiveFrames = 0;
+      this.bargeInDropoutFrames = 0;
       this.bargeInFired = false;
     }
   }
@@ -209,25 +227,32 @@ export class BrowserVAD {
 
     if (this.isPlayingBack) {
       // ----------------------------------------------------------------
-      // BARGE-IN mode: elevated threshold (R2 decision)
-      // Require RMS > 0.14 sustained for 240ms before firing onBargeIn.
-      // This rejects speaker-to-mic echo residual (~0.080 RMS typical)
-      // while catching a deliberate user interruption (~0.220 RMS typical).
+      // BARGE-IN mode: responsive dual-threshold detection
+      // Triggers when user speech exceeds bargeInThreshold (default 0.065
+      // for speakers, 0.045 for headphones) for >= 100ms or 4 consecutive
+      // frames, with a 2-frame (40ms) phoneme dip grace window.
       // ----------------------------------------------------------------
       if (rms > this.bargeInThreshold) {
+        this.bargeInConsecutiveFrames++;
+        this.bargeInDropoutFrames = 0;
         if (!this.bargeInHoldActive) {
           this.bargeInHoldActive = true;
           this.bargeInHoldStart = now;
-        } else if (!this.bargeInFired && (now - this.bargeInHoldStart) >= this.bargeInHoldMs) {
-          // Threshold sustained long enough — this is a real barge-in
+        }
+
+        const elapsed = now - this.bargeInHoldStart;
+        if (!this.bargeInFired && (elapsed >= this.bargeInHoldMs || this.bargeInConsecutiveFrames >= 4)) {
           this.bargeInFired = true;
           this.callbacks.onBargeIn?.();
         }
       } else {
-        // Energy dropped below barge-in threshold; reset hold window
-        this.bargeInHoldActive = false;
-        this.bargeInHoldStart = 0;
-        // Do NOT reset bargeInFired — once fired for this playback session, done.
+        // Allow up to 2 dropout frames (40ms) of acoustic dip between phonemes without resetting
+        this.bargeInDropoutFrames++;
+        if (this.bargeInDropoutFrames > 2) {
+          this.bargeInHoldActive = false;
+          this.bargeInHoldStart = 0;
+          this.bargeInConsecutiveFrames = 0;
+        }
       }
     } else {
       // ----------------------------------------------------------------
