@@ -53,6 +53,8 @@ export const AssistantView: React.FC = () => {
   const pcmPlayerRef = useRef<StreamingPCMPlayer>(new StreamingPCMPlayer(24000));
   const vadRef = useRef<BrowserVAD | null>(null);
   const activeTurnIdRef = useRef<string | null>(null);
+  const mimeTypeRef = useRef<string>('');
+  const containerRef = useRef<'webm' | 'mp4' | 'ogg'>('webm');
 
   const stateRef = useRef<AssistantState>(state);
   useEffect(() => {
@@ -285,6 +287,7 @@ export const AssistantView: React.FC = () => {
       case 'audio.completed':
         setState('listening');
         if (vadRef.current) vadRef.current.setPlaybackState(false);
+        startRecording();
         break;
       case 'turn.completed':
         setTurns((prev) => [
@@ -298,25 +301,70 @@ export const AssistantView: React.FC = () => {
         setState('listening');
         if (vadRef.current) vadRef.current.setPlaybackState(false);
         activeTurnIdRef.current = null;
+        startRecording();
         break;
       case 'turn.cancelled':
         pcmPlayerRef.current.stop();
         setState('listening');
         if (vadRef.current) vadRef.current.setPlaybackState(false);
         activeTurnIdRef.current = null;
+        startRecording();
         break;
       case 'error':
         setErrorMsg(`[${event.code}] ${event.message}`);
         setState('listening');
         if (vadRef.current) vadRef.current.setPlaybackState(false);
+        startRecording();
         break;
+    }
+  };
+
+  // Start fresh recorder instance with clean container header per turn
+  const startRecording = () => {
+    if (!audioStreamRef.current) return;
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      return;
+    }
+    try {
+      const recorderOptions = mimeTypeRef.current ? { mimeType: mimeTypeRef.current } : undefined;
+      const mediaRecorder = recorderOptions
+        ? new MediaRecorder(audioStreamRef.current, recorderOptions)
+        : new MediaRecorder(audioStreamRef.current);
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0 && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          e.data.arrayBuffer().then((buf) => {
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(buf);
+            }
+          });
+        }
+      };
+
+      mediaRecorder.start(100);
+    } catch (err) {
+      console.error('Failed to start MediaRecorder:', err);
     }
   };
 
   // Autonomous VAD turn commit
   const commitTurn = () => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'audio.commit' }));
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.onstop = () => {
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'audio.commit' }));
+          }
+        };
+        try {
+          mediaRecorderRef.current.stop();
+        } catch {
+          wsRef.current.send(JSON.stringify({ type: 'audio.commit' }));
+        }
+      } else {
+        wsRef.current.send(JSON.stringify({ type: 'audio.commit' }));
+      }
       setState('thinking');
     }
   };
@@ -387,16 +435,7 @@ export const AssistantView: React.FC = () => {
           onSpeechEnd: () => {
             setIsSpeakingVAD(false);
             if (stateRef.current === 'listening') {
-              if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-                try {
-                  mediaRecorderRef.current.requestData();
-                } catch {}
-              }
-              setTimeout(() => {
-                if (stateRef.current === 'listening') {
-                  commitTurn();
-                }
-              }, 50);
+              commitTurn();
             }
           },
           onBargeIn: () => {
@@ -431,6 +470,9 @@ export const AssistantView: React.FC = () => {
         }
       }
 
+      mimeTypeRef.current = mimeType;
+      containerRef.current = container;
+
       ws.send(
         JSON.stringify({
           type: 'session.start',
@@ -440,19 +482,7 @@ export const AssistantView: React.FC = () => {
         })
       );
 
-      const recorderOptions = mimeType ? { mimeType } : undefined;
-      const mediaRecorder = recorderOptions ? new MediaRecorder(stream, recorderOptions) : new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-          e.data.arrayBuffer().then((buf) => {
-            ws.send(buf);
-          });
-        }
-      };
-
-      mediaRecorder.start(100);
+      startRecording();
       setState('listening');
     } catch (err: any) {
       console.error('Session initialization error:', err);
@@ -498,6 +528,7 @@ export const AssistantView: React.FC = () => {
     }
     setResponseDelta('');
     setState('listening');
+    startRecording();
   };
 
   const getOrbState = (): OrbState => {

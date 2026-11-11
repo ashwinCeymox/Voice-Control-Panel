@@ -112,6 +112,7 @@ async def voice_stream(
     )
 
     audio_buffer = bytearray()
+    webm_header = bytearray()
     input_container = "webm"
     current_turn_task: Optional[asyncio.Task] = None
     active_turn_id: Optional[str] = None
@@ -139,6 +140,16 @@ async def voice_stream(
 
         try:
             # Step A: STT
+            if not utterance_bytes:
+                logger.info("Ignoring empty utterance for turn %s", turn_id)
+                await websocket.send_text(
+                    TranscriptCompletedEvent(turn_id=turn_id, text="(no speech detected)").model_dump_json()
+                )
+                await websocket.send_text(
+                    TurnCompletedEvent(turn_id=turn_id).model_dump_json()
+                )
+                return
+
             try:
                 transcript_resp = await orchestrator.stt.transcribe(
                     audio_bytes=bytes(utterance_bytes),
@@ -307,6 +318,17 @@ async def voice_stream(
                         raw_data = bytes(audio_buffer)
                         audio_buffer.clear()
 
+                        # If continuous WebM stream emitted cluster frames without EBML header,
+                        # auto-prepend cached WebM header to avoid FFmpeg EBML parsing errors.
+                        if input_container == "webm" and len(raw_data) > 0:
+                            if not raw_data.startswith(b"\x1a\x45\xdf\xa3") and webm_header:
+                                logger.info(
+                                    "Pre-pending cached WebM EBML header (%d bytes) to turn %s",
+                                    len(webm_header),
+                                    active_turn_id,
+                                )
+                                raw_data = bytes(webm_header) + raw_data
+
                         # Cancel any ongoing turn
                         if current_turn_task and not current_turn_task.done():
                             current_turn_task.cancel()
@@ -329,8 +351,17 @@ async def voice_stream(
                     break
 
             elif "bytes" in message:
+                chunk = message["bytes"]
                 # Accumulate binary audio frame
-                audio_buffer.extend(message["bytes"])
+                audio_buffer.extend(chunk)
+
+                # Cache WebM stream initialization header (EBML + Segment + Tracks preceding first Cluster)
+                if input_container == "webm" and len(webm_header) == 0:
+                    if audio_buffer.startswith(b"\x1a\x45\xdf\xa3"):
+                        c_idx = audio_buffer.find(b"\x1f\x43\xb6\x75")
+                        if c_idx > 0:
+                            webm_header = bytearray(audio_buffer[:c_idx])
+                            logger.info("Captured WebM stream header (%d bytes) for session %s", len(webm_header), session_id)
 
     except WebSocketDisconnect:
         logger.info("Client disconnected from WebSocket session %s", session_id)
