@@ -17,6 +17,8 @@ import {
 import { Agent, Voice } from '../types/api';
 
 const API_BASE = 'http://127.0.0.1:8000';
+const DEFAULT_KEY = 'dev-voice-key-12345';
+const AUTH_HEADERS = { Authorization: `Bearer ${DEFAULT_KEY}` };
 
 export const AgentsPage: React.FC = () => {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -60,14 +62,14 @@ export const AgentsPage: React.FC = () => {
     try {
       setLoading(true);
       // Fetch agents
-      const res = await fetch(`${API_BASE}/v1/agents`);
+      const res = await fetch(`${API_BASE}/v1/agents`, { headers: AUTH_HEADERS });
       if (res.ok) {
         const data = await res.json();
         const list: Agent[] = data.agents || [];
         setAgents(list);
 
         // Fetch active agent state
-        const actRes = await fetch(`${API_BASE}/v1/agents/active`);
+        const actRes = await fetch(`${API_BASE}/v1/agents/active`, { headers: AUTH_HEADERS });
         if (actRes.ok) {
           const actData = await actRes.json();
           const actId = actData.active_agent_id || (list[0] ? list[0].id : '');
@@ -81,7 +83,7 @@ export const AgentsPage: React.FC = () => {
 
       // Fetch installed models
       try {
-        const modRes = await fetch(`${API_BASE}/v1/models/installed`);
+        const modRes = await fetch(`${API_BASE}/v1/models/installed`, { headers: AUTH_HEADERS });
         if (modRes.ok) {
           const modData = await modRes.json();
           if (modData.models) {
@@ -95,7 +97,7 @@ export const AgentsPage: React.FC = () => {
 
       // Fetch voices
       try {
-        const vRes = await fetch(`${API_BASE}/v1/voices`);
+        const vRes = await fetch(`${API_BASE}/v1/voices`, { headers: AUTH_HEADERS });
         if (vRes.ok) {
           const vData = await vRes.json();
           setVoices(vData.voices || []);
@@ -120,7 +122,10 @@ export const AgentsPage: React.FC = () => {
     setErrorMsg(null);
     setSuccessMsg(null);
     try {
-      const res = await fetch(`${API_BASE}/v1/agents/${agentId}/load`, { method: 'POST' });
+      const res = await fetch(`${API_BASE}/v1/agents/${agentId}/load`, {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+      });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.detail || 'Failed to activate agent');
@@ -147,7 +152,7 @@ export const AgentsPage: React.FC = () => {
 
       const res = await fetch(url, {
         method,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
         body: JSON.stringify(selectedAgent),
       });
 
@@ -161,7 +166,7 @@ export const AgentsPage: React.FC = () => {
       setTimeout(() => setSuccessMsg(null), 3000);
 
       // Refresh list
-      const listRes = await fetch(`${API_BASE}/v1/agents`);
+      const listRes = await fetch(`${API_BASE}/v1/agents`, { headers: AUTH_HEADERS });
       if (listRes.ok) {
         const listData = await listRes.json();
         setAgents(listData.agents || []);
@@ -176,7 +181,10 @@ export const AgentsPage: React.FC = () => {
 
   const handleDuplicate = async (agentId: string) => {
     try {
-      const res = await fetch(`${API_BASE}/v1/agents/${agentId}/duplicate`, { method: 'POST' });
+      const res = await fetch(`${API_BASE}/v1/agents/${agentId}/duplicate`, {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+      });
       if (!res.ok) throw new Error('Duplicate failed');
       const duplicated = await res.json();
       setAgents((prev) => [duplicated, ...prev]);
@@ -195,7 +203,10 @@ export const AgentsPage: React.FC = () => {
     }
     if (!confirm('Are you sure you want to delete this agent?')) return;
     try {
-      const res = await fetch(`${API_BASE}/v1/agents/${agentId}`, { method: 'DELETE' });
+      const res = await fetch(`${API_BASE}/v1/agents/${agentId}`, {
+        method: 'DELETE',
+        headers: AUTH_HEADERS,
+      });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.detail || 'Delete failed');
@@ -239,7 +250,7 @@ export const AgentsPage: React.FC = () => {
     try {
       const res = await fetch(`${API_BASE}/v1/agents/${selectedAgent.id}/test-chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
         body: JSON.stringify({ message: userText }),
       });
 

@@ -202,9 +202,10 @@ export interface SystemResources {
     used_mb: number;
     percent_used: number;
   };
-  gpu: {
-    apple_silicon_metal: boolean;
+  hardware: {
+    has_metal_gpu: boolean;
     mps_available: boolean;
+    chip?: string;
   };
   disk: {
     free_gb: number;
@@ -216,26 +217,29 @@ export interface GalleryModel {
   id: string;
   name: string;
   description: string;
-  provider: 'localai' | 'localtts';
+  provider: string;        // e.g. "localai" | "local-tts"
   category: 'llm' | 'stt' | 'tts';
-  backend: string;
   size_mb: number;
   ram_required_mb: number;
   license: string;
-  installed: boolean;
+  quantization?: string;
+  tags?: string[];
+  installed?: boolean;
+  fits_budget: boolean;
   fit_score: number;
-  fit_category: 'excellent' | 'good' | 'tight' | 'will_not_fit';
-  warning?: string | null;
 }
 
 export interface InstallJob {
   job_id: string;
   model_id: string;
   status: 'queued' | 'downloading' | 'verifying' | 'completed' | 'failed';
-  progress: number;
+  progress_percent: number;      // API field name
+  downloaded_bytes?: number;
+  total_bytes?: number;
+  speed_mbps?: number;
+  eta_seconds?: number;
   error_message?: string | null;
-  created_at: string;
-  updated_at: string;
+  created_at: number;
 }
 
 // ============================================================================

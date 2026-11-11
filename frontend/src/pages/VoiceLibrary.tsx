@@ -4,6 +4,8 @@ import { Voice } from '../types/api';
 import { StreamingPCMPlayer } from '../audio/pcmPlayer';
 
 const API_BASE = 'http://127.0.0.1:8000';
+const DEFAULT_KEY = 'dev-voice-key-12345';
+const AUTH_HEADERS = { Authorization: `Bearer ${DEFAULT_KEY}` };
 
 export const VoiceLibrary: React.FC = () => {
   const [voices, setVoices] = useState<Voice[]>([]);
@@ -24,7 +26,7 @@ export const VoiceLibrary: React.FC = () => {
   const fetchVoices = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`${API_BASE}/v1/voices`);
+      const res = await fetch(`${API_BASE}/v1/voices`, { headers: AUTH_HEADERS });
       if (res.ok) {
         const data = await res.json();
         setVoices(data.voices || []);
@@ -43,6 +45,7 @@ export const VoiceLibrary: React.FC = () => {
 
       const res = await fetch(`${API_BASE}/v1/voices/${voice.voice_id}/preview`, {
         method: 'POST',
+        headers: AUTH_HEADERS,
       });
 
       if (res.ok) {
@@ -68,7 +71,7 @@ export const VoiceLibrary: React.FC = () => {
       setSavingMeta(true);
       const res = await fetch(`${API_BASE}/v1/voices/${editingVoice.voice_id}/meta`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
         body: JSON.stringify({
           name: editName,
           gender: editGender,

@@ -76,7 +76,9 @@ export const AssistantView: React.FC = () => {
 
   const fetchActiveAgent = async () => {
     try {
-      const res = await fetch(`${API_BASE}/v1/agents/active`);
+      const res = await fetch(`${API_BASE}/v1/agents/active`, {
+        headers: { Authorization: `Bearer ${DEFAULT_KEY}` },
+      });
       if (res.ok) {
         const data = await res.json();
         if (data.active_agent) {

@@ -5,6 +5,7 @@ import { Voice } from '../types/api';
 
 const API_BASE = 'http://127.0.0.1:8000';
 const DEFAULT_KEY = 'dev-voice-key-12345';
+const AUTH_HEADERS = { Authorization: `Bearer ${DEFAULT_KEY}` };
 
 export const TTSPlayground: React.FC = () => {
   const [text, setText] = useState(
@@ -30,7 +31,7 @@ export const TTSPlayground: React.FC = () => {
   const fetchTTSOptions = async () => {
     try {
       // 1. Fetch TTS models
-      const modelsRes = await fetch(`${API_BASE}/v1/tts/models`);
+      const modelsRes = await fetch(`${API_BASE}/v1/tts/models`, { headers: AUTH_HEADERS });
       if (modelsRes.ok) {
         const mData = await modelsRes.json();
         if (mData.models && mData.models.length > 0) {
@@ -40,7 +41,7 @@ export const TTSPlayground: React.FC = () => {
       }
 
       // 2. Fetch extended voices with gender
-      const voicesRes = await fetch(`${API_BASE}/v1/voices`);
+      const voicesRes = await fetch(`${API_BASE}/v1/voices`, { headers: AUTH_HEADERS });
       if (voicesRes.ok) {
         const vData = await voicesRes.json();
         const vList: Voice[] = vData.voices || [];
@@ -60,6 +61,7 @@ export const TTSPlayground: React.FC = () => {
       setError(null);
       const res = await fetch(`${API_BASE}/v1/voices/${vId}/preview`, {
         method: 'POST',
+        headers: AUTH_HEADERS,
       });
       if (!res.ok) throw new Error('Preview synthesis failed');
       const rawPcm = await res.arrayBuffer();

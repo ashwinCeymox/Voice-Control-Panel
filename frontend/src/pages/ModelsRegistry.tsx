@@ -13,6 +13,8 @@ import {
 import { GalleryModel, SystemResources, InstallJob } from '../types/api';
 
 const API_BASE = 'http://127.0.0.1:8000';
+const API_KEY = 'dev-voice-key-12345';
+const AUTH_HEADERS = { Authorization: `Bearer ${API_KEY}` };
 
 export const ModelsRegistry: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'explore' | 'installed'>('explore');
@@ -33,7 +35,7 @@ export const ModelsRegistry: React.FC = () => {
     try {
       setLoading(true);
       // Fetch system resources
-      const resRes = await fetch(`${API_BASE}/v1/system/resources`);
+      const resRes = await fetch(`${API_BASE}/v1/system/resources`, { headers: AUTH_HEADERS });
       if (resRes.ok) {
         const resData: SystemResources = await resRes.json();
         setResources(resData);
@@ -41,7 +43,7 @@ export const ModelsRegistry: React.FC = () => {
 
       // Fetch gallery models
       const catParam = categoryFilter !== 'all' ? `category=${categoryFilter}` : '';
-      const galRes = await fetch(`${API_BASE}/v1/gallery/models?${catParam}`);
+      const galRes = await fetch(`${API_BASE}/v1/gallery/models?${catParam}`, { headers: AUTH_HEADERS });
       if (galRes.ok) {
         const galData = await galRes.json();
         setModels(galData.models || []);
@@ -66,7 +68,7 @@ export const ModelsRegistry: React.FC = () => {
     try {
       const res = await fetch(`${API_BASE}/v1/models/install`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
         body: JSON.stringify({ model_id: modelId }),
       });
       if (!res.ok) {
@@ -85,7 +87,7 @@ export const ModelsRegistry: React.FC = () => {
   const pollJob = (jobId: string, modelId: string) => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${API_BASE}/v1/models/install/${jobId}`);
+        const res = await fetch(`${API_BASE}/v1/models/install/${jobId}`, { headers: AUTH_HEADERS });
         if (res.ok) {
           const updated: InstallJob = await res.json();
           setActiveJobs((prev) => ({ ...prev, [modelId]: updated }));
@@ -112,6 +114,7 @@ export const ModelsRegistry: React.FC = () => {
     try {
       const res = await fetch(`${API_BASE}/v1/models/${encodeURIComponent(modelId)}`, {
         method: 'DELETE',
+        headers: AUTH_HEADERS,
       });
       if (!res.ok) {
         const err = await res.json();
@@ -202,7 +205,7 @@ export const ModelsRegistry: React.FC = () => {
                 {resources.disk.free_gb.toFixed(0)} GB Free
               </span>
             </div>
-            {resources.gpu.apple_silicon_metal && (
+            {resources.hardware?.has_metal_gpu && (
               <>
                 <div className="h-3 w-px bg-slate-800" />
                 <span className="px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20 font-mono">
@@ -366,19 +369,19 @@ export const ModelsRegistry: React.FC = () => {
                 <div className="space-y-3 pt-3 border-t border-slate-900">
                   <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono">
                     <span>Size: {model.size_mb} MB</span>
-                    <span>Backend: {model.backend}</span>
+                    <span>Backend: {model.provider}</span>
                   </div>
 
                   {isInstalling ? (
                     <div className="space-y-1.5">
                       <div className="flex justify-between text-[11px] text-indigo-400">
                         <span>Downloading model weights...</span>
-                        <span>{job.progress}%</span>
+                        <span>{job.progress_percent}%</span>
                       </div>
                       <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
                         <div
                           className="bg-indigo-500 h-1.5 transition-all duration-300"
-                          style={{ width: `${job.progress}%` }}
+                          style={{ width: `${job.progress_percent}%` }}
                         />
                       </div>
                     </div>

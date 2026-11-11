@@ -12,6 +12,7 @@ import { TranscriptResponse } from '../types/api';
 
 const API_BASE = 'http://127.0.0.1:8000';
 const DEFAULT_KEY = 'dev-voice-key-12345';
+const AUTH_HEADERS = { Authorization: `Bearer ${DEFAULT_KEY}` };
 
 export const STTPlayground: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
@@ -43,7 +44,7 @@ export const STTPlayground: React.FC = () => {
 
   const fetchInstalledSTT = async () => {
     try {
-      const res = await fetch(`${API_BASE}/v1/models/installed`);
+      const res = await fetch(`${API_BASE}/v1/models/installed`, { headers: AUTH_HEADERS });
       if (res.ok) {
         const data = await res.json();
         const stt = (data.models || [])
