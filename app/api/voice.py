@@ -32,6 +32,49 @@ router = APIRouter(prefix="/v1/voice", tags=["Voice"])
 _DEFAULT_SYSTEM_PROMPT = "You are a concise voice assistant. Respond in one or two sentences."
 
 
+def is_transcript_silence(text: str) -> bool:
+    """Check if transcript represents silence or no detected speech."""
+    cleaned = (text or "").strip()
+    return not cleaned or cleaned.lower() in (
+        "(no speech detected)", "no speech detected",
+        "silence", "(silence)", "[silence]",
+        "[blank_audio]", "(blank audio)",
+    )
+
+
+def is_transcript_unclear(text: str) -> bool:
+    """Validate transcript sanity per P4 Gate 3 & Gate 4 (unclear/muffled speech vs hallucinations)."""
+    cleaned = (text or "").strip()
+    if is_transcript_silence(cleaned):
+        return False
+    import re
+    # Remove all punctuation and symbols
+    alpha_num = re.sub(r"[^\w\s]", "", cleaned).strip()
+    if not alpha_num:
+        return True
+    lower = cleaned.lower()
+    # Hallucination and noise artifact tokens from Whisper
+    noise_artifacts = (
+        "(crickets chirping)", "[crickets chirping]",
+        "(music)", "[music]", "(background music)",
+        "(applause)", "[applause]",
+        "(laughter)", "[laughter]", "(chuckle)",
+        "[cough]", "(cough)",
+        "[snort]", "(snort)",
+        "(whispering)", "[whispering]",
+        "thank you for watching", "thanks for watching",
+        "subscribe to my channel", "subtitles by",
+    )
+    for art in noise_artifacts:
+        if lower == art or lower.startswith(art):
+            return True
+    # Repetition stutter check (e.g. 4+ repeated single word)
+    words = lower.split()
+    if len(words) >= 4 and len(set(words)) == 1:
+        return True
+    return False
+
+
 async def _resolve_agent(agent_id: Optional[str]) -> Optional[Dict[str, Any]]:
     """Resolve the agent to use for a session.
 
@@ -116,9 +159,16 @@ async def voice_stream(
     input_container = "webm"
     current_turn_task: Optional[asyncio.Task] = None
     active_turn_id: Optional[str] = None
+    consecutive_unclear = 0
 
-    async def process_turn(turn_id: str, utterance_bytes: bytes, turn_agent: Optional[Dict[str, Any]]):
+    async def process_turn(
+        turn_id: str,
+        utterance_bytes: bytes,
+        turn_agent: Optional[Dict[str, Any]],
+        container: str = "wav",
+    ):
         """Execute a single STT->LLM->TTS turn, using per-agent config where available."""
+        nonlocal consecutive_unclear
         # Extract agent config with safe fallbacks
         system_prompt = _DEFAULT_SYSTEM_PROMPT
         llm_model: Optional[str] = None
@@ -142,7 +192,7 @@ async def voice_stream(
 
         try:
             # Step A: STT
-            if not utterance_bytes or (input_container == "webm" and len(utterance_bytes) < 1200):
+            if not utterance_bytes or (container == "webm" and len(utterance_bytes) < 1200):
                 logger.info("Ignoring empty/sub-threshold utterance (%d bytes) for turn %s", len(utterance_bytes) if utterance_bytes else 0, turn_id)
                 await websocket.send_text(
                     TranscriptCompletedEvent(turn_id=turn_id, text="(no speech detected)").model_dump_json()
@@ -153,12 +203,17 @@ async def voice_stream(
                 return
 
             try:
-                transcript_resp = await orchestrator.stt.transcribe(
-                    audio_bytes=bytes(utterance_bytes),
-                    filename=f"utterance.{input_container}",
-                    content_type=f"audio/{input_container}",
-                    model=stt_model,
+                transcript_resp = await asyncio.shield(
+                    orchestrator.stt.transcribe(
+                        audio_bytes=bytes(utterance_bytes),
+                        filename=f"utterance.{container}",
+                        content_type=f"audio/{container}",
+                        model=stt_model,
+                    )
                 )
+            except asyncio.CancelledError:
+                logger.info("Turn %s cancelled during STT transcription (LocalAI shielded)", turn_id)
+                raise
             except Exception as stt_exc:
                 err_str = str(stt_exc).lower()
                 if any(k in err_str for k in ("end of file", "invalid data found", "could not find codec", "truncating packet", "silence")):
@@ -186,6 +241,63 @@ async def voice_stream(
             await websocket.send_text(
                 TranscriptCompletedEvent(turn_id=turn_id, text=transcript).model_dump_json()
             )
+
+            # Silence Gate: Pure silence completes quietly without prompting LLM or "ask to repeat"
+            if is_transcript_silence(transcript):
+                logger.info("Silence/no-speech detected for turn %s, completing quietly", turn_id)
+                await websocket.send_text(TurnCompletedEvent(turn_id=turn_id).model_dump_json())
+                return
+
+            # P4 Gate 3 & Gate 5: Transcript Sanity & Ask-to-Repeat Gate
+            if is_transcript_unclear(transcript):
+                logger.info("Transcript '%s' flagged as unclear / noise artifact for turn %s", transcript, turn_id)
+                if consecutive_unclear < 2:
+                    consecutive_unclear += 1
+                    repeat_msg = "Sorry, I didn't catch that. Could you repeat?"
+                    await websocket.send_text(
+                        ResponseTextDeltaEvent(turn_id=turn_id, delta=repeat_msg).model_dump_json()
+                    )
+
+                    # Stream short repeat phrase via TTS
+                    tts_kwargs: Dict[str, Any] = {}
+                    if tts_voice_id:
+                        tts_kwargs["voice_id"] = tts_voice_id
+                    if tts_speed is not None:
+                        tts_kwargs["speed"] = tts_speed
+                    if tts_engine:
+                        tts_kwargs["model_id"] = tts_engine
+
+                    async def repeat_gen():
+                        yield repeat_msg
+
+                    try:
+                        audio_started = False
+                        async for pcm_chunk in orchestrator.tts.stream_synthesis_ws(repeat_gen(), **tts_kwargs):
+                            if not audio_started:
+                                await websocket.send_text(
+                                    AudioStartedEvent(
+                                        turn_id=turn_id,
+                                        sample_rate=24000,
+                                        sample_format="s16le",
+                                        channels=1,
+                                    ).model_dump_json()
+                                )
+                                audio_started = True
+                            await websocket.send_bytes(pcm_chunk)
+                        if audio_started:
+                            await websocket.send_text(AudioCompletedEvent(turn_id=turn_id).model_dump_json())
+                    except Exception as e:
+                        logger.warning("Failed to synthesize repeat phrase: %s", e)
+
+                    await websocket.send_text(TurnCompletedEvent(turn_id=turn_id).model_dump_json())
+                    return
+                else:
+                    consecutive_unclear = 0
+                    logger.info("Consecutive unclear turns reached limit (2), waiting quietly")
+                    await websocket.send_text(TurnCompletedEvent(turn_id=turn_id).model_dump_json())
+                    return
+
+            consecutive_unclear = 0
             await SessionRepository.add_message(session_id, "user", transcript)
 
             # Step B: LLM Streaming & Chunking
@@ -335,9 +447,16 @@ async def voice_stream(
                         raw_data = bytes(audio_buffer)
                         audio_buffer.clear()
 
+                        # Auto-detect audio container from payload magic bytes
+                        detected_container = input_container
+                        if raw_data.startswith(b"RIFF") and len(raw_data) >= 12 and raw_data[8:12] == b"WAVE":
+                            detected_container = "wav"
+                        elif raw_data.startswith(b"\x1a\x45\xdf\xa3"):
+                            detected_container = "webm"
+
                         # If continuous WebM stream emitted cluster frames without EBML header,
                         # auto-prepend cached WebM header to avoid FFmpeg EBML parsing errors.
-                        if input_container == "webm" and len(raw_data) > 0:
+                        if detected_container == "webm" and len(raw_data) > 0:
                             if not raw_data.startswith(b"\x1a\x45\xdf\xa3") and webm_header:
                                 logger.info(
                                     "Pre-pending cached WebM EBML header (%d bytes) to turn %s",
@@ -353,9 +472,9 @@ async def voice_stream(
                         # Capture agent snapshot for this turn
                         turn_agent_snapshot = agent
 
-                        # Launch new turn task
+                        # Launch new turn task with detected container
                         current_turn_task = asyncio.create_task(
-                            process_turn(active_turn_id, raw_data, turn_agent_snapshot)
+                            process_turn(active_turn_id, raw_data, turn_agent_snapshot, container=detected_container)
                         )
                         orchestrator.register_stream_task(session_id, current_turn_task)
 
@@ -364,6 +483,12 @@ async def voice_stream(
                         current_turn_task.cancel()
                     orchestrator.cancel_stream_task(session_id)
                     audio_buffer.clear()
+
+                elif event_type == "vad.speech_start":
+                    logger.info("VAD speech start detected for session %s (ts=%s)", session_id, event_data.get("timestamp"))
+
+                elif event_type == "vad.misfire":
+                    logger.info("VAD misfire logged for session %s (duration=%s ms)", session_id, event_data.get("duration_ms"))
 
                 elif event_type == "session.end":
                     break

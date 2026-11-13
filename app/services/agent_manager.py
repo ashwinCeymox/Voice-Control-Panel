@@ -16,7 +16,21 @@ DEFAULT_AGENT = {
     "llm": {"model": "llama-3.2-1b-instruct", "temperature": 0.7, "max_tokens": 512},
     "stt": {"model": "whisper-base", "language": "auto"},
     "tts": {"engine": "kokoro", "voice_id": "af_heart", "speed": 1.0},
-    "vad": {"mode": "energy", "threshold": 0.045, "min_silence_ms": 650},
+    "vad": {
+        "engine": "silero",
+        "positive_speech_threshold": 0.45,
+        "negative_speech_threshold": 0.30,
+        "redemption_ms": 800,
+        "pre_speech_pad_ms": 200,
+        "min_speech_ms": 250,
+        "min_rms": 0.015,
+        "noise_suppression": "browser",
+        "barge_in": True,
+        "barge_in_confirm_ms": 250,
+        "playback_threshold_boost": 0.15,
+        "threshold": 0.045,
+        "min_silence_ms": 800,
+    },
     "audio": {"echo_mode": "laptop_speakers", "barge_in": True},
     "schema_version": 1,
 }
@@ -24,6 +38,13 @@ DEFAULT_AGENT = {
 _ACTIVE_AGENT_ID: str = "agent-default-assistant"
 _ACTIVE_LOAD_STATE: str = "ready"  # idle, loading, ready, error
 _LOAD_LOCK = asyncio.Lock()
+
+
+def _normalize_vad(vad_raw: Dict[str, Any]) -> Dict[str, Any]:
+    merged = {**DEFAULT_AGENT["vad"], **vad_raw}
+    if "min_silence_ms" in vad_raw and "redemption_ms" not in vad_raw:
+        merged["redemption_ms"] = vad_raw["min_silence_ms"]
+    return merged
 
 
 class AgentManager:
@@ -68,7 +89,7 @@ class AgentManager:
                     "llm": json.loads(r["llm_json"]),
                     "stt": json.loads(r["stt_json"]),
                     "tts": json.loads(r["tts_json"]),
-                    "vad": json.loads(r["vad_json"]),
+                    "vad": _normalize_vad(json.loads(r["vad_json"])),
                     "audio": json.loads(r["audio_json"]),
                     "is_active": bool(r["is_active"]),
                     "created_at": r["created_at"],
@@ -95,7 +116,7 @@ class AgentManager:
                 "llm": json.loads(r["llm_json"]),
                 "stt": json.loads(r["stt_json"]),
                 "tts": json.loads(r["tts_json"]),
-                "vad": json.loads(r["vad_json"]),
+                "vad": _normalize_vad(json.loads(r["vad_json"])),
                 "audio": json.loads(r["audio_json"]),
                 "is_active": bool(r["is_active"]),
                 "created_at": r["created_at"],

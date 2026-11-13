@@ -19,3 +19,5 @@ class TranscriptResponse(BaseModel):
     text: str = Field(..., description="Transcribed text from the audio")
     language: Optional[str] = Field(default="en", description="Detected language code")
     duration: Optional[float] = Field(default=None, description="Audio duration in seconds")
+    model: Optional[str] = Field(default=None, description="Model used for transcription")
+    fallback_used: bool = Field(default=False, description="Whether an automatic fallback model was used")

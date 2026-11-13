@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { AudioOrb, OrbState } from '../components/AudioOrb';
 import { StreamingPCMPlayer } from '../audio/pcmPlayer';
-import { BrowserVAD } from '../audio/vad';
+import { VadController } from '../audio/vadController';
 import { ServerEvent, Agent } from '../types/api';
 
 const host = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : '127.0.0.1';
@@ -49,8 +49,8 @@ export const AssistantView: React.FC = () => {
   const handleAudioModeChange = (mode: 'laptop_speakers' | 'headphones') => {
     setAudioMode(mode);
     if (vadRef.current) {
-      vadRef.current.updateConfig({
-        bargeInThreshold: mode === 'headphones' ? 0.045 : 0.065,
+      vadRef.current.setOptions({
+        audioMode: mode,
       });
     }
   };
@@ -63,7 +63,7 @@ export const AssistantView: React.FC = () => {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const micAnalyserRef = useRef<AnalyserNode | null>(null);
   const pcmPlayerRef = useRef<StreamingPCMPlayer>(new StreamingPCMPlayer(24000));
-  const vadRef = useRef<BrowserVAD | null>(null);
+  const vadRef = useRef<VadController | null>(null);
   const activeTurnIdRef = useRef<string | null>(null);
   const mimeTypeRef = useRef<string>('');
   const containerRef = useRef<'webm' | 'mp4' | 'ogg'>('webm');
@@ -93,7 +93,7 @@ export const AssistantView: React.FC = () => {
         (e.target as HTMLElement).tagName !== 'TEXTAREA'
       ) {
         e.preventDefault();
-        if (stateRef.current === 'speaking') {
+        if (stateRef.current === 'speaking' || stateRef.current === 'thinking') {
           handleInterrupt();
         } else if (stateRef.current === 'idle') {
           startSession();
@@ -170,14 +170,33 @@ export const AssistantView: React.FC = () => {
 
       // If session is active, notify backend of switch
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        const engine = switched?.vad?.engine || vadRef.current?.engine || 'silero';
         wsRef.current.send(
           JSON.stringify({
             type: 'session.start',
             agent_id: agentId,
-            input_audio: { container: 'webm', codec: 'opus' },
+            input_audio: {
+              container: engine === 'silero' ? 'wav' : 'webm',
+              codec: engine === 'silero' ? 'pcm' : 'opus',
+              sample_rate: 16000,
+            },
             config: { echo_mode: audioMode, barge_in: true },
           })
         );
+      }
+
+      // Update live VAD settings if instance is active
+      if (vadRef.current && switched?.vad) {
+        vadRef.current.setOptions({
+          positiveSpeechThreshold: switched.vad.positive_speech_threshold,
+          negativeSpeechThreshold: switched.vad.negative_speech_threshold,
+          redemptionMs: switched.vad.redemption_ms || switched.vad.min_silence_ms,
+          preSpeechPadMs: switched.vad.pre_speech_pad_ms,
+          minSpeechMs: switched.vad.min_speech_ms,
+          minRms: switched.vad.min_rms,
+          bargeInConfirmMs: switched.vad.barge_in_confirm_ms,
+          playbackThresholdBoost: switched.vad.playback_threshold_boost,
+        });
       }
     } catch (err: any) {
       setErrorMsg(err.message);
@@ -194,7 +213,7 @@ export const AssistantView: React.FC = () => {
       mediaRecorderRef.current = null;
     }
     if (vadRef.current) {
-      vadRef.current.stop();
+      vadRef.current.destroy().catch(() => {});
       vadRef.current = null;
     }
     if (audioStreamRef.current) {
@@ -305,9 +324,9 @@ export const AssistantView: React.FC = () => {
         break;
       case 'turn.completed':
         {
-          const savedTranscript = currentTranscriptRef.current || transcript;
-          const savedResponse = currentResponseRef.current || responseDelta;
-          if (savedTranscript || savedResponse) {
+          const savedTranscript = (currentTranscriptRef.current || transcript).trim();
+          const savedResponse = (currentResponseRef.current || responseDelta).trim();
+          if (savedResponse || (savedTranscript && savedTranscript !== '(no speech detected)')) {
             setTurns((prev) => [
               ...prev,
               {
@@ -345,8 +364,12 @@ export const AssistantView: React.FC = () => {
     }
   };
 
-  // Start fresh recorder instance with clean container header per turn
+  // Start fresh recorder instance with clean container header per turn (legacy mode)
   const startRecording = () => {
+    const currentEngine = activeAgentRef.current?.vad?.engine || vadRef.current?.engine || 'silero';
+    if (currentEngine === 'silero') {
+      return;
+    }
     if (!audioStreamRef.current) return;
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       return;
@@ -451,39 +474,70 @@ export const AssistantView: React.FC = () => {
       micAnalyserRef.current = analyser;
 
       const currentAgent = activeAgentRef.current;
+      const vadConfig = currentAgent?.vad;
+      const vadEngine = vadConfig?.engine || 'silero';
 
-      const vad = new BrowserVAD(
-        audioCtx,
-        micSource,
+      const vad = new VadController(
         {
           onSpeechStart: () => {
             setIsSpeakingVAD(true);
-            if (stateRef.current === 'thinking') {
-              // User spoke while the agent was processing/thinking -> interrupt immediately!
-              handleInterrupt();
-            } else if (stateRef.current !== 'speaking') {
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: 'vad.speech_start', timestamp: Date.now() }));
+            }
+            if (stateRef.current !== 'speaking' && stateRef.current !== 'thinking') {
               setState('listening');
             }
           },
-          onSpeechEnd: () => {
+          onSpeechEnd: (wavBytes: Uint8Array, _durationMs: number, _rms: number) => {
             setIsSpeakingVAD(false);
-            if (stateRef.current === 'listening') {
-              commitTurn();
+            if (vadEngine === 'silero') {
+              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && wavBytes.length > 0) {
+                currentTranscriptRef.current = '';
+                currentResponseRef.current = '';
+                setTranscript('');
+                setResponseDelta('');
+                // Transmit standalone 16kHz PCM WAV frame
+                wsRef.current.send(wavBytes.buffer);
+                // Immediately commit turn
+                wsRef.current.send(JSON.stringify({ type: 'audio.commit' }));
+                setState('thinking');
+              }
+            } else {
+              if (stateRef.current === 'listening') {
+                commitTurn();
+              }
+            }
+          },
+          onVADMisfire: () => {
+            setIsSpeakingVAD(false);
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: 'vad.misfire' }));
             }
           },
           onBargeIn: () => {
             setIsSpeakingVAD(true);
             handleInterrupt();
           },
+          onError: (err) => {
+            console.warn('VAD Error:', err);
+          },
         },
         {
-          silenceMs: currentAgent?.vad?.min_silence_ms || 650,
-          idleThreshold: currentAgent?.vad?.threshold || 0.045,
-          bargeInThreshold: audioMode === 'headphones' ? 0.045 : 0.065,
-          bargeInHoldMs: 100,
+          engine: vadEngine,
+          model: 'v5',
+          positiveSpeechThreshold: vadConfig?.positive_speech_threshold || 0.45,
+          negativeSpeechThreshold: vadConfig?.negative_speech_threshold || 0.30,
+          redemptionMs: vadConfig?.redemption_ms || vadConfig?.min_silence_ms || 800,
+          preSpeechPadMs: vadConfig?.pre_speech_pad_ms || 200,
+          minSpeechMs: vadConfig?.min_speech_ms || 250,
+          minRms: vadConfig?.min_rms ?? 0.015,
+          bargeIn: true,
+          bargeInConfirmMs: vadConfig?.barge_in_confirm_ms || 250,
+          playbackThresholdBoost: vadConfig?.playback_threshold_boost || 0.15,
+          audioMode,
         }
       );
-      vad.start();
+      await vad.start(audioCtx, micSource);
       vadRef.current = vad;
 
       let mimeType = '';
@@ -507,16 +561,21 @@ export const AssistantView: React.FC = () => {
       mimeTypeRef.current = mimeType;
       containerRef.current = container;
 
+      const inputContainer = vadEngine === 'silero' ? 'wav' : container;
+      const inputCodec = vadEngine === 'silero' ? 'pcm' : 'opus';
+
       ws.send(
         JSON.stringify({
           type: 'session.start',
           agent_id: currentAgent?.id,
-          input_audio: { container, codec: 'opus' },
-          config: { echo_mode: audioMode, barge_in: true },
+          input_audio: { container: inputContainer, codec: inputCodec },
+          config: { vad_engine: vadEngine, echo_mode: audioMode, barge_in: true },
         })
       );
 
-      startRecording();
+      if (vadEngine === 'legacy') {
+        startRecording();
+      }
       setState('listening');
     } catch (err: any) {
       console.error('Session initialization error:', err);
@@ -693,7 +752,7 @@ export const AssistantView: React.FC = () => {
           analyser={getOrbAnalyser()}
           size={300}
           onClick={() => {
-            if (state === 'speaking') handleInterrupt();
+            if (state === 'speaking' || state === 'thinking') handleInterrupt();
             else if (state === 'idle') startSession();
           }}
         />

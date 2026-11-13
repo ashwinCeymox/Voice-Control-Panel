@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.core.config import settings
-from app.core.security import require_api_key
+from app.core.security import require_admin_key
+from app.services.key_manager import ApiKeyRecord
 from app.providers.localai_llm import LocalAILLMClient
 from app.schemas.agent import (
     AgentConfig,
@@ -69,7 +70,7 @@ async def validate_agent_models(data: Dict[str, Any]):
 
 @router.get("", response_model=AgentListResponse)
 @router.get("/", response_model=AgentListResponse, include_in_schema=False)
-async def list_agents(user: str = Depends(require_api_key)):
+async def list_agents(admin: ApiKeyRecord = Depends(require_admin_key)):
     """List all saved agents."""
     agents = await AgentManager.list_agents()
     return {"agents": agents}
@@ -79,7 +80,7 @@ async def list_agents(user: str = Depends(require_api_key)):
 @router.post("/", status_code=201, include_in_schema=False)
 async def create_agent(
     payload: AgentConfig,
-    user: str = Depends(require_api_key),
+    admin: ApiKeyRecord = Depends(require_admin_key),
 ):
     """Create a new agent configuration."""
     data = payload.model_dump()
@@ -91,7 +92,7 @@ async def create_agent(
 # BUG FIX: /active must be declared BEFORE /{id} to prevent FastAPI from
 # routing GET /v1/agents/active into get_agent(id="active").
 @router.get("/active")
-async def get_active_agent(user: str = Depends(require_api_key)):
+async def get_active_agent(admin: ApiKeyRecord = Depends(require_admin_key)):
     """Get currently loaded active agent details and load state."""
     state_info = AgentManager.get_active_state()
     active_id = state_info.get("active_agent_id")
@@ -111,7 +112,7 @@ async def get_active_agent(user: str = Depends(require_api_key)):
 @router.get("/{id}")
 async def get_agent(
     id: str,
-    user: str = Depends(require_api_key),
+    admin: ApiKeyRecord = Depends(require_admin_key),
 ):
     """Get agent configuration details."""
     agent = await AgentManager.get_agent(id)
@@ -127,7 +128,7 @@ async def update_agent(
     # (required fields). PUT merges with the existing record, so individual fields
     # may be omitted while the merge ensures all required DB columns are populated.
     payload: AgentUpdateConfig,
-    user: str = Depends(require_api_key),
+    admin: ApiKeyRecord = Depends(require_admin_key),
 ):
     """Update agent configuration."""
     existing = await AgentManager.get_agent(id)
@@ -153,7 +154,7 @@ async def update_agent(
 @router.delete("/{id}")
 async def delete_agent(
     id: str,
-    user: str = Depends(require_api_key),
+    admin: ApiKeyRecord = Depends(require_admin_key),
 ):
     """Delete an agent."""
     # BUG FIX: Use only DEFAULT_AGENT["id"] (single source of truth) instead of
@@ -174,7 +175,7 @@ async def delete_agent(
 @router.post("/{id}/duplicate", status_code=201)
 async def duplicate_agent(
     id: str,
-    user: str = Depends(require_api_key),
+    admin: ApiKeyRecord = Depends(require_admin_key),
 ):
     """Duplicate an existing agent with ' (Copy)' appended to name."""
     existing = await AgentManager.get_agent(id)
@@ -198,7 +199,7 @@ async def duplicate_agent(
 @router.post("/{id}/load")
 async def load_agent(
     id: str,
-    user: str = Depends(require_api_key),
+    admin: ApiKeyRecord = Depends(require_admin_key),
 ):
     """Activate agent and verify memory fit."""
     try:
@@ -215,7 +216,7 @@ async def load_agent(
 async def test_chat(
     id: str,
     payload: TestChatRequest,
-    user: str = Depends(require_api_key),
+    admin: ApiKeyRecord = Depends(require_admin_key),
 ):
     """Stream chat response using agent's system prompt and LLM configuration."""
     agent = await AgentManager.get_agent(id)

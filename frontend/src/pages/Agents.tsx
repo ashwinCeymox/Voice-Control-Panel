@@ -750,34 +750,159 @@ export const AgentsPage: React.FC = () => {
                   </select>
                 </div>
 
-                <div>
-                  <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5 mb-2">
-                    <Volume2 className="w-3.5 h-3.5 text-slate-400" />
-                    VAD Trailing Silence Window
-                  </label>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="range"
-                      min="350"
-                      max="1200"
-                      step="50"
-                      value={selectedAgent.vad?.min_silence_ms || 650}
+                <div className="space-y-4 pt-2 border-t border-slate-800">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                      <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
+                      VAD Engine
+                    </label>
+                    <select
+                      value={selectedAgent.vad?.engine || 'silero'}
                       onChange={(e) =>
                         setSelectedAgent({
                           ...selectedAgent,
                           vad: {
                             ...selectedAgent.vad,
-                            min_silence_ms: parseInt(e.target.value, 10),
-                            mode: 'energy',
-                            threshold: 0.045,
+                            engine: e.target.value as any,
                           },
                         })
                       }
+                      className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs text-slate-200"
+                    >
+                      <option value="silero">Silero Neural VAD (v5 Local ONNX)</option>
+                      <option value="legacy">Legacy RMS Gate (Web Audio)</option>
+                    </select>
+                  </div>
+
+                  {/* How long to wait after you stop talking */}
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-slate-300">How long to wait after you stop talking</span>
+                      <span className="font-mono text-indigo-400 font-semibold">
+                        {selectedAgent.vad?.redemption_ms || selectedAgent.vad?.min_silence_ms || 800} ms
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="300"
+                      max="1800"
+                      step="50"
+                      value={selectedAgent.vad?.redemption_ms || selectedAgent.vad?.min_silence_ms || 800}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value, 10);
+                        setSelectedAgent({
+                          ...selectedAgent,
+                          vad: {
+                            ...selectedAgent.vad,
+                            redemption_ms: val,
+                            min_silence_ms: val,
+                          },
+                        });
+                      }}
                       className="w-full accent-indigo-500"
                     />
-                    <span className="text-xs font-mono text-slate-400 shrink-0 w-16 text-right">
-                      {selectedAgent.vad?.min_silence_ms || 650} ms
-                    </span>
+                  </div>
+
+                  {/* Speech Sensitivity */}
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-slate-300">Speech Sensitivity</span>
+                      <span className="font-mono text-emerald-400 font-semibold">
+                        {((selectedAgent.vad?.positive_speech_threshold ?? 0.45)).toFixed(2)}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.20"
+                      max="0.80"
+                      step="0.05"
+                      value={selectedAgent.vad?.positive_speech_threshold ?? 0.45}
+                      onChange={(e) => {
+                        const pos = parseFloat(e.target.value);
+                        setSelectedAgent({
+                          ...selectedAgent,
+                          vad: {
+                            ...selectedAgent.vad,
+                            positive_speech_threshold: pos,
+                            negative_speech_threshold: Math.max(0.1, pos - 0.15),
+                          },
+                        });
+                      }}
+                      className="w-full accent-emerald-500"
+                    />
+                  </div>
+
+                  {/* Ignore very short sounds */}
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-slate-300">Ignore very short sounds (coughs, clicks)</span>
+                      <span className="font-mono text-pink-400 font-semibold">
+                        {selectedAgent.vad?.min_speech_ms ?? 250} ms
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="100"
+                      max="600"
+                      step="50"
+                      value={selectedAgent.vad?.min_speech_ms ?? 250}
+                      onChange={(e) =>
+                        setSelectedAgent({
+                          ...selectedAgent,
+                          vad: {
+                            ...selectedAgent.vad,
+                            min_speech_ms: parseInt(e.target.value, 10),
+                          },
+                        })
+                      }
+                      className="w-full accent-pink-500"
+                    />
+                  </div>
+
+                  {/* Ignore quiet sounds */}
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-slate-300">Ignore quiet sounds (ambient noise gate)</span>
+                      <span className="font-mono text-cyan-400 font-semibold">
+                        {((selectedAgent.vad?.min_rms ?? 0.015)).toFixed(3)}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.005"
+                      max="0.050"
+                      step="0.005"
+                      value={selectedAgent.vad?.min_rms ?? 0.015}
+                      onChange={(e) =>
+                        setSelectedAgent({
+                          ...selectedAgent,
+                          vad: {
+                            ...selectedAgent.vad,
+                            min_rms: parseFloat(e.target.value),
+                          },
+                        })
+                      }
+                      className="w-full accent-cyan-500"
+                    />
+                  </div>
+
+                  {/* Allow interrupting the agent */}
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-xs text-slate-300">Allow interrupting the agent (Barge-in)</span>
+                    <input
+                      type="checkbox"
+                      checked={selectedAgent.vad?.barge_in ?? true}
+                      onChange={(e) =>
+                        setSelectedAgent({
+                          ...selectedAgent,
+                          vad: {
+                            ...selectedAgent.vad,
+                            barge_in: e.target.checked,
+                          },
+                        })
+                      }
+                      className="rounded accent-indigo-500 w-4 h-4"
+                    />
                   </div>
                 </div>
               </div>

@@ -1,0 +1,204 @@
+================================================================================
+                    LOCAL-TTS ARCHITECTURE & ISSUES LOG
+================================================================================
+Service Name:      local-tts (Kokoro MLX Engine)
+Default Port:      8880 (HTTP & WebSocket)
+Venv Location:     arch/local-tts/.venv
+Binary Location:   arch/local-tts/.venv/bin/local-tts
+Startup Command:   ./local-tts server --host 127.0.0.1 --port 8880 --disable-qwen
+Underlying Tech:   Apple MLX (Metal acceleration for Apple Silicon) + Kokoro-82M
+Model Weights:     ~/.cache/huggingface/hub/models--hexgrad--Kokoro-82M
+Audio Specs:       24,000 Hz (24kHz), 16-bit Signed Integer PCM, Mono (s16le)
+Status:            Verified & Operational
+================================================================================
+
+--------------------------------------------------------------------------------
+1. SERVICE PURPOSE & ROLE IN THE VOICE AGENT
+--------------------------------------------------------------------------------
+`local-tts` is the real-time Text-to-Speech (TTS) voice synthesis engine of the
+platform. It runs the ultra-compact, high-fidelity Kokoro-82M model (~82 million
+parameters) locally on Apple Silicon unified memory using Apple's MLX framework.
+
+Capabilities & Protocols:
+1. Bidirectional WebSocket Speech Streaming:
+   - Endpoint: WS /v1/text-to-speech/{voice_id}/stream-input?model_id={model}
+   - Input: JSON text frames {"text": "clause", "flush": true}
+   - Output: JSON frames with base64-encoded raw 24kHz 16-bit PCM chunks {"audio": "..."}
+   - Behavior: FULL STREAMING. Text clauses are synthesized and streamed as audio
+     within ~120-180ms of LLM clause generation.
+
+2. One-Shot REST HTTP Synthesis:
+   - Endpoint: POST /v1/text-to-speech/{voice_id}/stream
+   - Input: JSON payload {"text": "full text", "voice_settings": {"speed": 1.0}}
+   - Output: Raw binary PCM stream (application/octet-stream).
+   - Behavior: Fallback mechanism used if WebSocket disconnects before yielding audio.
+
+3. Voice & Model Discovery:
+   - Endpoints: GET /v1/voices, GET /v1/models
+   - Discovers available voice profiles (e.g. af_heart, af_bella, am_adam, bf_emma).
+
+--------------------------------------------------------------------------------
+2. CONNECTING BACKEND CODE (.py FILES)
+--------------------------------------------------------------------------------
+The FastAPI backend interacts with local-tts via:
+
+- app/providers/localtts_client.py:
+  * LocalTTSClient class implementing the upstream protocol.
+  * stream_synthesis_ws(): Manages producer-consumer tasks over WebSocket. Sends
+    Beginning of Stream (BOS), streams text chunks, handles flush=True, and yields
+    decoded raw PCM binary buffers.
+  * synthesize_http(): One-shot HTTP fallback if WebSocket connection drops.
+  * list_voices() & list_models(): Fetches installed voice and engine options.
+
+- app/services/text_chunker.py:
+  * Buffers streaming LLM token deltas and splits them at grammatical sentence
+    and clause boundaries (. ! ? , ; :).
+  * Feeds complete phrases to local-tts so speech sounds fluid and natural without
+    awkward mid-word pauses.
+
+- app/api/voice.py:
+  * process_turn(): Coordinates LLM streaming into TextChunker, pipes chunker output
+    into localtts_client.stream_synthesis_ws(), emits AudioStartedEvent (24kHz),
+    and pipes binary PCM chunks directly across the client WebSocket to the browser.
+  * Handles turn cancellation on barge-in (interruption).
+
+- app/api/tts.py:
+  * Standalone REST speech endpoint (/v1/audio/speech) for testing voices.
+
+- app/api/health.py:
+  * Verifies local-tts reachability via GET http://127.0.0.1:8880/v1/models.
+
+--------------------------------------------------------------------------------
+3. ISSUES ENCOUNTERED & SOLUTIONS IMPLEMENTED
+--------------------------------------------------------------------------------
+
+ISSUE #1: 502 Service Unreachable / local-tts Not Started
+---------------------------------------------------------
+- Symptom:
+  User encountered "[TTS_ERROR] Text-to-speech synthesis failed (local-tts): 502:
+  local-tts WebSocket service is unreachable or returned a gateway error".
+- Root Cause:
+  Initially, the system startup script (start.sh) only launched LocalAI and the
+  FastAPI backend. local-tts was assumed to be started manually in a separate shell.
+  If the process died or was not started, any speech turn resulted in a 502 error.
+- Solution Implemented:
+  1. Full Stack Orchestration (start.sh): Updated start.sh to treat local-tts as
+     a first-class dependency:
+     * Auto-detects arch/local-tts/.venv.
+     * Verifies the local-tts executable.
+     * Starts local-tts server on port 8880 in the background.
+     * Waits for port 8880 to be healthy before proceeding.
+     * Redirects logs to logs/local-tts.log.
+  2. Safe Fallback in Client (app/providers/localtts_client.py): If the WebSocket
+     fails to connect, the client attempts an HTTP fallback request before
+     raising ProviderUnavailableError.
+- Verification:
+  Tested via ./start.sh; port 8880 starts reliably and passes health checks.
+
+ISSUE #2: Audio Sample Rate & Speed Mismatch (16kHz vs 24kHz)
+-------------------------------------------------------------
+- Symptom:
+  Assistant voice played back either in deep, slow-motion robotic audio (pitch too low)
+  or high-pitched rapid chatter.
+- Root Cause:
+  * Speech-to-Text (Whisper) strictly requires 16,000 Hz (16kHz) audio.
+  * Kokoro-82M (local-tts) outputs audio strictly at 24,000 Hz (24kHz).
+  * If the frontend browser AudioContext or PCMPlayer was set to 16kHz (matching the mic),
+    playing 24kHz audio in a 16kHz context caused the audio to play at 16/24 = 0.66x speed.
+- Solution Implemented:
+  1. Explicit Protocol Metadata (app/schemas/events.py): AudioStartedEvent now explicitly
+     transmits audio specs to the client:
+     {
+       "type": "audio.started",
+       "turn_id": turn_id,
+       "sample_rate": 24000,
+       "sample_format": "s16le",
+       "channels": 1
+     }
+  2. Dedicated 24kHz PCM Player (frontend/src/audio/pcmPlayer.ts): Browser playback
+     initializes an independent AudioContext specifically configured for 24,000 Hz,
+     ensuring pitch-perfect, crystal-clear voice reproduction.
+- Verification:
+  Audio verified across multiple voices (af_heart, am_adam); timing and pitch
+  are completely natural.
+
+ISSUE #3: High Memory Overhead & OOM Risk from Default Qwen Pipeline
+-------------------------------------------------------------------
+- Symptom:
+  On machines with 8GB or 16GB of unified memory, starting local-tts alongside
+  LocalAI (llama-3.2-1b + whisper-base) pushed RAM usage near system thresholds,
+  causing kernel memory compression and latency spikes.
+- Root Cause:
+  By default, local-tts includes support for Qwen-based speech pipelines, which
+  allocates substantial memory buffers in anticipation of LLM/Qwen tasks.
+- Solution Implemented:
+  CLI Optimization in start.sh:
+  Added the --disable-qwen flag to the launcher:
+    exec "$LOCAL_TTS_BIN" server --host 127.0.0.1 --port 8880 --disable-qwen
+  This limits memory usage to the lightweight Kokoro-82M model (~1.2GB total),
+  leaving ample unified memory for Llama-3.2 and Whisper Metal execution.
+- Verification:
+  Verified via ps aux / Activity Monitor: local-tts memory footprint remains
+  lean (~1.2GB) and system memory pressure stays green.
+
+ISSUE #4: WebSocket Disconnect & Task Crashes on Interruption (Barge-In)
+-----------------------------------------------------------------------
+- Symptom:
+  When a user interrupted the assistant mid-sentence, the backend threw
+  unhandled exceptions in logs:
+  "WebSocketDisconnect: Cannot call 'send' once a close message has been sent"
+  or "Task exception was never retrieved ... ClientDisconnected".
+- Root Cause:
+  Cancelling the active turn task while stream_synthesis_ws() was actively
+  awaiting ws.recv() or ws.send() caused an unhandled CancelledError race
+  between the sender and receiver tasks.
+- Solution Implemented:
+  1. Clean Task Lifecycle (app/providers/localtts_client.py):
+     The producer text_sender task is explicitly cancelled and awaited inside
+     a finally: block before the WebSocket closes.
+  2. Exception Shielding: Caught (ConnectionClosedOK, asyncio.CancelledError)
+     cleanly and logged clean termination without propagating unhandled errors.
+  3. Orchestrator Cancellation: VoiceOrchestrator tracks the turn task and
+     cancels it cleanly on {"type": "turn.cancel"}, allowing the next turn to start
+     immediately without hanging sockets.
+- Verification:
+  Rapid interruption testing (speaking over the assistant 10 consecutive times)
+  results in zero leaked tasks and zero WebSocket crashes.
+
+ISSUE #5: Empty Strings & Whitespace Causing Synthesis Stalls
+------------------------------------------------------------
+- Symptom:
+  Small delays or empty audio chunks returned from local-tts when the LLM emitted
+  leading spaces, indentation, or standalone punctuation tokens.
+- Root Cause:
+  local-tts treats empty strings or pure whitespace with flush=True as empty requests,
+  stalling pipeline buffers.
+- Solution Implemented:
+  Filtering in Chunker & Sender:
+  * app/services/text_chunker.py only yields non-empty grammatical clauses.
+  * app/providers/localtts_client.py checks if chunk.strip(): before sending
+    {"text": chunk, "flush": True}.
+- Verification:
+  Smooth, uninterrupted audio streaming without pauses between clauses.
+
+--------------------------------------------------------------------------------
+4. DIAGNOSTIC & OPERATIONAL COMMANDS
+--------------------------------------------------------------------------------
+- Check Service Status:
+  ./start.sh status
+
+- Test Available Voices:
+  curl http://127.0.0.1:8880/v1/voices
+
+- Test One-Shot HTTP Synthesis:
+  curl http://127.0.0.1:8880/v1/text-to-speech/af_heart/stream \
+    -H "Content-Type: application/json" \
+    -d '{"text":"Hello, this is a test of local-tts.","voice_settings":{"speed":1.0}}' \
+    --output /tmp/test_speech.pcm
+
+- Play Back the Synthesized PCM Audio (macOS):
+  ffplay -f s16le -ar 24000 -ac 1 /tmp/test_speech.pcm
+
+- View local-tts Server Logs:
+  tail -f logs/local-tts.log
+================================================================================

@@ -25,9 +25,21 @@ class TTSConfig(BaseModel):
 
 class VADConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    mode: str = "energy"
-    threshold: float = 0.045
-    min_silence_ms: int = 650
+    engine: str = "silero"
+    positive_speech_threshold: float = Field(default=0.45, ge=0.1, le=0.95)
+    negative_speech_threshold: float = Field(default=0.30, ge=0.05, le=0.9)
+    redemption_ms: int = Field(default=800, ge=200, le=3000)
+    pre_speech_pad_ms: int = Field(default=200, ge=50, le=1000)
+    min_speech_ms: int = Field(default=250, ge=50, le=1000)
+    min_rms: float = Field(default=0.015, ge=0.0, le=0.2)
+    noise_suppression: str = "browser"
+    barge_in: bool = True
+    barge_in_confirm_ms: int = Field(default=250, ge=100, le=1000)
+    playback_threshold_boost: float = Field(default=0.15, ge=0.0, le=0.5)
+    # Legacy backward-compatibility fields
+    mode: Optional[str] = "energy"
+    threshold: Optional[float] = 0.045
+    min_silence_ms: Optional[int] = 800
 
 
 class AudioConfig(BaseModel):

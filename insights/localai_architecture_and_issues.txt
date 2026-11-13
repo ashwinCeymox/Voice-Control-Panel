@@ -1,0 +1,196 @@
+================================================================================
+                    LOCALAI ARCHITECTURE & ISSUES LOG
+================================================================================
+Service Name:      LocalAI (Metal Accelerated)
+Default Port:      8080 (HTTP)
+Binary Location:   arch/LocalAI/local-ai
+Models Directory:  arch/LocalAI/models
+Startup Command:   ./local-ai run --address 127.0.0.1:8080 --models-path .../LocalAI/models
+Underlying Tech:   Go core wrapping llama.cpp (LLM) and whisper.cpp (STT) on macOS Metal
+Hardware Target:   Apple Silicon Unified Memory (M-series GPU/NE)
+Status:            Verified & Operational
+================================================================================
+
+--------------------------------------------------------------------------------
+1. SERVICE PURPOSE & ROLE IN THE VOICE AGENT
+--------------------------------------------------------------------------------
+LocalAI serves as the local intelligence backbone of the Voice Agent, providing
+two distinct inference capabilities over OpenAI-compatible REST APIs:
+
+1. Speech-to-Text (STT) Engine:
+   - Endpoint: POST /v1/audio/transcriptions
+   - Engine: whisper.cpp compiled with Apple Silicon Metal acceleration.
+   - Input: 16kHz 16-bit Mono PCM WAV audio payload (multipart/form-data).
+   - Output: JSON transcript object {"text": "...", "duration": ...}.
+   - Behavior: NON-STREAMING. Processes the discrete audio segment in ~150-250ms.
+
+2. Large Language Model (LLM) Engine:
+   - Endpoint: POST /v1/chat/completions
+   - Engine: llama.cpp compiled with Apple Silicon Metal acceleration.
+   - Input: OpenAI chat messages array [{"role": "system", ...}, {"role": "user", ...}].
+   - Output: Server-Sent Events (SSE) token delta stream (data: {"choices": [{"delta": ...}]}).
+   - Behavior: STREAMING. Generates response tokens in real-time (~80-120ms first-token latency).
+
+3. Model Lifecycle & Management:
+   - Endpoints: POST /models/apply, POST /models/delete/{name}, GET /models/jobs/{uuid}, GET /v1/models
+   - Managed By: app/api/gallery.py and app/api/models.py.
+   - Downloads GGUF and Whisper weights from the gallery directly into arch/LocalAI/models/.
+
+--------------------------------------------------------------------------------
+2. CONNECTING BACKEND CODE (.py FILES)
+--------------------------------------------------------------------------------
+The FastAPI backend interacts with LocalAI through dedicated provider clients:
+
+- app/providers/localai_stt.py:
+  * Manages STT transcription requests.
+  * Resolves friendly model names to installed LocalAI model IDs.
+  * Enforces temperature=0 and condition_on_previous_text=false.
+  * Implements transient warmup retry and decode error handling.
+
+- app/providers/localai_llm.py:
+  * Manages streaming LLM chat completions.
+  * Parses incoming Server-Sent Events (SSE) chunks.
+  * Emits token deltas to both the UI and the TextChunker.
+
+- app/api/gallery.py:
+  * Orchestrates model discovery, download jobs, and deletions.
+  * Direct disk cleanup fallback in arch/LocalAI/models/ for stray weights/configs.
+
+- app/api/models.py:
+  * GET /v1/models/installed: queries LocalAI's GET /v1/models to report installed models.
+
+- app/main.py:
+  * Application startup lifespan hook.
+  * Pre-warms whisper-base and llama-3.2-1b-instruct in unified memory on startup.
+
+- app/api/health.py:
+  * Checks LocalAI readiness via GET /readyz and GET /v1/models.
+
+--------------------------------------------------------------------------------
+3. ISSUES ENCOUNTERED & SOLUTIONS IMPLEMENTED
+--------------------------------------------------------------------------------
+
+ISSUE #1: LocalAI 502 Bad Gateway / Model Unreachable on Cold Start
+-------------------------------------------------------------------
+- Symptom:
+  User saw "[STT_ERROR] Speech-to-text transcription failed: 502: LocalAI STT
+  service is unreachable or returned a gateway error" when starting fresh or
+  speaking immediately after switching models.
+- Root Cause:
+  LocalAI requires unified memory allocation and Metal shader compilation when
+  spinning up llama.cpp or whisper.cpp for the first time. Requests arriving
+  during this initialization window timed out or returned HTTP 500/502/503.
+- Solution Implemented:
+  1. Startup Pre-Warming (app/main.py): Added background pre-warming tasks that
+     fire dummy transcription and chat requests during FastAPI startup, ensuring
+     whisper-base and llama-3.2-1b-instruct are warm before user connects.
+  2. Transient Warmup Retry (app/providers/localai_stt.py): Added an automatic
+     1.5-second sleep and retry for target_model if LocalAI reports 500/502/503
+     or a loading state, before attempting alternative fallback models.
+  3. Extended Timeouts: Raised HTTP request timeout to 120 seconds in
+     app/core/config.py to accommodate large model loading on Apple Silicon.
+- Verification:
+  Cold start test passes reliably; models initialize in background without 502.
+
+ISSUE #2: Audio Container Desync & Exit Status 183 (FFmpeg EBML Parsing Failure)
+-------------------------------------------------------------------------------
+- Symptom:
+  After switching agents mid-session (e.g. from phi-2 to llama-3.2), the next speech
+  utterance crashed LocalAI STT with HTTP 500:
+  "rpc error: code = Unknown desc = error: exit status 183 out: ...
+  [matroska,webm] EBML header parsing failed ... Invalid data found when processing input"
+- Root Cause:
+  1. When switching agents in frontend/src/pages/Assistant.tsx, the client sent a
+     session.start event hardcoded with input_audio: { container: 'webm' }.
+  2. However, the browser's neural Silero VAD emitted standalone 16kHz PCM WAV
+     segments (b"RIFF....WAVE").
+  3. The backend trusted the client container label, prepended cached WebM EBML
+     cluster headers onto the WAV bytes, and uploaded it as utterance.webm.
+  4. LocalAI's internal FFmpeg demuxer failed to parse the corrupted container
+     and exited with status code 183.
+- Solution Implemented:
+  1. Magic Byte Auto-Detection (app/api/voice.py): The backend now inspects the
+     actual payload header:
+     * If bytes start with b"RIFF....WAVE", container is forced to "wav".
+     * If bytes start with b"\x1a\x45\xdf\xa3", container is forced to "webm".
+  2. Guarded Header Prepending (app/api/voice.py): WebM EBML headers are NEVER
+     prepended onto audio identified as WAV.
+  3. Decode Error Graceful Handling (app/providers/localai_stt.py): If LocalAI
+     reports decode errors ("invalid data found", "exit status 183", "ebml header"),
+     it is treated as an unintelligible/empty audio frame rather than crashing
+     the session with a 502 error banner.
+  4. Frontend Switch Sync (frontend/src/pages/Assistant.tsx): handleSwitchAgent
+     now dynamically checks the agent's VAD engine and correctly transmits
+     { container: 'wav', codec: 'pcm' } when Silero is active.
+- Verification:
+  Agent switching tested across multiple turns; container auto-detects cleanly
+  and transcription succeeds with zero 183 exit status errors.
+
+ISSUE #3: Installed Model Deletion Failure in Model Gallery
+----------------------------------------------------------
+- Symptom:
+  Deleting installed models (e.g. whisper-large-turbo) from the Model Gallery
+  tab did not remove the model; the action timed out or left weights on disk.
+- Root Cause:
+  LocalAI's POST /models/delete/{name} API operates asynchronously via job UUIDs
+  and expects exact internal alias names. If the user deleted by gallery ID
+  (e.g. "whisper-large-turbo") while LocalAI stored it under "._gallery_whisper-large-turbo",
+  the API silently failed or left the multi-gigabyte .bin/.gguf files orphaned.
+- Solution Implemented:
+  Multi-Tier Deletion Pipeline (app/api/gallery.py):
+  1. Resolves model aliases against LocalAI's GET /v1/models.
+  2. Dispatches deletion to LocalAI API and polls /models/jobs/{uuid} for completion.
+  3. Direct Disk Cleanup Fallback: Reads arch/LocalAI/models/, locates all matching
+     YAML files (including ._gallery_*.yaml), parses the model: <binary> path,
+     and deletes the binary weights (.gguf / .bin) and .partial files directly.
+- Verification:
+  Tested deleting installed models; both YAML definitions and binary weights
+  are completely purged from arch/LocalAI/models/.
+
+ISSUE #4: Absence of Whisper Confidence Metadata in LocalAI
+-----------------------------------------------------------
+- Symptom:
+  Unable to enforce OpenAI-standard confidence filtering (no_speech_prob,
+  avg_logprob, compression_ratio) because LocalAI's whisper.cpp wrapper only
+  returns {"text": "...", "duration": ...}.
+- Root Cause:
+  The C++ whisper.cpp binding in LocalAI does not serialize segment-level
+  log probabilities into its HTTP JSON response payload.
+- Solution Implemented:
+  Backend Heuristic Sanity & Silence Gates (app/api/voice.py):
+  1. is_transcript_silence(): Detects empty text or "(no speech detected)" and
+     quietly completes the turn without invoking the LLM.
+  2. is_transcript_unclear(): Inspects transcript for known Whisper hallucination
+     tokens (e.g., "[music]", "(applause)", "[blank_audio]", "(whispering)")
+     and single-word repetition loops (stutters).
+  3. Ask-to-Repeat Gate: When unclear speech is detected, the assistant speaks
+     "Sorry, I didn't catch that. Could you repeat?" (max 2 consecutive loops)
+     and bypasses the LLM.
+- Verification:
+  Evaluated against 8 test WAV fixtures; steady noise, fan hum, and keyboard
+  clicks produce zero LLM calls or false turns.
+
+--------------------------------------------------------------------------------
+4. DIAGNOSTIC & OPERATIONAL COMMANDS
+--------------------------------------------------------------------------------
+- Check Service Status:
+  ./start.sh status
+
+- Health & Readiness Probes:
+  curl http://127.0.0.1:8080/readyz
+  curl http://127.0.0.1:8080/v1/models
+
+- Test Speech-to-Text Manually:
+  curl http://127.0.0.1:8080/v1/audio/transcriptions \
+    -F file="@tests/fixtures/audio/quiet_normal_speech.wav" \
+    -F model="whisper-base" \
+    -F temperature="0"
+
+- Test LLM Chat Completion Manually:
+  curl http://127.0.0.1:8080/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{"model":"llama-3.2-1b-instruct","messages":[{"role":"user","content":"Hello"}]}'
+
+- View LocalAI Logs:
+  tail -f logs/localai.log
+================================================================================

@@ -1,31 +1,30 @@
-# Multi-Agent Task Board: Voice AI Control Panel (Final Fix Pass)
+# Multi-Agent Task Board: Cloud Migration Phase 1
 
-| ID | Task | Owner | Model | Status | Blocked By | Handoff / PR |
+**Stack:** FastAPI Gateway + LocalAI + local-tts  
+**Goal:** Internal Callers (Raw LLM / STT / TTS endpoints), Private Network, Key & Concurrency Controls  
+**Rules:** Failing test first, handoff in `docs/handoff/<id>.md`, only ORCH merges, no secrets in logs or handoffs.
+
+| ID | Task | Owner | Model | Status | Blocked By | Deliverable / Handoff |
 |---|---|---|---|---|---|---|
-| **P0-1** | Bootstrap & Assumptions Verification | ORCH | `flash` | **DONE** | None | Verified |
-| **R1** | Research: VAD Location & Architecture | R1 | `flash` | **DONE** | None | `docs/decisions/R1.md` |
-| **R2** | Research: Echo Cancellation & Barge-in | R2 | `flash` | **DONE** | None | `docs/decisions/R2.md` |
-| **R3** | Research: 8GB Memory Fit & Model Choices | R3 | `flash` | **DONE** | None | `docs/decisions/R3.md` |
-| **R4** | Research: Model Gallery & Install API | R4 | `flash` | **DONE** | None | `docs/decisions/R4.md` |
-| **R5** | Research: Orb Animation & Audio Visuals | R5 | `flash` | **DONE** | None | `docs/decisions/R5.md` |
-| **P2-1** | Decision Gate Synthesis | ORCH | `flash` | **DONE** | R1–R5 | `docs/decisions/FINAL.md` |
-| **P3-1** | Contract Freeze (OpenAPI, WS, Agents) | ORCH | `flash` | **DONE** | P2-1 | `docs/contracts/` |
-| **B1** | System Resources & Fit Scoring API | S-MODELS | `pro` | **DONE** | P3-1 | `app/api/system.py` |
-| **B2** | Model Gallery & Install/Uninstall Jobs | S-MODELS | `pro` | **DONE** | B1 | `app/api/gallery.py` |
-| **B3** | Voices Metadata, Gender & Preview API | S-MODELS | `pro` | **DONE** | P3-1 | `app/api/tts.py` |
-| **B4** | SQLite Agents Schema & CRUD | S-AGENTS | `pro` | **DONE** | P3-1 | `app/api/agents.py` |
-| **B5** | Agent Load/Unload Lifecycle State | S-AGENTS | `pro` | **DONE** | B4, B1 | `docs/handoff/S-AGENTS.md` |
-| **B6** | WebSocket Protocol & Agent Session | S-AUDIO | `pro` | **DONE** | P3-1 | `app/api/voice.py` |
-| **B7** | Mic Capture, Browser VAD & Barge-in | S-AUDIO | `pro` | **DONE** | R1, R2, B6 | `frontend/src/audio/` |
-| **B8** | Streaming PCM Player with Audio Tap | S-AUDIO | `pro` | **DONE** | B6 | `frontend/src/audio/pcmPlayer.ts` |
-| **U1** | App Shell & Status Bar from Health | G-UI | `flash` | **DONE** | P3-1 | `frontend/src/components/layout/` |
-| **U2** | Models Gallery View with Fit Sorting | G-UI | `flash` | **DONE** | B1, B2 | `frontend/src/pages/ModelsRegistry.tsx` |
-| **U3** | Voice Assistant with Animated Audio Orb | G-UI | `flash` | **DONE** | B7, B8, R5 | `frontend/src/pages/Assistant.tsx` |
-| **U4** | Agents Page (Create/Edit/Test-Chat) | G-UI | `flash` | **DONE** | B4, B5 | `frontend/src/pages/Agents.tsx` |
-| **U5** | TTS Page with Voice Picker & Gender | G-UI | `flash` | **DONE** | B3 | `frontend/src/pages/TTSPlayground.tsx` |
-| **U6** | STT Page with Model Picker & Timing | G-UI | `flash` | **DONE** | B2 | `frontend/src/pages/STTPlayground.tsx` |
-| **U7** | Voice Library & System Health | G-UI | `flash` | **DONE** | B3 | `frontend/src/pages/` |
-| **T1** | OpenAPI Contract Test Suite | G-TEST | `flash` | **DONE** | P3-1 | `tests/contract/test_contract.py` |
-| **T2** | UI Smoke & Error State Tests | G-TEST | `flash` | **DONE** | U1–U7 | `frontend/dist/` build verified |
-| **T3** | 8GB Soak & Resource Benchmark | G-TEST | `flash` | **DONE** | All | `tests/benchmark/test_soak_8gb.py` |
-| **V1** | Security Review (Path & Deletes) | S-REVIEW | `pro` | **DONE** | B2, B5, B7 | `docs/reviews/V1.md` |
+| **P0** | Re-measure on Mac with raw per-request timing files | QA | `gemini-3.8-flash-high` | **DONE** | None | `docs/p0-measurements.md`, `tests/fixtures/benchmarks/*.csv` |
+| **H1** | Remove default dev key; fail startup if no admin key configured | BE-SEC | `gemini-3.8-flash-high` | **DONE** | None | `docs/handoff/H1-H11.md`, `app/core/security.py` |
+| **H2** | Restrict CORS to listed origins; no wildcard with credentials | BE-SEC | `gemini-3.8-flash-high` | **DONE** | None | `docs/handoff/H1-H11.md`, `app/main.py` |
+| **H3** | Sanitize errors: code & message only, no upstream bodies/paths | BE-SEC | `gemini-3.8-flash-high` | **DONE** | None | `docs/handoff/H1-H11.md`, `app/core/errors.py` |
+| **H4** | Disable transcript and response logging by default; add debug flag | BE-SEC | `gemini-3.8-flash-high` | **DONE** | None | `docs/handoff/H1-H11.md`, `app/core/config.py` |
+| **H5** | Enable SQLite WAL mode & busy timeout; test concurrent writes | BE-SEC | `gemini-3.8-flash-high` | **DONE** | None | `docs/handoff/H1-H11.md`, `app/storage/database.py` |
+| **H6** | Safe model deletion: restrict to models dir, protect shared weights | BE-SEC | `gemini-3.8-flash-high` | **DONE** | None | `docs/handoff/H1-H11.md`, `app/api/gallery.py` |
+| **H7** | STT fallback off by default; include model used in response if on | BE-SEC | `gemini-3.8-flash-high` | **DONE** | None | `docs/handoff/H1-H11.md`, `app/providers/localai_stt.py` |
+| **H8** | Move hardcoded paths & model defaults to environment variables | BE-SEC | `gemini-3.8-flash-high` | **DONE** | None | `docs/handoff/H1-H11.md`, `app/core/config.py` |
+| **H9** | Enforce audio duration and TTS text length limits | BE-SEC | `gemini-3.8-flash-high` | **DONE** | None | `docs/handoff/H1-H11.md`, `app/api/tts.py` |
+| **H10** | Configure per-endpoint timeouts for raw endpoints | BE-SEC | `gemini-3.8-flash-high` | **DONE** | None | `docs/handoff/H1-H11.md`, `app/core/config.py` |
+| **H11** | Remove or protect `/docs`, `/redoc`, `/openapi.json` | BE-SEC | `gemini-3.8-flash-high` | **DONE** | None | `docs/handoff/H1-H11.md`, `app/main.py` |
+| **P2-KEYS** | Key tables (`api_keys`, `usage`), hashing, roles (`caller`, `admin`), scopes | BE-KEYS | `gemini-3.8-flash-high` | **DONE** | H1, H5 | `docs/handoff/P2-KEYS-AND-LIMITS.md`, `app/storage/`, `app/services/` |
+| **P2-LIMITS** | Concurrency limits per backend, per-key cap, request queue, HTTP 429/503 | BE-KEYS | `gemini-3.8-flash-high` | **DONE** | P0, P2-KEYS | `docs/handoff/P2-KEYS-AND-LIMITS.md`, `app/core/limits.py` |
+| **P3-RULES** | Model allowlist, caller routes isolated from global agent, pre-warm allowlist | BE-KEYS | `gemini-3.8-flash-high` | **DONE** | H8, P2-KEYS | `docs/handoff/P3-RULES-AND-STT.md`, `app/api/` |
+| **P3-STT** | `STTProvider` abstraction interface | BE-KEYS | `gemini-3.8-flash-high` | **DONE** | H8 | `docs/handoff/P3-RULES-AND-STT.md`, `app/providers/stt_base.py` |
+| **P4-DOCKER** | Docker Compose with 4 services, volumes, private network | OPS | `gemini-3.8-flash-high` | **DONE** | H8 | `docker-compose.yml`, `Dockerfile`, `docs/handoff/P4-DOCKER.md` |
+| **P4-TTS** | Linux Kokoro spike (ONNX/PyTorch) | OPS | `gemini-3.8-flash-high` | **DONE** | None | `docs/handoff/P4-TTS.md` |
+| **P5** | Linux benchmark evaluation | QA + OPS | `gemini-3.8-flash-high` | **TODO** | P0, P4-DOCKER | `docs/p5-measurements.md` |
+| **P6** | Go-live configuration, Prometheus metrics, backup cron | OPS | `gemini-3.8-flash-high` | **TODO** | P4-DOCKER | `docs/handoff/P6.md` |
+| **P7** | STT streaming decision | QA + OPS | `gemini-3.8-flash-high` | **DONE** | P0, P5 | `docs/decisions/stt-streaming.md` |
+| **REV** | Adversarial review across changes | REV | `gemini-3.8-flash-high` | **DONE** | Each handoff | `docs/reviews/migration-phase1.md` |

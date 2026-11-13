@@ -1,0 +1,220 @@
+================================================================================
+ CLOUD READINESS QUESTION POOL
+ Voice AI platform: FastAPI gateway + LocalAI + local-tts + browser Silero VAD
+================================================================================
+
+PURPOSE
+-------
+We plan to move this platform to a cloud (Linux) server and offer its models to
+other projects through API keys. Before a design is chosen, the facts below must
+be collected. Answer every question you can from the code, configuration and
+tests. Do not guess.
+
+HOW TO ANSWER
+-------------
+1. Do NOT change any source code. Read, run commands and run tests only.
+2. Write answers to: docs/cloud-readiness-answers.md
+3. Use exactly this format for every question:
+
+     ID:          (for example C-04)
+     Status:      ANSWERED | PARTIAL | UNKNOWN | NEEDS OWNER
+     Answer:      (short and specific)
+     Evidence:    (file path and line numbers, command and its output, or test result)
+     Confidence:  high | medium | low
+
+4. If a fact cannot be found in code or by testing, set Status to UNKNOWN and
+   say what would be needed. If the question needs a business decision, set
+   Status to NEEDS OWNER and do not invent an answer.
+5. Measure, do not estimate. For every timing test, run at least 5 times and
+   report the median and the slowest result (p95 or max).
+6. Record the machine used for each measurement: chip or CPU, RAM, OS, and
+   whether LocalAI and local-tts were already warm.
+7. Never print secrets, tokens or full API keys in the answers.
+8. Finish with a short list titled "Top 10 risks for cloud deployment", ordered
+   by how likely they are to break the service.
+
+================================================================================
+ SECTION A - OWNER DECISIONS (agent: mark NEEDS OWNER unless already documented)
+================================================================================
+
+A-01  Who will call the API? (own projects only / outside customers / both)
+A-02  Which capabilities must be offered externally?
+      (LLM chat / STT / TTS / full voice pipeline / saved agents)
+A-03  Expected peak simultaneous requests and simultaneous voice sessions.
+A-04  Expected requests per day, and expected growth in 12 months.
+A-05  Target hardware: CPU-only or GPU? RAM (and VRAM)? Monthly budget?
+A-06  Which LLM sizes and which STT models must be served?
+A-07  May outside callers choose the model, or is there a fixed model set?
+A-08  Latency target from end of user speech to first audio (for example 1.5 s).
+A-09  Client types: browser, mobile, phone/telephony, server-to-server.
+A-10  May audio and transcripts be stored? For how long? Any personal or
+      regulated data? Are speaker-verification (voice print) features wanted?
+A-11  Hosting provider and region, single machine or room to grow, self-managed
+      or managed services.
+A-12  Is billing or per-key quota needed, or only usage tracking?
+A-13  Must TTS keep Kokoro voice quality, and must it stream?
+A-14  Should saved agents be usable by external callers, or admin-only?
+
+================================================================================
+ SECTION B - CODE FACTS (read-only inspection)
+================================================================================
+
+B-01  What is the exact WebSocket path and message format that local-tts
+      expects, and which one does app/providers/localtts_client.py actually
+      use? Two documents disagree:
+        - /v1/text-to-speech/{voice_id}/stream-input with {"text","flush"}
+        - /v1/audio/speech/stream with {"text","voice"}
+      Confirm by reading the client code AND by sending a real request.
+B-02  List every hardcoded model name, voice name and default agent (search
+      app/ and frontend/src/). Include startup pre-warm in app/main.py and the
+      DEFAULT_AGENT seed in app/services/agent_manager.py.
+B-03  Does app/providers/localai_stt.py ever fall back to a different model than
+      the one requested? Under which conditions? Is the fallback reported to
+      the caller?
+B-04  Describe the multi-tier model deletion in app/api/gallery.py exactly:
+      which files can be deleted, is the path restricted to the models folder,
+      and what happens if two model YAML files reference the same weight file?
+B-05  List every public HTTP and WebSocket endpoint of the gateway with: method,
+      path, whether authentication is required, and what kind.
+B-06  How does app/core/security.py issue and validate WebSocket tickets?
+      Lifetime, single use, storage, and what protects the ticket-issuing
+      endpoint itself?
+B-07  Is there any API key, rate limit, per-caller concurrency limit or usage
+      logging today? Where?
+B-08  What are all configured timeouts (HTTP, WebSocket, provider calls)? Which
+      values apply to each external endpoint?
+B-09  Maximum accepted request sizes: audio upload size, audio duration, TTS
+      text length, chat history length. Are any enforced?
+B-10  How is concurrency handled in VoiceOrchestrator? Is there a global limit
+      on active turns, a queue, or a limit per session or per caller?
+B-11  What happens when two sessions use different agents (different LLM or STT
+      models) at the same time? Does loading an agent unload models that
+      another session still needs?
+B-12  Which ports are bound to which interfaces (127.0.0.1 or 0.0.0.0) for the
+      gateway, LocalAI and local-tts? Which CORS origins are allowed?
+B-13  Where are logs written? Do logs contain audio, transcripts, prompts, tokens
+      or any secret?
+B-14  List every hardcoded filesystem path (arch/LocalAI, arch/local-tts,
+      ~/.cache, logs/, voice_platform.db). Which would break in a container?
+B-15  What does start.sh do, step by step? Which parts are macOS specific?
+B-16  Which dependencies and binaries are Apple-only (Metal, MLX, macOS
+      binaries)? For each, name the Linux equivalent if one is known, or mark
+      UNKNOWN.
+B-17  How does the database schema look (tables, indexes)? Is SQLite WAL mode
+      enabled, and are writes safe with multiple concurrent sessions?
+B-18  How are agent schema versions and migrations handled? What happens to
+      saved agents when the schema changes?
+B-19  Does the system have any server-side VAD path, or only the browser Silero
+      VAD? What would an API client without a browser need to send?
+B-20  How does the gateway call LocalAI: with an API key? Is LocalAI started
+      with authentication today?
+B-21  Which LocalAI and local-tts versions are in use (exact version or commit)?
+B-22  What are the exact current Silero VAD settings and which package version
+      and model file (v5 or v6) are installed? Are assets served locally?
+B-23  Which tests exist today (unit, integration, end-to-end)? Do they pass? List
+      failures.
+B-24  Is any error returned to clients leaking internal details (paths, stack
+      traces, provider URLs)?
+
+================================================================================
+ SECTION C - MEASUREMENTS AND TESTS (run, record, report)
+================================================================================
+
+C-01  STT speed by model. For each installed STT model, transcribe the same set
+      of test clips (short 2 s, medium 5 s, long 15 s). Report time per clip and
+      real-time factor. Also record memory used by LocalAI after loading it.
+C-02  LLM speed by model. For each installed LLM, record time to first token and
+      tokens per second for a 20-token and a 200-token reply. Record memory.
+C-03  TTS speed. Record time to first audio chunk and real-time factor for a
+      short and a long sentence. Record memory.
+C-04  End-to-end latency. Record for 20 voice turns: silence wait, STT time, LLM
+      first token, time to first clause, TTS first audio, total from speech end
+      to first audio. Report median and slowest.
+C-05  Cold start. Time from process start to ready for LocalAI, local-tts and the
+      gateway. Time for the first request after a model switch.
+C-06  Concurrency test on STT. Send 1, 2, 5 and 10 simultaneous transcription
+      requests. Report total time, per-request time, errors and timeouts.
+C-07  Concurrency test on the LLM. Same pattern with chat completions. Record
+      whether LocalAI queues or runs requests in parallel.
+C-08  Concurrency test on TTS. Same pattern.
+C-09  Concurrency test on the voice pipeline. Run 1, 2, 3 and 5 simultaneous
+      voice sessions (scripted audio). Report latency per session, memory peak
+      and any failure.
+C-10  Memory peak with all services loaded and one active voice session, and
+      again with 3 sessions.
+C-11  Does LocalAI transcription with response_format=verbose_json return segment
+      details (start, end, avg_logprob, no_speech_prob, compression_ratio)?
+      Include one real response.
+C-12  Does LocalAI transcription with stream=true return partial text while
+      processing, or only after completion? Include timing evidence.
+C-13  Hallucination test. Send 10 clips of silence, fan noise, keyboard noise,
+      music, a cough and TV speech. Report which transcripts reach the LLM. List
+      any common Whisper silence phrases that pass the current gates (for
+      example "Thank you.").
+C-14  Barge-in test with laptop speakers and with headphones: number of false
+      interruptions in 10 minutes, and delay between user speech start and
+      playback stop.
+C-15  Failure behavior. Kill LocalAI during a request, kill local-tts during
+      synthesis, and disconnect the client during a turn. Report what the
+      client receives and whether the gateway recovers without a restart.
+C-16  Model install and delete test. Install and delete one small STT model and
+      one small LLM through the gallery API. Report whether it appears in
+      installed models, how long it takes, and whether any files remain.
+C-17  Long-running test. Run 30 consecutive voice turns. Report memory growth,
+      leaked tasks or sockets, and latency drift.
+C-18  Request size limits. Send an oversized audio file and a very long TTS text.
+      Report the response and whether the server stays healthy.
+
+================================================================================
+ SECTION D - SECURITY AND API SURFACE AUDIT
+================================================================================
+
+D-01  Which endpoints would be dangerous if exposed to the internet without a
+      key (install, delete, agent edit, system metrics, settings)?
+D-02  Can any endpoint be called without authentication today? List them.
+D-03  Are WebSocket connections origin-checked? Can a ticket be reused or
+      guessed?
+D-04  Is there protection against path traversal in model names, voice ids and
+      file upload names?
+D-05  Are uploaded audio files stored on disk? Where, for how long, and are they
+      deleted?
+D-06  Can one caller read another caller's sessions, agents or transcripts?
+D-07  Are model names and voice ids validated before being passed to LocalAI or
+      local-tts (injection through names)?
+D-08  Does any log line contain a secret or user content?
+
+================================================================================
+ SECTION E - CLOUD PORTABILITY (answer after sections B and C)
+================================================================================
+
+E-01  Which components can run unchanged on Linux CPU? Which need replacement?
+E-02  Which TTS engine in local-tts works without MLX? Test it on Linux or mark
+      UNKNOWN.
+E-03  Which LocalAI backends are installed (llama.cpp, whisper, others), and does
+      the Linux build of each exist in the LocalAI gallery?
+E-04  How would the services be packaged (one container per service)? List the
+      environment variables and volumes each would need.
+E-05  What must be changed so that model files, the database and logs live on
+      configurable paths?
+E-06  What is the smallest server size that passed the concurrency tests in
+      Section C, and what failed on anything smaller?
+E-07  List the changes needed for these goals, each marked small, medium or
+      large effort:
+        a. API key issuing, scoping, revoking and usage tracking
+        b. per-key rate limit and concurrent request limit
+        c. a request queue with timeouts and HTTP 429 responses
+        d. server-side VAD option for API clients
+        e. admin-only protection for model install, delete and agent editing
+        f. HTTPS reverse proxy and private network for LocalAI and local-tts
+        g. monitoring (metrics, health, alerts) and backups
+
+================================================================================
+ FINAL DELIVERABLES
+================================================================================
+
+1. docs/cloud-readiness-answers.md (all answers in the required format).
+2. A table of all measurements from Section C with machine details.
+3. "Top 10 risks for cloud deployment", ordered by likelihood.
+4. A list of every question marked NEEDS OWNER, grouped so the owner can answer
+   them in one pass.
+================================================================================

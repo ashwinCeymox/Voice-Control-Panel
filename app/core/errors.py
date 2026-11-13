@@ -23,6 +23,16 @@ class UnauthorizedError(AppError):
         super().__init__(status_code=401, code="UNAUTHORIZED", message=message)
 
 
+class ForbiddenError(AppError):
+    def __init__(self, message: str = "Access forbidden"):
+        super().__init__(status_code=403, code="FORBIDDEN", message=message)
+
+
+class BadRequestError(AppError):
+    def __init__(self, message: str):
+        super().__init__(status_code=400, code="BAD_REQUEST", message=message)
+
+
 class ProviderUnavailableError(AppError):
     def __init__(self, provider: str, details: Optional[Any] = None):
         super().__init__(
@@ -56,15 +66,30 @@ class ModelNotFoundError(AppError):
         )
 
 
+import logging
+
+logger = logging.getLogger("voice_agent.errors")
+
+
 async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     request_id = getattr(request.state, "request_id", "unknown")
+    if exc.details:
+        logger.error(
+            "Request %s encountered %s: %s (upstream details: %s)",
+            request_id,
+            exc.code,
+            exc.message,
+            exc.details,
+        )
+    else:
+        logger.warning("Request %s: %s - %s", request_id, exc.code, exc.message)
+
     return JSONResponse(
         status_code=exc.status_code,
         content={
             "error": {
                 "code": exc.code,
                 "message": exc.message,
-                "details": exc.details,
             },
             "request_id": request_id,
         },

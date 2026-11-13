@@ -7,11 +7,13 @@ import uuid
 import re
 import httpx
 import aiosqlite
-from typing import Dict, List, Optional, Any
+from pathlib import Path
+from typing import Dict, List, Optional, Any, Union
 from fastapi import APIRouter, Depends, Query, BackgroundTasks, HTTPException
 from app.api.system import compute_fit_score, get_mac_memory_info
 from app.core.config import settings
-from app.core.security import require_api_key
+from app.core.security import require_api_key, require_admin_key
+from app.services.key_manager import ApiKeyRecord
 from app.storage.database import get_db
 
 logger = logging.getLogger("voice_agent.api.gallery")
@@ -453,7 +455,7 @@ async def list_gallery_models(
 async def start_install_job(
     payload: Dict[str, Any],
     background_tasks: BackgroundTasks,
-    user: str = Depends(require_api_key),
+    admin: ApiKeyRecord = Depends(require_admin_key),
 ):
     raw_id = payload.get("model_id")
     model_id = validate_model_id(raw_id)
@@ -553,17 +555,43 @@ async def start_install_job(
 @router.get("/v1/models/install/{job_id}")
 async def get_install_job_status(
     job_id: str,
-    user: str = Depends(require_api_key),
+    admin: ApiKeyRecord = Depends(require_admin_key),
 ):
     if job_id not in _INSTALL_JOBS:
         raise HTTPException(status_code=404, detail="Install job not found")
     return _INSTALL_JOBS[job_id]
 
 
+def is_weight_file_shared(
+    models_dir: Union[str, Path],
+    weight_filename: str,
+    excluding_config: Optional[str] = None,
+) -> bool:
+    """Check if another YAML config in models_dir references the same weight file (H6)."""
+    models_path = Path(models_dir)
+    if not models_path.is_dir():
+        return False
+        
+    exclude_name = Path(excluding_config).name if excluding_config else ""
+    
+    for entry in models_path.iterdir():
+        if entry.is_file() and entry.suffix in (".yaml", ".yml"):
+            if entry.name == exclude_name:
+                continue
+            try:
+                content = entry.read_text(encoding="utf-8", errors="ignore")
+                m_match = re.search(r"model:\s*([^\s\n]+)", content)
+                if m_match and m_match.group(1).strip() == weight_filename:
+                    return True
+            except Exception:
+                pass
+    return False
+
+
 @router.delete("/v1/models/{id}")
 async def uninstall_model(
     id: str,
-    user: str = Depends(require_api_key),
+    admin: ApiKeyRecord = Depends(require_admin_key),
 ):
     """Fully uninstall a model: triggers engine deletion, removes weights/configs from disk, and purges registry."""
     model_id = validate_model_id(id)
@@ -629,12 +657,21 @@ async def uninstall_model(
                     except Exception:
                         pass
 
-            # Remove referenced binary files
+            # Remove referenced binary files only if NOT shared with another model config (H6)
             for bname in referenced_bins:
-                bpath = os.path.join(models_dir, bname)
-                if os.path.isfile(bpath):
+                if is_weight_file_shared(models_dir, bname, excluding_config=f"{model_id}.yaml"):
+                    logger.info("Retaining shared weight file %s (still referenced by another model)", bname)
+                    continue
+
+                bpath = Path(models_dir, bname).resolve()
+                root_dir = Path(models_dir).resolve()
+                if not str(bpath).startswith(str(root_dir)):
+                    logger.warning("Path traversal blocked during weight deletion: %s", bpath)
+                    continue
+
+                if bpath.is_file():
                     try:
-                        os.remove(bpath)
+                        bpath.unlink()
                         logger.info("Removed model binary: %s", bpath)
                     except Exception:
                         pass

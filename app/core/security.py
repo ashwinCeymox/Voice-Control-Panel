@@ -3,17 +3,29 @@ import hashlib
 import hmac
 import secrets
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from fastapi import Header, Query, Request
+from pydantic import BaseModel
 from app.core.config import settings
-from app.core.errors import UnauthorizedError
+from app.core.errors import UnauthorizedError, ForbiddenError
+
+
+class ApiKeyRecord(BaseModel):
+    id: str
+    name: str
+    role: str  # "caller" | "admin"
+    scopes: List[str]  # e.g. ["llm", "stt", "tts"]
+    rate_limit: int = 60
+    max_concurrent: int = 5
+    expires_at: Optional[float] = None
+    revoked_at: Optional[float] = None
+    created_at: float
 
 # In-memory ticket storage: {ticket_str: (created_at_timestamp, user_id)}
 _TICKETS: Dict[str, Tuple[float, str]] = {}
 TICKET_EXPIRY_SECONDS = 60
 
-# Built-in developer API keys for local development
-# In production, keys are stored as hashes in the database
+# In-memory authorized API key hashes: {key_hash: role_or_owner}
 _DEV_KEY_HASHES: Dict[str, str] = {}
 
 
@@ -33,25 +45,32 @@ def generate_api_key() -> Tuple[str, str]:
     return raw_key, key_hash
 
 
-# Initialize default dev key in development mode
-_DEFAULT_DEV_KEY = "dev-voice-key-12345"
-_DEV_KEY_HASHES[hash_api_key(_DEFAULT_DEV_KEY)] = "developer"
+def register_api_key(plain_key: str, owner: str = "admin") -> None:
+    """Register an active API key hash in memory."""
+    _DEV_KEY_HASHES[hash_api_key(plain_key)] = owner
 
 
 def verify_api_key(plain_key: str) -> Optional[str]:
-    """Verify an API key and return owner if valid."""
+    """Verify an API key and return owner/role if valid."""
+    if not plain_key:
+        return None
+    
+    # Check configured admin key if set
+    if settings.ADMIN_API_KEY and hmac.compare_digest(plain_key, settings.ADMIN_API_KEY):
+        return "admin"
+        
     key_hash = hash_api_key(plain_key)
     if key_hash in _DEV_KEY_HASHES:
         return _DEV_KEY_HASHES[key_hash]
     return None
 
 
-async def require_api_key(
+async def get_authenticated_key(
     request: Request,
     authorization: Optional[str] = Header(None),
     xi_api_key: Optional[str] = Header(None, alias="xi-api-key"),
-) -> str:
-    """FastAPI dependency accepting either Bearer or xi-api-key."""
+) -> ApiKeyRecord:
+    """Resolve API key to an ApiKeyRecord from DB or admin fallback."""
     key = None
     if authorization:
         parts = authorization.split(" ", 1)
@@ -63,12 +82,71 @@ async def require_api_key(
     if not key:
         raise UnauthorizedError("Missing API key. Provide Bearer or xi-api-key header.")
 
-    owner = verify_api_key(key)
-    if not owner:
-        raise UnauthorizedError("Invalid or revoked API key.")
+    # 1. Database check
+    from app.services.key_manager import KeyManager
+    record = await KeyManager.authenticate(key)
+    if record:
+        request.state.api_key = record
+        request.state.user = record.role
+        return record
 
-    request.state.user = owner
-    return owner
+    # 2. In-memory hash check for test fixtures
+    owner = verify_api_key(key)
+    if owner:
+        role = "admin" if owner in ("admin", "developer") else "caller"
+        record = ApiKeyRecord(
+            id=f"key-mem-{owner}",
+            name=owner,
+            role=role,
+            scopes=["llm", "stt", "tts", "admin"] if role == "admin" else ["llm", "stt", "tts"],
+            rate_limit=1000,
+            max_concurrent=50,
+            created_at=0.0,
+        )
+        request.state.api_key = record
+        request.state.user = owner
+        return record
+
+    raise UnauthorizedError("Invalid or revoked API key.")
+
+
+async def require_api_key(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    xi_api_key: Optional[str] = Header(None, alias="xi-api-key"),
+) -> str:
+    """FastAPI dependency accepting either Bearer or xi-api-key."""
+    record = await get_authenticated_key(request, authorization, xi_api_key)
+    return record.role
+
+
+async def require_admin_key(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    xi_api_key: Optional[str] = Header(None, alias="xi-api-key"),
+) -> ApiKeyRecord:
+    """FastAPI dependency requiring role == 'admin'."""
+    record = await get_authenticated_key(request, authorization, xi_api_key)
+    if record.role != "admin":
+        raise ForbiddenError("Admin role required for this endpoint.")
+    return record
+
+
+def require_scope(required_scope: str):
+    """FastAPI dependency factory enforcing a specific scope for caller keys."""
+    async def _scope_checker(
+        request: Request,
+        authorization: Optional[str] = Header(None),
+        xi_api_key: Optional[str] = Header(None, alias="xi-api-key"),
+    ) -> ApiKeyRecord:
+        record = await get_authenticated_key(request, authorization, xi_api_key)
+        if record.role == "admin":
+            return record
+        if required_scope not in record.scopes:
+            raise ForbiddenError(f"Missing required scope: '{required_scope}'")
+        return record
+    return _scope_checker
+
 
 
 def create_websocket_ticket(user: str = "default") -> str:

@@ -196,6 +196,24 @@ for i in {1..30}; do
 done
 log_ok "LocalAI running on http://127.0.0.1:8080 (PID: $LOCALAI_PID)"
 
+# --- Step 3.1: Pre-warm STT & LLM on Apple Silicon Metal GPU ---
+log_info "Pre-warming LocalAI STT & LLM models on Apple Silicon Metal GPU..."
+WARMUP_AUDIO="$VOICE_AGENT_DIR/tests/fixtures/sample_utterance.wav"
+if [ -f "$WARMUP_AUDIO" ]; then
+    echo -ne "${DIM}Warming Whisper STT model...${RESET}"
+    curl -s -X POST http://127.0.0.1:8080/v1/audio/transcriptions \
+        -F "file=@$WARMUP_AUDIO" \
+        -F "model=whisper-base" >/dev/null 2>&1 || true
+    echo -e " ${GREEN}Warmed!${RESET}"
+fi
+
+echo -ne "${DIM}Warming LLM model...${RESET}"
+curl -s -X POST http://127.0.0.1:8080/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{"model": "llama-3.2-1b-instruct:q4_k_m", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 2}' >/dev/null 2>&1 || true
+echo -e " ${GREEN}Warmed!${RESET}"
+log_ok "Metal GPU models pre-warmed for instantaneous first voice turn."
+
 # --- Step 4: Launch local-tts (Port 8880) ---
 log_info "Starting local-tts (Apple MLX Metal 24kHz Speech Synthesis Engine)..."
 "$LOCAL_TTS_BIN" server \

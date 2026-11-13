@@ -16,6 +16,7 @@ def isolated_test_db(tmp_path, monkeypatch):
     """Ensure tests run against a clean, isolated SQLite database."""
     test_db_path = str(tmp_path / "test_voice_platform.db")
     monkeypatch.setattr(settings, "APP_DATABASE_PATH", test_db_path)
+    monkeypatch.setattr(settings, "ADMIN_API_KEY", "dev-voice-key-12345")
     asyncio.run(init_db())
     yield test_db_path
 

@@ -1,7 +1,7 @@
 import React from 'react';
-import { Mic, Bot, Volume2, AudioLines, Library, Cpu, Settings } from 'lucide-react';
+import { Mic, Bot, Volume2, AudioLines, Library, Cpu, Settings, Activity } from 'lucide-react';
 
-export type TabId = 'assistant' | 'stt' | 'agents' | 'tts' | 'voices' | 'models' | 'system';
+export type TabId = 'assistant' | 'stt' | 'vad-test' | 'agents' | 'tts' | 'voices' | 'models' | 'system';
 
 interface SidebarProps {
   activeTab: TabId;
@@ -12,7 +12,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
   const navItems: Array<{ id: TabId; label: string; icon: React.FC<{ className?: string }>; section?: string }> = [
     { id: 'assistant', label: 'Voice Assistant', icon: Mic, section: 'Live Experience' },
     { id: 'agents', label: 'Agents', icon: Bot, section: 'Management' },
-    { id: 'stt', label: 'Speech-to-Text', icon: AudioLines, section: 'Playgrounds' },
+    { id: 'vad-test', label: 'Silero VAD Spike Lab', icon: Activity, section: 'Playgrounds' },
+    { id: 'stt', label: 'Speech-to-Text', icon: AudioLines },
     { id: 'tts', label: 'Text-to-Speech', icon: Volume2 },
     { id: 'voices', label: 'Voice Library', icon: Library, section: 'Resources' },
     { id: 'models', label: 'Models & Engines', icon: Cpu },

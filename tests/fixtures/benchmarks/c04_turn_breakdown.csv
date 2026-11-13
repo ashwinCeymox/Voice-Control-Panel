@@ -1,0 +1,11 @@
+turn_index,stt_ms,llm_ttft_ms,llm_first_clause_ms,tts_ttfa_ms,sum_of_stages_ms,total_measured_ms,glue_overhead_ms,transcript,first_clause
+1,13296.05,23837.71,23897.26,9515.59,46708.89,46756.64,47.75,,You asked about the weather.
+2,2073.77,747.74,799.84,644.72,3518.33,3525.48,7.15,,I'm ready.
+3,1890.31,609.53,678.81,1618.48,4187.6,4207.15,19.55,,I'm ready.
+4,8667.49,2349.12,2463.25,3403.72,14534.45,14566.52,32.07,,What would you like to do?
+5,1726.02,695.7,833.21,1621.13,4180.37,4186.51,6.14,,I'm ready when you are.
+6,3146.48,2388.62,2978.87,5305.18,11430.53,11463.76,33.22,,What is your current status?
+7,2581.98,1032.32,1207.12,3521.81,7310.91,7330.28,19.37,,You asked what time it is.
+8,1953.18,577.66,779.2,1334.07,4066.44,4079.53,13.09,,What can I do for you today?
+9,1829.36,557.02,658.63,480.13,2968.12,2980.77,12.65,,What is your turn.
+10,1499.43,449.36,581.61,826.36,2907.4,2910.68,3.27,,I'm ready to help.

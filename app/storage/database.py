@@ -1,4 +1,5 @@
 """SQLite async database connection and schema initialization using aiosqlite."""
+from contextlib import asynccontextmanager
 from pathlib import Path
 import aiosqlite
 import logging
@@ -64,6 +65,32 @@ CREATE TABLE IF NOT EXISTS installed_models (
     installed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    hash TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL,
+    scopes TEXT NOT NULL,
+    rate_limit INTEGER DEFAULT 60,
+    max_concurrent INTEGER DEFAULT 5,
+    expires_at REAL,
+    revoked_at REAL,
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key_id TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    timestamp REAL NOT NULL,
+    duration_ms REAL NOT NULL,
+    tokens_or_seconds REAL NOT NULL,
+    status INTEGER NOT NULL,
+    FOREIGN KEY(key_id) REFERENCES api_keys(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_key ON usage(key_id, timestamp);
+
 """
 
 
@@ -75,15 +102,22 @@ DEFAULT_INSTALLED_MODELS = [
 ]
 
 
-def get_db():
-    return aiosqlite.connect(settings.APP_DATABASE_PATH)
+@asynccontextmanager
+async def get_db():
+    async with aiosqlite.connect(settings.APP_DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA journal_mode = WAL;")
+        await db.execute("PRAGMA busy_timeout = 5000;")
+        await db.execute("PRAGMA foreign_keys = ON;")
+        yield db
 
 
 async def init_db():
     db_path = Path(settings.APP_DATABASE_PATH)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     async with get_db() as db:
-        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA journal_mode = WAL;")
+        await db.execute("PRAGMA busy_timeout = 5000;")
         await db.execute("PRAGMA foreign_keys = ON;")
         await db.executescript(SCHEMA_SQL)
         for mid, name, cat, prov, sz in DEFAULT_INSTALLED_MODELS:
@@ -92,4 +126,4 @@ async def init_db():
                 (mid, name, cat, prov, sz),
             )
         await db.commit()
-    logger.info("SQLite database initialized at: %s", db_path.resolve())
+    logger.info("SQLite database initialized in WAL mode at: %s", db_path.resolve())

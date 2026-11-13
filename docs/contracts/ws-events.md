@@ -21,19 +21,38 @@
   "session_id": "optional-uuid-or-null",
   "agent_id": "optional-agent-uuid-or-null",
   "input_audio": {
-    "container": "webm",
-    "codec": "opus",
+    "container": "wav",
+    "codec": "pcm",
     "sample_rate": 16000
   },
   "config": {
+    "vad_engine": "silero",
     "echo_mode": "laptop_speakers",
     "barge_in": true
   }
 }
 ```
 
+### `vad.speech_start`
+Emitted by browser-side Silero VAD as soon as speech probability exceeds `positive_speech_threshold`. Used by backend for logging and early barge-in prep.
+```json
+{
+  "type": "vad.speech_start",
+  "timestamp": 1794460000000
+}
+```
+
+### `vad.misfire`
+Emitted when speech energy stops before reaching `min_speech_ms` (e.g. keyboard click or throat clearing). Server logs only.
+```json
+{
+  "type": "vad.misfire",
+  "duration_ms": 120
+}
+```
+
 ### `audio.commit`
-Emitted by browser-side VAD upon detecting 650ms of trailing silence, or immediately upon user releasing push-to-talk.
+Emitted by browser-side VAD upon speech completion after `redemption_ms` trailing silence. In Silero mode, the complete 16kHz PCM WAV is transmitted as a binary frame immediately before this commit message.
 ```json
 {
   "type": "audio.commit"

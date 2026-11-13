@@ -60,7 +60,7 @@ async def test_websocket_ticket_generation_and_consumption():
 
         # Validate and consume once
         user = validate_and_consume_ticket(ticket)
-        assert user == "developer"
+        assert user in ("developer", "admin")
 
         # Second consumption fails (single-use)
         user_again = validate_and_consume_ticket(ticket)

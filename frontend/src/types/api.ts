@@ -157,9 +157,20 @@ export interface TTSConfig {
 }
 
 export interface VADConfig {
-  mode: 'energy' | 'silero' | 'push_to_talk';
-  threshold: number;
-  min_silence_ms: number;
+  engine?: 'silero' | 'legacy';
+  positive_speech_threshold?: number;
+  negative_speech_threshold?: number;
+  redemption_ms?: number;
+  pre_speech_pad_ms?: number;
+  min_speech_ms?: number;
+  min_rms?: number;
+  noise_suppression?: string;
+  barge_in?: boolean;
+  barge_in_confirm_ms?: number;
+  playback_threshold_boost?: number;
+  mode?: 'energy' | 'silero' | 'push_to_talk';
+  threshold?: number;
+  min_silence_ms?: number;
 }
 
 export interface AudioConfig {

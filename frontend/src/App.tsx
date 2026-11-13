@@ -7,6 +7,7 @@ import { TTSPlayground } from './pages/TTSPlayground';
 import { VoiceLibrary } from './pages/VoiceLibrary';
 import { ModelsRegistry } from './pages/ModelsRegistry';
 import { SystemHealth } from './pages/SystemHealth';
+import { VadTest } from './pages/VadTest';
 
 export const App: React.FC = () => {
   return (
@@ -17,6 +18,8 @@ export const App: React.FC = () => {
             return <AssistantView />;
           case 'agents':
             return <AgentsPage />;
+          case 'vad-test':
+            return <VadTest />;
           case 'stt':
             return <STTPlayground />;
           case 'tts':

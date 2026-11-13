@@ -17,3 +17,7 @@ node_modules/
 backends/
 cache/
 data/
+.pids/
+logs/
+*.DS_Store
+.DS_Store
