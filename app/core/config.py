@@ -27,6 +27,14 @@ class Settings(BaseSettings):
     LOCAL_TTS_VOICE_ID: str = "af_heart"
     LOCAL_TTS_SPEED: float = 1.0
 
+    # Streaming STT (sherpa-onnx / Moonshine)
+    STREAMING_STT_URL: str = os.environ.get("STREAMING_STT_URL", "http://127.0.0.1:8088")
+    STREAMING_STT_WS_URL: str = os.environ.get("STREAMING_STT_WS_URL", "ws://127.0.0.1:8088/ws")
+    STT_STREAM_ENABLED: bool = True
+    STREAMING_STT_TIMEOUT_SECONDS: float = 15.0
+    MAX_ACTIVE_STT_STREAMS: int = 5
+    STREAMING_STT_DEFAULT_MODEL: str = "sherpa-onnx-streaming-zipformer-en-20M"
+
     # Security & Administration
     ADMIN_API_KEY: Optional[str] = None
     API_KEY_HASH_SECRET: str = "dev-secret-key-change-me-in-production-use-high-entropy"

@@ -28,3 +28,22 @@
 | **P6** | Go-live configuration, Prometheus metrics, backup cron | OPS | `gemini-3.8-flash-high` | **TODO** | P4-DOCKER | `docs/handoff/P6.md` |
 | **P7** | STT streaming decision | QA + OPS | `gemini-3.8-flash-high` | **DONE** | P0, P5 | `docs/decisions/stt-streaming.md` |
 | **REV** | Adversarial review across changes | REV | `gemini-3.8-flash-high` | **DONE** | Each handoff | `docs/reviews/migration-phase1.md` |
+
+---
+
+# Multi-Agent Task Board: Streaming STT Plan
+
+**Goal:** Dual-mode STT (Batch LocalAI Whisper & Real-Time Streaming STT)  
+**Rules:** Failing test first, handoff in `docs/handoff/<id>.md`, only ORCH merges, no secrets or customer transcripts.
+
+| ID | Task | Owner | Model | Status | Blocked By | Deliverable / Handoff |
+|---|---|---|---|---|---|---|
+| **S0** | Preconditions verification & `pre-streaming` tag | ORCH | `gemini-3.8-flash-high` | **DONE** | None | `pre-streaming` git tag, preconditions verified |
+| **S1-SCRIPT** | Replay & measurement script for streaming STT | QA | `gemini-3.8-flash-high` | **DONE** | None | `tests/benchmark/run_streaming_benchmarks.py` |
+| **S1-BAKEOFF** | Streaming STT engine bake-off & bring-up (E1 sherpa-onnx vs E0-E4) | OPS + QA | `gemini-3.8-flash-high` | **DONE** | S1-SCRIPT | `docs/decisions/stt-engine.md`, `tests/fixtures/benchmarks/streaming_stt_raw.csv` |
+| **S2-ADAPTER** | `StreamingSTTClient` adapter, config, health check, installed models | BE | `gemini-3.8-flash-high` | **DONE** | S1-BAKEOFF | `app/providers/streaming_stt_client.py`, `docs/handoff/S2.md` |
+| **S3-WS** | Events schema, `WS /v1/audio/transcriptions/stream`, `stt_stream` scope | BE | `gemini-3.8-flash-high` | **DONE** | S2-ADAPTER | `app/api/stream_stt.py`, `docs/handoff/S3.md` |
+| **S4-VOICE** | Voice pipeline dual-path, automatic fallback to batch, live captions | BE + FE | `gemini-3.8-flash-high` | **DONE** | S2-ADAPTER, S3-WS | `app/api/voice.py`, `frontend/src/` |
+| **S5-SCHEMA** | Bump agent schema to v2 (`stt.kind: batch\|streaming`), UI switch | BE + FE | `gemini-3.8-flash-high` | **DONE** | None | `app/schemas/agent.py`, `frontend/src/pages/Agents.tsx` |
+| **S6-QA** | Soak test (1, 3, 5 streams), kill mid-stream fallback, adversarial checks | QA | `gemini-3.8-flash-high` | **DONE** | S4-VOICE, S5-SCHEMA | `docs/reviews/streaming-stt-qa.md` |
+| **S7-ROLLOUT** | Controlled rollout validation, default settings | ORCH | `gemini-3.8-flash-high` | **DONE** | S6-QA | `docs/handoff/S7-ROLLOUT.md` |

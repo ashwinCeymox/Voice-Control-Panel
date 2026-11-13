@@ -147,6 +147,8 @@ export interface LLMConfig {
 
 export interface STTConfig {
   model: string;
+  kind?: 'batch' | 'streaming';
+  fallback_model?: string | null;
   language: string;
 }
 
@@ -262,6 +264,7 @@ export type ClientEvent =
       type: 'session.start';
       session_id?: string | null;
       agent_id?: string | null;
+      stt_kind?: 'batch' | 'streaming';
       input_audio: InputAudioConfig;
       config?: {
         echo_mode?: string;
@@ -275,7 +278,9 @@ export type ClientEvent =
 
 export type ServerEvent =
   | { type: 'session.created'; session_id: string; agent_name?: string; agent_id?: string }
+  | { type: 'transcript.partial'; turn_id?: string; seq: number; confirmed: string; tentative: string }
   | { type: 'transcript.completed'; turn_id: string; text: string }
+  | { type: 'stt.fallback'; turn_id?: string; reason: string }
   | { type: 'response.text.delta'; turn_id: string; delta: string }
   | { type: 'audio.started'; turn_id: string; sample_rate: number; sample_format: string; channels: number }
   | { type: 'audio.completed'; turn_id: string }

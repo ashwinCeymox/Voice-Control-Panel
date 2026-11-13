@@ -25,10 +25,26 @@ export interface VadControllerCallbacks {
   onSpeechStart?: () => void;
   onSpeechRealStart?: () => void;
   onSpeechEnd?: (wavBytes: Uint8Array, durationMs: number, rms: number) => void;
+  onAudioFrame?: (pcmChunk: Uint8Array) => void;
   onVADMisfire?: () => void;
   onBargeIn?: () => void;
   onFrameProcessed?: (prob: number) => void;
   onError?: (err: Error | string) => void;
+}
+
+/**
+ * Convert 16kHz Float32Array audio samples into 16-bit little-endian PCM bytes.
+ */
+export function float32ToPCM16(samples: Float32Array): Uint8Array {
+  const buffer = new ArrayBuffer(samples.length * 2);
+  const view = new DataView(buffer);
+  let offset = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    offset += 2;
+  }
+  return new Uint8Array(buffer);
 }
 
 /**
@@ -103,6 +119,9 @@ export class VadController {
   private isSpeaking = false;
   private bargeInTimer: ReturnType<typeof setTimeout> | null = null;
   private basePositiveThreshold: number;
+  private preSpeechRingBuffer: Uint8Array[] = [];
+  private readonly maxPreSpeechFrames = 4;
+  private hasFlushedPreSpeech = false;
 
   constructor(callbacks: VadControllerCallbacks, config: VadControllerConfig = {}) {
     this.callbacks = callbacks;
@@ -147,13 +166,40 @@ export class VadController {
               ort.env.wasm.simd = true;
             }
           },
-          onFrameProcessed: (probs: any) => {
+          onFrameProcessed: (probs: any, frame?: Float32Array) => {
             const prob = probs.isSpeech ?? (probs as any)[1] ?? 0;
             this.callbacks.onFrameProcessed?.(prob);
+
+            if (frame && frame.length > 0) {
+              const pcm = float32ToPCM16(frame);
+              if (this.isSpeaking) {
+                if (!this.hasFlushedPreSpeech) {
+                  for (const chunk of this.preSpeechRingBuffer) {
+                    this.callbacks.onAudioFrame?.(chunk);
+                  }
+                  this.preSpeechRingBuffer = [];
+                  this.hasFlushedPreSpeech = true;
+                }
+                this.callbacks.onAudioFrame?.(pcm);
+              } else {
+                this.preSpeechRingBuffer.push(pcm);
+                if (this.preSpeechRingBuffer.length > this.maxPreSpeechFrames) {
+                  this.preSpeechRingBuffer.shift();
+                }
+              }
+            }
           },
           onSpeechStart: () => {
             this.isSpeaking = true;
             this.callbacks.onSpeechStart?.();
+
+            if (!this.hasFlushedPreSpeech) {
+              for (const chunk of this.preSpeechRingBuffer) {
+                this.callbacks.onAudioFrame?.(chunk);
+              }
+              this.preSpeechRingBuffer = [];
+              this.hasFlushedPreSpeech = true;
+            }
 
             // If assistant is actively speaking, start barge-in confirmation timer
             if (this.isPlayingBack && this.config.bargeIn) {
@@ -170,6 +216,8 @@ export class VadController {
           },
           onVADMisfire: () => {
             this.isSpeaking = false;
+            this.hasFlushedPreSpeech = false;
+            this.preSpeechRingBuffer = [];
             if (this.bargeInTimer) {
               clearTimeout(this.bargeInTimer);
               this.bargeInTimer = null;
@@ -178,6 +226,8 @@ export class VadController {
           },
           onSpeechEnd: (audio: Float32Array) => {
             this.isSpeaking = false;
+            this.hasFlushedPreSpeech = false;
+            this.preSpeechRingBuffer = [];
             if (this.bargeInTimer) {
               clearTimeout(this.bargeInTimer);
               this.bargeInTimer = null;

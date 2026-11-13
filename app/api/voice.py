@@ -15,10 +15,13 @@ from app.schemas.events import (
     ErrorEvent,
     ResponseTextDeltaEvent,
     SessionCreatedEvent,
+    STTFallbackEvent,
     TranscriptCompletedEvent,
+    TranscriptPartialEvent,
     TurnCancelledEvent,
     TurnCompletedEvent,
 )
+from app.providers.streaming_stt_client import StreamingSTTClient
 from app.schemas.voice import VoiceTurnResponse
 from app.services.agent_manager import AgentManager
 from app.services.text_chunker import TextChunker
@@ -27,6 +30,7 @@ from app.storage.repositories import SessionRepository
 
 logger = logging.getLogger("voice_agent.api.voice")
 router = APIRouter(prefix="/v1/voice", tags=["Voice"])
+streaming_stt_client = StreamingSTTClient()
 
 # Default system prompt fallback when no agent is loaded
 _DEFAULT_SYSTEM_PROMPT = "You are a concise voice assistant. Respond in one or two sentences."
@@ -161,14 +165,40 @@ async def voice_stream(
     active_turn_id: Optional[str] = None
     consecutive_unclear = 0
 
+    session_stt_kind: Optional[str] = None
+    stream_feed_queue: Optional[asyncio.Queue] = None
+    stream_task: Optional[asyncio.Task] = None
+    stream_events: list = []
+    streaming_error: Optional[str] = None
+
+    def get_stt_kind(ag: Optional[Dict[str, Any]]) -> str:
+        if not settings.STT_STREAM_ENABLED:
+            return "batch"
+        if session_stt_kind in ("batch", "streaming"):
+            return session_stt_kind
+        if ag and "stt" in ag:
+            return ag["stt"].get("kind", "batch")
+        return "batch"
+
     async def process_turn(
         turn_id: str,
         utterance_bytes: bytes,
         turn_agent: Optional[Dict[str, Any]],
         container: str = "wav",
+        streaming_transcript: Optional[str] = None,
+        streaming_fallback_reason: Optional[str] = None,
     ):
         """Execute a single STT->LLM->TTS turn, using per-agent config where available."""
         nonlocal consecutive_unclear
+        # If streaming STT experienced failure, emit stt.fallback immediately
+        if streaming_fallback_reason:
+            await websocket.send_text(
+                STTFallbackEvent(
+                    turn_id=turn_id,
+                    reason=streaming_fallback_reason,
+                ).model_dump_json()
+            )
+
         # Extract agent config with safe fallbacks
         system_prompt = _DEFAULT_SYSTEM_PROMPT
         llm_model: Optional[str] = None
@@ -184,7 +214,11 @@ async def voice_stream(
             llm_model = llm_cfg.get("model")
             llm_temperature = llm_cfg.get("temperature")
             stt_cfg = turn_agent.get("stt") or {}
-            stt_model = stt_cfg.get("model")
+            # If fallback triggered or stt is streaming, use fallback_model or batch whisper
+            if streaming_fallback_reason:
+                stt_model = stt_cfg.get("fallback_model") or settings.LOCALAI_STT_MODEL
+            else:
+                stt_model = stt_cfg.get("model")
             tts_cfg = turn_agent.get("tts") or {}
             tts_voice_id = tts_cfg.get("voice_id")
             tts_speed = tts_cfg.get("speed")
@@ -192,32 +226,11 @@ async def voice_stream(
 
         try:
             # Step A: STT
-            if not utterance_bytes or (container == "webm" and len(utterance_bytes) < 1200):
-                logger.info("Ignoring empty/sub-threshold utterance (%d bytes) for turn %s", len(utterance_bytes) if utterance_bytes else 0, turn_id)
-                await websocket.send_text(
-                    TranscriptCompletedEvent(turn_id=turn_id, text="(no speech detected)").model_dump_json()
-                )
-                await websocket.send_text(
-                    TurnCompletedEvent(turn_id=turn_id).model_dump_json()
-                )
-                return
-
-            try:
-                transcript_resp = await asyncio.shield(
-                    orchestrator.stt.transcribe(
-                        audio_bytes=bytes(utterance_bytes),
-                        filename=f"utterance.{container}",
-                        content_type=f"audio/{container}",
-                        model=stt_model,
-                    )
-                )
-            except asyncio.CancelledError:
-                logger.info("Turn %s cancelled during STT transcription (LocalAI shielded)", turn_id)
-                raise
-            except Exception as stt_exc:
-                err_str = str(stt_exc).lower()
-                if any(k in err_str for k in ("end of file", "invalid data found", "could not find codec", "truncating packet", "silence")):
-                    logger.info("STT encountered unparseable/silent audio frame for turn %s, handling gracefully", turn_id)
+            if streaming_transcript is not None:
+                transcript = streaming_transcript or "(no speech detected)"
+            else:
+                if not utterance_bytes or (container == "webm" and len(utterance_bytes) < 1200):
+                    logger.info("Ignoring empty/sub-threshold utterance (%d bytes) for turn %s", len(utterance_bytes) if utterance_bytes else 0, turn_id)
                     await websocket.send_text(
                         TranscriptCompletedEvent(turn_id=turn_id, text="(no speech detected)").model_dump_json()
                     )
@@ -225,17 +238,41 @@ async def voice_stream(
                         TurnCompletedEvent(turn_id=turn_id).model_dump_json()
                     )
                     return
-                logger.error("STT failure (localai) for turn %s: %s", turn_id, str(stt_exc))
-                await websocket.send_text(
-                    ErrorEvent(
-                        code="STT_ERROR",
-                        message=f"Speech-to-text transcription failed: {str(stt_exc)}",
-                        turn_id=turn_id,
-                    ).model_dump_json()
-                )
-                return
 
-            transcript = transcript_resp.text or "(no speech detected)"
+                try:
+                    transcript_resp = await asyncio.shield(
+                        orchestrator.stt.transcribe(
+                            audio_bytes=bytes(utterance_bytes),
+                            filename=f"utterance.{container}",
+                            content_type=f"audio/{container}",
+                            model=stt_model,
+                        )
+                    )
+                except asyncio.CancelledError:
+                    logger.info("Turn %s cancelled during STT transcription (LocalAI shielded)", turn_id)
+                    raise
+                except Exception as stt_exc:
+                    err_str = str(stt_exc).lower()
+                    if any(k in err_str for k in ("end of file", "invalid data found", "could not find codec", "truncating packet", "silence")):
+                        logger.info("STT encountered unparseable/silent audio frame for turn %s, handling gracefully", turn_id)
+                        await websocket.send_text(
+                            TranscriptCompletedEvent(turn_id=turn_id, text="(no speech detected)").model_dump_json()
+                        )
+                        await websocket.send_text(
+                            TurnCompletedEvent(turn_id=turn_id).model_dump_json()
+                        )
+                        return
+                    logger.error("STT failure (localai) for turn %s: %s", turn_id, str(stt_exc))
+                    await websocket.send_text(
+                        ErrorEvent(
+                            code="STT_ERROR",
+                            message=f"Speech-to-text transcription failed: {str(stt_exc)}",
+                            turn_id=turn_id,
+                        ).model_dump_json()
+                    )
+                    return
+
+                transcript = transcript_resp.text or "(no speech detected)"
 
             # Emit transcript event
             await websocket.send_text(
@@ -437,6 +474,7 @@ async def voice_stream(
                             agent_id = agent["id"] if agent else agent_id
                             agent_name = agent["name"] if agent else agent_name
 
+                    session_stt_kind = event_data.get("stt_kind")
                     input_audio = event_data.get("input_audio", {})
                     input_container = input_audio.get("container", "webm")
                     audio_buffer.clear()
@@ -446,6 +484,35 @@ async def voice_stream(
                         active_turn_id = f"turn-{uuid.uuid4()}"
                         raw_data = bytes(audio_buffer)
                         audio_buffer.clear()
+
+                        final_stream_text = None
+                        stream_fallback_reason = None
+
+                        if stream_feed_queue is not None:
+                            stream_feed_queue.put_nowait(None)
+                            if stream_task:
+                                try:
+                                    await asyncio.wait_for(stream_task, timeout=settings.STREAMING_STT_TIMEOUT_SECONDS)
+                                except Exception as wait_err:
+                                    logger.warning("Streaming STT wait failed: %s", wait_err)
+                                    streaming_error = str(wait_err)
+
+                            if streaming_error:
+                                stream_fallback_reason = f"Streaming STT engine error: {streaming_error}. Falling back to batch Whisper."
+                            elif stream_events:
+                                final_stream_text = stream_events[-1].get("text", "").strip()
+
+                            stream_feed_queue = None
+                            stream_task = None
+                            stream_events.clear()
+                        else:
+                            if get_stt_kind(agent) == "streaming":
+                                try:
+                                    pcm_payload = raw_data[44:] if (raw_data.startswith(b"RIFF") and len(raw_data) > 44 and raw_data[8:12] == b"WAVE") else raw_data
+                                    resp = await streaming_stt_client.transcribe(pcm_payload)
+                                    final_stream_text = resp.text
+                                except Exception as stream_err:
+                                    stream_fallback_reason = f"Streaming STT engine error: {stream_err}. Falling back to batch Whisper."
 
                         # Auto-detect audio container from payload magic bytes
                         detected_container = input_container
@@ -472,23 +539,87 @@ async def voice_stream(
                         # Capture agent snapshot for this turn
                         turn_agent_snapshot = agent
 
-                        # Launch new turn task with detected container
+                        # Launch new turn task with detected container and streaming results
                         current_turn_task = asyncio.create_task(
-                            process_turn(active_turn_id, raw_data, turn_agent_snapshot, container=detected_container)
+                            process_turn(
+                                active_turn_id,
+                                raw_data,
+                                turn_agent_snapshot,
+                                container=detected_container,
+                                streaming_transcript=final_stream_text,
+                                streaming_fallback_reason=stream_fallback_reason,
+                            )
                         )
                         orchestrator.register_stream_task(session_id, current_turn_task)
 
                 elif event_type == "turn.cancel":
+                    if stream_task and not stream_task.done():
+                        stream_task.cancel()
+                    stream_task = None
+                    stream_feed_queue = None
+                    stream_events.clear()
                     if current_turn_task and not current_turn_task.done():
                         current_turn_task.cancel()
                     orchestrator.cancel_stream_task(session_id)
                     audio_buffer.clear()
+                    active_turn_id = None
 
                 elif event_type == "vad.speech_start":
                     logger.info("VAD speech start detected for session %s (ts=%s)", session_id, event_data.get("timestamp"))
+                    active_turn_id = f"turn-{uuid.uuid4()}"
+                    audio_buffer.clear()
+                    streaming_error = None
+                    stream_events.clear()
+
+                    if stream_task and not stream_task.done():
+                        stream_task.cancel()
+                    stream_task = None
+                    stream_feed_queue = None
+
+                    if get_stt_kind(agent) == "streaming":
+                        feed_q = asyncio.Queue()
+                        stream_feed_queue = feed_q
+                        turn_id_for_stream = active_turn_id
+
+                        async def _stream_feeder():
+                            while True:
+                                b = await feed_q.get()
+                                if b is None:
+                                    break
+                                yield b
+
+                        async def _run_stt_stream():
+                            nonlocal streaming_error
+                            try:
+                                target_model = (agent.get("stt", {}).get("model") if agent else None) or settings.STREAMING_STT_DEFAULT_MODEL
+                                seq = 0
+                                async for evt in streaming_stt_client.stream(_stream_feeder(), model=target_model):
+                                    if evt.get("type") == "transcript.partial":
+                                        seq += 1
+                                        await websocket.send_text(
+                                            TranscriptPartialEvent(
+                                                turn_id=turn_id_for_stream,
+                                                seq=seq,
+                                                confirmed=evt.get("confirmed", ""),
+                                                tentative=evt.get("tentative", ""),
+                                            ).model_dump_json()
+                                        )
+                                    elif evt.get("type") in ("transcript.completed", "transcript.final"):
+                                        stream_events.append(evt)
+                                        break
+                            except Exception as stream_err:
+                                logger.warning("Streaming STT failed during speech: %s", stream_err)
+                                streaming_error = str(stream_err)
+
+                        stream_task = asyncio.create_task(_run_stt_stream())
 
                 elif event_type == "vad.misfire":
                     logger.info("VAD misfire logged for session %s (duration=%s ms)", session_id, event_data.get("duration_ms"))
+                    if stream_task and not stream_task.done():
+                        stream_task.cancel()
+                    stream_task = None
+                    stream_feed_queue = None
+                    stream_events.clear()
 
                 elif event_type == "session.end":
                     break
@@ -497,6 +628,13 @@ async def voice_stream(
                 chunk = message["bytes"]
                 # Accumulate binary audio frame
                 audio_buffer.extend(chunk)
+
+                if stream_feed_queue is not None:
+                    pcm_chunk = chunk
+                    if chunk.startswith(b"RIFF") and len(chunk) > 44 and chunk[8:12] == b"WAVE":
+                        pcm_chunk = chunk[44:]
+                    if pcm_chunk:
+                        stream_feed_queue.put_nowait(pcm_chunk)
 
                 # Cache WebM stream initialization header (EBML + Segment + Tracks preceding first Cluster)
                 if input_container == "webm" and len(webm_header) == 0:
@@ -514,6 +652,8 @@ async def voice_stream(
         else:
             raise
     finally:
+        if stream_task and not stream_task.done():
+            stream_task.cancel()
         if current_turn_task and not current_turn_task.done():
             current_turn_task.cancel()
         orchestrator.cancel_stream_task(session_id)

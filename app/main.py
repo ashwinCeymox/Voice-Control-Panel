@@ -13,6 +13,7 @@ from app.api.system import system_router
 from app.api.gallery import gallery_router
 from app.api.agents import agents_router
 from app.api.admin_keys import router as admin_keys_router
+from app.api.stream_stt import router as stream_stt_router
 from app.core.config import settings
 from app.core.errors import AppError, app_error_handler
 from app.core.logging import setup_logging
@@ -124,6 +125,7 @@ app.include_router(system_router)
 app.include_router(gallery_router)
 app.include_router(agents_router)
 app.include_router(admin_keys_router)
+app.include_router(stream_stt_router)
 
 
 @app.get("/")

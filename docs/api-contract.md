@@ -9,14 +9,18 @@ This document is the **frozen single source of truth** for all client-facing and
 All non-health endpoints require authentication.
 
 ### 1.1 HTTP Authentication Headers
+
 Clients must provide an API key via either:
+
 1. `Authorization: Bearer <API_KEY>` (Standard OpenAI style)
 2. `xi-api-key: <API_KEY>` (ElevenLabs style)
 
 Both headers map internally to the same authenticated principal.
 
 ### 1.2 WebSocket Authentication (Single-Use Ticket)
+
 Browsers cannot reliably send custom HTTP headers during WebSocket connection handshakes. To prevent exposing permanent API keys in query parameters:
+
 1. The browser requests a short-lived ticket over HTTPS:
    - `POST /v1/auth/ticket`
    - Response: `{"ticket": "uuid4_str", "expires_in": 60}`
@@ -31,9 +35,12 @@ Browsers cannot reliably send custom HTTP headers during WebSocket connection ha
 ### 2.1 Health & Provider Discovery
 
 #### `GET /health/live`
+
 Process liveness check. Does not ping providers.
+
 - **Auth:** None
 - **Response `200 OK`:**
+
 ```json
 {
   "status": "live"
@@ -41,9 +48,12 @@ Process liveness check. Does not ping providers.
 ```
 
 #### `GET /health/ready`
+
 Readiness check verifying backend reachability to LocalAI and local-tts.
+
 - **Auth:** None
 - **Response `200 OK`:**
+
 ```json
 {
   "status": "ready",
@@ -61,9 +71,12 @@ Readiness check verifying backend reachability to LocalAI and local-tts.
 ```
 
 #### `GET /v1/providers`
+
 Authenticated provider configuration and health details.
+
 - **Auth:** Required
 - **Response `200 OK`:**
+
 ```json
 {
   "localai": {
@@ -82,9 +95,12 @@ Authenticated provider configuration and health details.
 ```
 
 #### `GET /v1/models`
+
 Returns installed LocalAI LLM and STT models.
+
 - **Auth:** Required
 - **Response `200 OK`:**
+
 ```json
 {
   "object": "list",
@@ -106,9 +122,12 @@ Returns installed LocalAI LLM and STT models.
 ```
 
 #### `GET /v1/tts/models`
+
 Returns available local-tts synthesis engines.
+
 - **Auth:** Required
 - **Response `200 OK`:**
+
 ```json
 {
   "models": [
@@ -119,10 +138,13 @@ Returns available local-tts synthesis engines.
 ```
 
 #### `GET /v1/voices`
+
 Returns available voices from local-tts for the requested or default engine.
+
 - **Auth:** Required
 - **Query Params:** `model_id` (optional, string)
 - **Response `200 OK`:**
+
 ```json
 {
   "voices": [
@@ -143,7 +165,9 @@ Returns available voices from local-tts for the requested or default engine.
 ### 2.2 Speech-to-Text (STT)
 
 #### `POST /v1/audio/transcriptions`
+
 OpenAI-compatible multipart audio transcription route.
+
 - **Auth:** Required
 - **Content-Type:** `multipart/form-data`
 - **Fields:**
@@ -152,6 +176,7 @@ OpenAI-compatible multipart audio transcription route.
   - `language`: ISO language code e.g. "en" (optional)
   - `response_format`: `json` | `verbose_json` | `text` (optional; default `json`)
 - **Response `200 OK`:**
+
 ```json
 {
   "text": "Hello, how can I help you today?",
@@ -165,10 +190,13 @@ OpenAI-compatible multipart audio transcription route.
 ### 2.3 LLM Chat Completions
 
 #### `POST /v1/chat/completions`
+
 OpenAI-compatible chat completion route.
+
 - **Auth:** Required
 - **Content-Type:** `application/json`
 - **Body:**
+
 ```json
 {
   "model": "llama-3.2-3b-instruct",
@@ -181,7 +209,9 @@ OpenAI-compatible chat completion route.
   "max_tokens": 150
 }
 ```
+
 - **Response (non-streaming) `200 OK`:**
+
 ```json
 {
   "id": "chatcmpl-uuid",
@@ -200,8 +230,10 @@ OpenAI-compatible chat completion route.
   ]
 }
 ```
+
 - **Response (streaming `stream: true`) `200 OK`:**
   - Server-Sent Events (`text/event-stream`):
+
   ```
   data: {"id":"chatcmpl-uuid","choices":[{"delta":{"content":"2"}}]}
 
@@ -215,10 +247,13 @@ OpenAI-compatible chat completion route.
 ### 2.4 Text-to-Speech (TTS)
 
 #### `POST /v1/text-to-speech/{voice_id}/stream`
+
 ElevenLabs-compatible HTTP streaming synthesis.
+
 - **Auth:** Required
 - **Content-Type:** `application/json`
 - **Body:**
+
 ```json
 {
   "text": "Hello, this is a speech test.",
@@ -228,6 +263,7 @@ ElevenLabs-compatible HTTP streaming synthesis.
   }
 }
 ```
+
 - **Response `200 OK`:**
   - Headers:
     - `Content-Type: audio/pcm;rate=24000;encoding=signed-int;bits=16`
@@ -241,7 +277,9 @@ ElevenLabs-compatible HTTP streaming synthesis.
 ### 2.5 Combined Synchronous Voice Turn
 
 #### `POST /v1/voice/turn`
+
 One-shot audio in $\to$ STT $\to$ LLM $\to$ TTS $\to$ audio out.
+
 - **Auth:** Required
 - **Content-Type:** `multipart/form-data`
 - **Fields:**
@@ -251,6 +289,7 @@ One-shot audio in $\to$ STT $\to$ LLM $\to$ TTS $\to$ audio out.
   - `voice_id`: string (optional)
   - `tts_model`: string (optional)
 - **Response `200 OK`:**
+
 ```json
 {
   "turn_id": "turn-uuid4",
@@ -280,6 +319,7 @@ One-shot audio in $\to$ STT $\to$ LLM $\to$ TTS $\to$ audio out.
 Connection URL: `WS /v1/voice/stream?ticket={short_lived_ticket}`
 
 ### 3.1 Framing Standard
+
 - **Control & Text Data:** Encoded as UTF-8 JSON text frames.
 - **Inbound Audio (Client $\to$ Server):** Binary frames containing containerized audio chunks (e.g. WebM/Opus or WAV).
 - **Outbound Audio (Server $\to$ Client):** Binary frames containing raw signed 16-bit, 24kHz mono PCM bytes, sent strictly between `audio.started` and `audio.completed` JSON control events.
@@ -287,7 +327,9 @@ Connection URL: `WS /v1/voice/stream?ticket={short_lived_ticket}`
 ### 3.2 Client $\to$ Server Events (JSON)
 
 #### 1. `session.start`
+
 Initiates a new turn or conversation session.
+
 ```json
 {
   "type": "session.start",
@@ -304,7 +346,9 @@ Initiates a new turn or conversation session.
 ```
 
 #### 2. `audio.commit`
+
 Signals the end of user speech for the current turn.
+
 ```json
 {
   "type": "audio.commit"
@@ -312,7 +356,9 @@ Signals the end of user speech for the current turn.
 ```
 
 #### 3. `turn.cancel`
+
 Interrupts active LLM generation and audio synthesis immediately.
+
 ```json
 {
   "type": "turn.cancel",
@@ -321,7 +367,9 @@ Interrupts active LLM generation and audio synthesis immediately.
 ```
 
 #### 4. `session.end`
+
 Terminates the session and cleans up resources.
+
 ```json
 {
   "type": "session.end"
@@ -333,7 +381,9 @@ Terminates the session and cleans up resources.
 ### 3.3 Server $\to$ Client Events (JSON)
 
 #### 1. `session.created`
+
 Acknowledges session creation or connection.
+
 ```json
 {
   "type": "session.created",
@@ -342,7 +392,9 @@ Acknowledges session creation or connection.
 ```
 
 #### 2. `transcript.completed`
+
 Emitted once LocalAI STT has processed the committed audio.
+
 ```json
 {
   "type": "transcript.completed",
@@ -352,7 +404,9 @@ Emitted once LocalAI STT has processed the committed audio.
 ```
 
 #### 3. `response.text.delta`
+
 Emitted as LLM tokens arrive.
+
 ```json
 {
   "type": "response.text.delta",
@@ -362,7 +416,9 @@ Emitted as LLM tokens arrive.
 ```
 
 #### 4. `audio.started`
+
 Emitted before binary PCM frames begin streaming to the client.
+
 ```json
 {
   "type": "audio.started",
@@ -374,7 +430,9 @@ Emitted before binary PCM frames begin streaming to the client.
 ```
 
 #### 5. `audio.completed`
+
 Emitted when all synthesized audio frames for this turn have been dispatched.
+
 ```json
 {
   "type": "audio.completed",
@@ -383,7 +441,9 @@ Emitted when all synthesized audio frames for this turn have been dispatched.
 ```
 
 #### 6. `turn.completed`
+
 Terminal event for a successfully finished turn.
+
 ```json
 {
   "type": "turn.completed",
@@ -392,7 +452,9 @@ Terminal event for a successfully finished turn.
 ```
 
 #### 7. `turn.cancelled`
+
 Emitted when a turn was stopped via `turn.cancel` or client disconnect.
+
 ```json
 {
   "type": "turn.cancelled",
@@ -401,7 +463,9 @@ Emitted when a turn was stopped via `turn.cancel` or client disconnect.
 ```
 
 #### 8. `error`
+
 Emitted on any recoverable or unrecoverable error.
+
 ```json
 {
   "type": "error",
@@ -430,11 +494,12 @@ All REST error responses return standard JSON envelopes with appropriate HTTP st
 ```
 
 ### Standard Error Codes
-| HTTP Status | Error Code | Description |
-|---|---|---|
-| `400` | `INVALID_PAYLOAD` | Request body or parameters failed validation |
-| `401` | `UNAUTHORIZED` | Missing or invalid API key / ticket |
-| `404` | `MODEL_NOT_FOUND` | Configured or requested model ID does not exist |
-| `413` | `PAYLOAD_TOO_LARGE` | Uploaded audio file exceeds size/duration threshold |
-| `502` | `PROVIDER_UNAVAILABLE` | LocalAI or local-tts service unreachable |
-| `504` | `PROVIDER_TIMEOUT` | Provider inference exceeded timeout |
+
+| HTTP Status | Error Code               | Description                                         |
+| ----------- | ------------------------ | --------------------------------------------------- |
+| `400`     | `INVALID_PAYLOAD`      | Request body or parameters failed validation        |
+| `401`     | `UNAUTHORIZED`         | Missing or invalid API key / ticket                 |
+| `404`     | `MODEL_NOT_FOUND`      | Configured or requested model ID does not exist     |
+| `413`     | `PAYLOAD_TOO_LARGE`    | Uploaded audio file exceeds size/duration threshold |
+| `502`     | `PROVIDER_UNAVAILABLE` | LocalAI or local-tts service unreachable            |
+| `504`     | `PROVIDER_TIMEOUT`     | Provider inference exceeded timeout                 |

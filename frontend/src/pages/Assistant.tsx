@@ -39,6 +39,8 @@ export const AssistantView: React.FC = () => {
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [isSpeakingVAD, setIsSpeakingVAD] = useState<boolean>(false);
   const [bargeInNotice, setBargeInNotice] = useState<boolean>(false);
+  const [partialCaption, setPartialCaption] = useState<{ confirmed: string; tentative: string } | null>(null);
+  const [sttFallbackNotice, setSttFallbackNotice] = useState<string | null>(null);
 
   // Active and available agents
   const [activeAgent, setActiveAgent] = useState<Agent | null>(null);
@@ -175,6 +177,7 @@ export const AssistantView: React.FC = () => {
           JSON.stringify({
             type: 'session.start',
             agent_id: agentId,
+            stt_kind: switched?.stt?.kind || 'batch',
             input_audio: {
               container: engine === 'silero' ? 'wav' : 'webm',
               codec: engine === 'silero' ? 'pcm' : 'opus',
@@ -304,7 +307,14 @@ export const AssistantView: React.FC = () => {
           setActiveAgent((prev) => (prev ? { ...prev, name: event.agent_name! } : null));
         }
         break;
+      case 'transcript.partial':
+        setPartialCaption({ confirmed: event.confirmed, tentative: event.tentative });
+        break;
+      case 'stt.fallback':
+        setSttFallbackNotice(event.reason);
+        break;
       case 'transcript.completed':
+        setPartialCaption(null);
         currentTranscriptRef.current = event.text;
         setTranscript(event.text);
         setState('thinking');
@@ -481,11 +491,18 @@ export const AssistantView: React.FC = () => {
         {
           onSpeechStart: () => {
             setIsSpeakingVAD(true);
+            setPartialCaption(null);
             if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
               wsRef.current.send(JSON.stringify({ type: 'vad.speech_start', timestamp: Date.now() }));
             }
             if (stateRef.current !== 'speaking' && stateRef.current !== 'thinking') {
               setState('listening');
+            }
+          },
+          onAudioFrame: (pcmChunk: Uint8Array) => {
+            const isStreaming = activeAgentRef.current?.stt?.kind === 'streaming';
+            if (isStreaming && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(pcmChunk.buffer);
             }
           },
           onSpeechEnd: (wavBytes: Uint8Array, _durationMs: number, _rms: number) => {
@@ -496,8 +513,11 @@ export const AssistantView: React.FC = () => {
                 currentResponseRef.current = '';
                 setTranscript('');
                 setResponseDelta('');
-                // Transmit standalone 16kHz PCM WAV frame
-                wsRef.current.send(wavBytes.buffer);
+                const isStreaming = activeAgentRef.current?.stt?.kind === 'streaming';
+                if (!isStreaming) {
+                  // In batch mode, transmit standalone 16kHz PCM WAV frame
+                  wsRef.current.send(wavBytes.buffer);
+                }
                 // Immediately commit turn
                 wsRef.current.send(JSON.stringify({ type: 'audio.commit' }));
                 setState('thinking');
@@ -568,6 +588,7 @@ export const AssistantView: React.FC = () => {
         JSON.stringify({
           type: 'session.start',
           agent_id: currentAgent?.id,
+          stt_kind: currentAgent?.stt?.kind || 'batch',
           input_audio: { container: inputContainer, codec: inputCodec },
           config: { vad_engine: vadEngine, echo_mode: audioMode, barge_in: true },
         })
@@ -848,14 +869,30 @@ export const AssistantView: React.FC = () => {
             )}
           </div>
 
-          {transcript && (
+          {(transcript || partialCaption) && (
             <div>
-              <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-1">
-                You said:
+              <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-1 flex items-center justify-between">
+                <span>You said:</span>
+                {partialCaption && (
+                  <span className="text-[10px] text-sky-400 font-normal">Streaming captions</span>
+                )}
               </div>
               <p className="text-sm text-slate-200 bg-slate-900/60 p-3 rounded-lg border border-slate-800/80">
-                {transcript}
+                {partialCaption ? (
+                  <>
+                    <span className="text-white font-medium">{partialCaption.confirmed}</span>
+                    <span className="text-slate-400 italic">{partialCaption.tentative}</span>
+                  </>
+                ) : (
+                  transcript
+                )}
               </p>
+              {sttFallbackNotice && (
+                <div className="mt-1.5 inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300">
+                  <AlertCircle className="w-3 h-3 text-amber-400" />
+                  <span>{sttFallbackNotice}</span>
+                </div>
+              )}
             </div>
           )}
 

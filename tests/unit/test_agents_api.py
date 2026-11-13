@@ -217,8 +217,8 @@ async def test_create_and_list_and_get_agent():
         created = await _create_agent(client)
         agent_id = created["id"]
 
-        # schema_version must be 1
-        assert created["schema_version"] == 1
+        # schema_version must be 2 (bumped in S5 for streaming STT support)
+        assert created["schema_version"] == 2
 
         # List must include the new agent
         r = await client.get("/v1/agents", headers=HEADERS)

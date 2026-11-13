@@ -27,6 +27,19 @@ _INSTALL_JOBS: Dict[str, Dict[str, Any]] = {}
 # Curated Gallery Models catalog vetted for 8GB Mac
 GALLERY_CATALOG: List[Dict[str, Any]] = [
     {
+        "id": "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17",
+        "name": "Sherpa ONNX Zipformer 20M (Streaming)",
+        "category": "stt",
+        "provider": "stream-stt",
+        "kind": "streaming",
+        "size_mb": 42,
+        "ram_required_mb": 150,
+        "description": "Ultra-low-latency real-time streaming STT (Zipformer 20M). Delivers live partial captions with <50ms delay.",
+        "license": "Apache 2.0",
+        "quantization": "INT8",
+        "tags": ["streaming", "recommended", "realtime", "ultra-light"],
+    },
+    {
         "id": "whisper-base",
         "name": "Whisper Base (Multilingual)",
         "category": "stt",
@@ -377,6 +390,60 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                         llm_models.append(entry)
     except Exception:
         pass
+
+    # 4. Check for streaming STT models (via service and local directory)
+    try:
+        from app.providers.streaming_stt_client import StreamingSTTClient
+        stt_client = StreamingSTTClient()
+        models_data = await stt_client.list_models()
+        if models_data:
+            for sm in models_data:
+                mid = sm.get("id")
+                if mid and mid not in seen_ids:
+                    seen_ids.add(mid)
+                    stt_models.append({
+                        "id": mid,
+                        "name": sm.get("name", mid),
+                        "provider": "stream-stt",
+                        "kind": "streaming",
+                        "size_mb": sm.get("size_mb", 42),
+                    })
+    except Exception:
+        pass
+
+    try:
+        from pathlib import Path
+        streaming_base = Path("models/streaming-stt")
+        if streaming_base.exists():
+            for folder in streaming_base.iterdir():
+                if folder.is_dir() and (folder / "tokens.txt").exists():
+                    mid = folder.name
+                    if mid not in seen_ids:
+                        seen_ids.add(mid)
+                        stt_models.append({
+                            "id": mid,
+                            "name": "Sherpa ONNX Zipformer 20M (Streaming)",
+                            "provider": "stream-stt",
+                            "kind": "streaming",
+                            "size_mb": 42,
+                        })
+                    alias = "sherpa-onnx-streaming-zipformer-en-20M"
+                    if alias not in seen_ids:
+                        seen_ids.add(alias)
+                        stt_models.append({
+                            "id": alias,
+                            "name": "Sherpa ONNX Zipformer 20M (Streaming)",
+                            "provider": "stream-stt",
+                            "kind": "streaming",
+                            "size_mb": 42,
+                        })
+    except Exception:
+        pass
+
+    # Ensure kind is tagged on all STT models
+    for m in stt_models:
+        if "kind" not in m:
+            m["kind"] = "streaming" if m.get("provider") == "stream-stt" else "batch"
 
     return {
         "stt": stt_models,

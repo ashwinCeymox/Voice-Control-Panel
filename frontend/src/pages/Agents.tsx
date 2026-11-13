@@ -60,7 +60,7 @@ export const AgentsPage: React.FC = () => {
   // Installed models & voices
   const [installedModels, setInstalledModels] = useState<{
     llm: Array<{ id: string; name: string }>;
-    stt: Array<{ id: string; name: string }>;
+    stt: Array<{ id: string; name: string; kind?: string; provider?: string }>;
     tts: Array<{ id: string; name: string }>;
   }>({
     llm: [],
@@ -625,11 +625,58 @@ export const AgentsPage: React.FC = () => {
 
                 {/* STT Model */}
                 <div className="p-4 bg-slate-900/60 border border-slate-800 rounded-lg space-y-3">
-                  <span className="text-xs font-semibold text-sky-300 uppercase tracking-wider">
-                    STT Engine
-                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-sky-300 uppercase tracking-wider">
+                      STT Engine
+                    </span>
+                    <div className="inline-flex rounded-md p-0.5 bg-slate-950 border border-slate-800 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const batchModels = installedModels.stt.filter((m) => m.kind !== 'streaming');
+                          const firstBatch = batchModels[0]?.id || 'whisper-base';
+                          setSelectedAgent({
+                            ...selectedAgent,
+                            stt: { ...selectedAgent.stt, kind: 'batch', model: firstBatch },
+                          });
+                        }}
+                        className={`px-2.5 py-1 rounded transition-colors ${
+                          (selectedAgent.stt.kind || 'batch') === 'batch'
+                            ? 'bg-sky-600 text-white font-medium'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        Batch
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const streamModels = installedModels.stt.filter((m) => m.kind === 'streaming');
+                          const firstStream = streamModels[0]?.id || 'sherpa-onnx-streaming-zipformer-en-20M';
+                          setSelectedAgent({
+                            ...selectedAgent,
+                            stt: {
+                              ...selectedAgent.stt,
+                              kind: 'streaming',
+                              model: firstStream,
+                              fallback_model: selectedAgent.stt.fallback_model || 'whisper-base',
+                            },
+                          });
+                        }}
+                        className={`px-2.5 py-1 rounded transition-colors ${
+                          selectedAgent.stt.kind === 'streaming'
+                            ? 'bg-sky-600 text-white font-medium'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        Streaming
+                      </button>
+                    </div>
+                  </div>
                   <div>
-                    <label className="text-[11px] text-slate-400 block mb-1">Model</label>
+                    <label className="text-[11px] text-slate-400 block mb-1">
+                      {selectedAgent.stt.kind === 'streaming' ? 'Streaming Model' : 'Batch Model'}
+                    </label>
                     <select
                       value={selectedAgent.stt.model}
                       onChange={(e) =>
@@ -640,17 +687,46 @@ export const AgentsPage: React.FC = () => {
                       }
                       className="w-full bg-slate-950 border border-slate-800 rounded-md p-2 text-xs text-slate-200 focus:outline-none"
                     >
-                      {installedModels.stt.length === 0 ? (
-                        <option value="" disabled>No STT model installed</option>
+                      {installedModels.stt
+                        .filter((m) => (selectedAgent.stt.kind === 'streaming' ? m.kind === 'streaming' : m.kind !== 'streaming'))
+                        .length === 0 ? (
+                        <option value="" disabled>No {selectedAgent.stt.kind || 'batch'} model installed</option>
                       ) : (
-                        installedModels.stt.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.name !== m.id ? `${m.name} (${m.id})` : m.id}
-                          </option>
-                        ))
+                        installedModels.stt
+                          .filter((m) => (selectedAgent.stt.kind === 'streaming' ? m.kind === 'streaming' : m.kind !== 'streaming'))
+                          .map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.name !== m.id ? `${m.name} (${m.id})` : m.id}
+                            </option>
+                          ))
                       )}
                     </select>
                   </div>
+                  {selectedAgent.stt.kind === 'streaming' && (
+                    <div>
+                      <label className="text-[11px] text-slate-400 block mb-1">
+                        Fallback Model (automatic failover if streaming unavailable)
+                      </label>
+                      <select
+                        value={selectedAgent.stt.fallback_model || 'whisper-base'}
+                        onChange={(e) =>
+                          setSelectedAgent({
+                            ...selectedAgent,
+                            stt: { ...selectedAgent.stt, fallback_model: e.target.value },
+                          })
+                        }
+                        className="w-full bg-slate-950 border border-slate-800 rounded-md p-2 text-xs text-slate-200 focus:outline-none"
+                      >
+                        {installedModels.stt
+                          .filter((m) => m.kind !== 'streaming')
+                          .map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.name !== m.id ? `${m.name} (${m.id})` : m.id}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  )}
                   <div>
                     <label className="text-[11px] text-slate-400 block mb-1">Language</label>
                     <select

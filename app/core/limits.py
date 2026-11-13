@@ -74,3 +74,4 @@ class BackendLimiter:
 stt_limiter = BackendLimiter(backend_cap=5, per_key_cap=5, queue_timeout=5.0)
 llm_limiter = BackendLimiter(backend_cap=5, per_key_cap=5, queue_timeout=5.0)
 tts_limiter = BackendLimiter(backend_cap=5, per_key_cap=5, queue_timeout=5.0)
+stream_limiter = BackendLimiter(backend_cap=5, per_key_cap=5, queue_timeout=5.0)

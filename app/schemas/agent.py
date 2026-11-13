@@ -13,6 +13,8 @@ class LLMConfig(BaseModel):
 class STTConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
     model: str = Field(..., min_length=1)
+    kind: str = Field(default="batch", pattern="^(batch|streaming)$")
+    fallback_model: Optional[str] = None
     language: str = "auto"
 
 
@@ -88,7 +90,7 @@ class AgentResponse(BaseModel):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     last_used_at: Optional[str] = None
-    schema_version: int = 1
+    schema_version: int = 2
 
 
 class AgentListResponse(BaseModel):

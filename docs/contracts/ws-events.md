@@ -20,6 +20,7 @@
   "type": "session.start",
   "session_id": "optional-uuid-or-null",
   "agent_id": "optional-agent-uuid-or-null",
+  "stt_kind": "batch | streaming",
   "input_audio": {
     "container": "wav",
     "codec": "pcm",
@@ -30,6 +31,26 @@
     "echo_mode": "laptop_speakers",
     "barge_in": true
   }
+}
+```
+
+### `stream.start`
+Emitted by streaming clients on session or stream initialization.
+```json
+{
+  "type": "stream.start",
+  "model": "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17",
+  "language": "en",
+  "sample_rate": 16000,
+  "format": "pcm_s16le"
+}
+```
+
+### `stream.cancel`
+Emitted by client to immediately abort an in-flight transcription stream.
+```json
+{
+  "type": "stream.cancel"
 }
 ```
 
@@ -89,12 +110,37 @@ Emitted when user barges in or clicks interrupt.
 }
 ```
 
+### `transcript.partial`
+Emitted periodically (~3-5 times/sec) as audio is streamed.
+- Invariant: `confirmed` prefix is strictly monotonic and NEVER mutates.
+- `tentative`: ephemeral tail subject to refinement until confirmed.
+```json
+{
+  "type": "transcript.partial",
+  "turn_id": "uuid-str",
+  "seq": 1,
+  "confirmed": "hello",
+  "tentative": " how are"
+}
+```
+
 ### `transcript.completed`
+Final recognized utterance after commit/flush. Only this final transcript is forwarded to the LLM.
 ```json
 {
   "type": "transcript.completed",
   "turn_id": "uuid-str",
-  "text": "User utterance transcribed."
+  "text": "hello how are you"
+}
+```
+
+### `stt.fallback`
+Emitted when the streaming engine encounters an error, timeout, or overload, informing the client that transcription has fallen back automatically to the batch engine.
+```json
+{
+  "type": "stt.fallback",
+  "turn_id": "uuid-str",
+  "reason": "Streaming STT engine connection refused. Falling back to batch Whisper."
 }
 ```
 
@@ -152,3 +198,24 @@ Emitted when user barges in or clicks interrupt.
   "request_id": "req-id"
 }
 ```
+
+---
+
+## 4. Standalone Public Streaming STT Endpoint (`WS /v1/audio/transcriptions/stream`)
+
+Dedicated endpoint for live partial transcription outside the voice conversational turn pipeline.
+
+### Connection & Auth
+- **URL:** `WS /v1/audio/transcriptions/stream` (with optional `?ticket={ticket}`)
+- **Header:** `Authorization: Bearer <key>` or `xi-api-key: <key>`
+- **Scope Requirement:** Key must have `stt_stream` scope (or `admin` role). Missing scope receives `WS 1008 Policy Violation` with error envelope.
+- **Kill Switch:** When `STT_STREAM_ENABLED=False`, receives `stt.fallback` and closes with `WS 1013 Try Again Later`.
+- **Concurrency & Rate Limit:** Enforced via `stream_limiter` (`max_active_streams` per key and globally). Exceeded limit returns 429/503.
+
+### Flow
+1. Client connects with ticket or header.
+2. (Optional) Client sends JSON `stream.start`.
+3. Client streams binary PCM frames (`16000Hz, 1 channel, 16-bit little-endian`).
+4. Server yields `transcript.partial` frames in real time (~3-5 updates/sec).
+5. Client sends `audio.commit` when speech finishes.
+6. Server yields `transcript.completed` (with full final text) and closes or waits for next stream.

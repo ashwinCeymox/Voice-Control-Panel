@@ -14,7 +14,7 @@ DEFAULT_AGENT = {
     "description": "Standard concise conversational voice assistant optimized for 8GB Mac.",
     "system_prompt": "You are a concise, helpful voice AI assistant. Keep responses natural, direct, and under two sentences.",
     "llm": {"model": "llama-3.2-1b-instruct", "temperature": 0.7, "max_tokens": 512},
-    "stt": {"model": "whisper-base", "language": "auto"},
+    "stt": {"model": "whisper-base", "kind": "batch", "fallback_model": None, "language": "auto"},
     "tts": {"engine": "kokoro", "voice_id": "af_heart", "speed": 1.0},
     "vad": {
         "engine": "silero",
@@ -32,12 +32,27 @@ DEFAULT_AGENT = {
         "min_silence_ms": 800,
     },
     "audio": {"echo_mode": "laptop_speakers", "barge_in": True},
-    "schema_version": 1,
+    "schema_version": 2,
 }
 
 _ACTIVE_AGENT_ID: str = "agent-default-assistant"
 _ACTIVE_LOAD_STATE: str = "ready"  # idle, loading, ready, error
 _LOAD_LOCK = asyncio.Lock()
+
+
+def _normalize_stt(stt_raw: Dict[str, Any]) -> Dict[str, Any]:
+    merged = {
+        "model": "whisper-base",
+        "kind": "batch",
+        "fallback_model": None,
+        "language": "auto",
+        **stt_raw,
+    }
+    if "kind" not in stt_raw:
+        merged["kind"] = "batch"
+    if "fallback_model" not in stt_raw:
+        merged["fallback_model"] = None
+    return merged
 
 
 def _normalize_vad(vad_raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -87,7 +102,7 @@ class AgentManager:
                     "description": r["description"],
                     "system_prompt": r["system_prompt"],
                     "llm": json.loads(r["llm_json"]),
-                    "stt": json.loads(r["stt_json"]),
+                    "stt": _normalize_stt(json.loads(r["stt_json"])),
                     "tts": json.loads(r["tts_json"]),
                     "vad": _normalize_vad(json.loads(r["vad_json"])),
                     "audio": json.loads(r["audio_json"]),
@@ -95,7 +110,7 @@ class AgentManager:
                     "created_at": r["created_at"],
                     "updated_at": r["updated_at"],
                     "last_used_at": r["last_used_at"],
-                    "schema_version": 1,
+                    "schema_version": 2,
                 })
             return agents
 
@@ -114,7 +129,7 @@ class AgentManager:
                 "description": r["description"],
                 "system_prompt": r["system_prompt"],
                 "llm": json.loads(r["llm_json"]),
-                "stt": json.loads(r["stt_json"]),
+                "stt": _normalize_stt(json.loads(r["stt_json"])),
                 "tts": json.loads(r["tts_json"]),
                 "vad": _normalize_vad(json.loads(r["vad_json"])),
                 "audio": json.loads(r["audio_json"]),
@@ -122,7 +137,7 @@ class AgentManager:
                 "created_at": r["created_at"],
                 "updated_at": r["updated_at"],
                 "last_used_at": r["last_used_at"],
-                "schema_version": 1,
+                "schema_version": 2,
             }
 
     @staticmethod

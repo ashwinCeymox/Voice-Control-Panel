@@ -17,6 +17,8 @@ async def health_live():
 async def health_ready():
     localai_ok = False
     localtts_ok = False
+    streaming_stt_ok = False
+    streaming_info = {}
 
     async with httpx.AsyncClient(timeout=2.0) as client:
         try:
@@ -33,6 +35,15 @@ async def health_ready():
         except Exception:
             localtts_ok = False
 
+        if settings.STT_STREAM_ENABLED:
+            try:
+                r = await client.get(f"{settings.STREAMING_STT_URL}/health")
+                if r.status_code == 200:
+                    streaming_stt_ok = True
+                    streaming_info = r.json()
+            except Exception:
+                streaming_stt_ok = False
+
     status = "ready" if (localai_ok and localtts_ok) else "degraded"
     return {
         "status": status,
@@ -45,6 +56,17 @@ async def health_ready():
                 "reachable": localtts_ok,
                 "url": settings.LOCAL_TTS_HTTP_BASE_URL,
             },
+            "streaming_stt": {
+                "reachable": streaming_stt_ok,
+                "status": "ready" if streaming_stt_ok else "offline",
+                "url": settings.STREAMING_STT_URL,
+                "model": streaming_info.get("model", settings.STREAMING_STT_DEFAULT_MODEL),
+            },
+        },
+        "streaming_stt": {
+            "status": "ready" if streaming_stt_ok else "offline",
+            "reachable": streaming_stt_ok,
+            "model": streaming_info.get("model", settings.STREAMING_STT_DEFAULT_MODEL),
         },
     }
 

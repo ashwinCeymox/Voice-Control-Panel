@@ -12,8 +12,21 @@ class SessionStartEvent(BaseModel):
     type: Literal["session.start"] = "session.start"
     session_id: Optional[str] = None
     agent_id: Optional[str] = None
+    stt_kind: Optional[str] = None  # "batch" | "streaming"
     input_audio: InputAudioConfig = Field(default_factory=InputAudioConfig)
     config: Optional[Dict[str, Any]] = None
+
+
+class StreamStartEvent(BaseModel):
+    type: Literal["stream.start"] = "stream.start"
+    model: Optional[str] = None
+    language: Optional[str] = "en"
+    sample_rate: int = 16000
+    format: str = "pcm_s16le"
+
+
+class StreamCancelEvent(BaseModel):
+    type: Literal["stream.cancel"] = "stream.cancel"
 
 
 class AudioCommitEvent(BaseModel):
@@ -44,6 +57,20 @@ class TranscriptCompletedEvent(BaseModel):
     type: Literal["transcript.completed"] = "transcript.completed"
     turn_id: str
     text: str
+
+
+class TranscriptPartialEvent(BaseModel):
+    type: Literal["transcript.partial"] = "transcript.partial"
+    seq: int = 0
+    confirmed: str = ""
+    tentative: str = ""
+    turn_id: Optional[str] = None
+
+
+class STTFallbackEvent(BaseModel):
+    type: Literal["stt.fallback"] = "stt.fallback"
+    reason: str
+    turn_id: Optional[str] = None
 
 
 class ResponseTextDeltaEvent(BaseModel):
