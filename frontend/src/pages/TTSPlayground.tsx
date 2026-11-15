@@ -2,10 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { Play, Square, RefreshCw, Volume2, AlertCircle } from 'lucide-react';
 import { StreamingPCMPlayer } from '../audio/pcmPlayer';
 import { Voice } from '../types/api';
+import { getApiBase, getApiKey } from '../api/client';
 
-const API_BASE = 'http://127.0.0.1:8000';
-const DEFAULT_KEY = 'dev-voice-key-12345';
-const AUTH_HEADERS = { Authorization: `Bearer ${DEFAULT_KEY}` };
+const API_BASE = getApiBase();
+const AUTH_HEADERS = {
+  get Authorization() {
+    return `Bearer ${getApiKey()}`;
+  },
+};
 
 export const TTSPlayground: React.FC = () => {
   const [text, setText] = useState(
@@ -83,7 +87,7 @@ export const TTSPlayground: React.FC = () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${DEFAULT_KEY}`,
+          ...AUTH_HEADERS,
         },
         body: JSON.stringify({
           text,

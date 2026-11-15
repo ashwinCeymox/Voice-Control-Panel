@@ -9,10 +9,14 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { TranscriptResponse } from '../types/api';
+import { getApiBase, getApiKey } from '../api/client';
 
-const API_BASE = 'http://127.0.0.1:8000';
-const DEFAULT_KEY = 'dev-voice-key-12345';
-const AUTH_HEADERS = { Authorization: `Bearer ${DEFAULT_KEY}` };
+const API_BASE = getApiBase();
+const AUTH_HEADERS = {
+  get Authorization() {
+    return `Bearer ${getApiKey()}`;
+  },
+};
 
 export const STTPlayground: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
@@ -74,7 +78,7 @@ export const STTPlayground: React.FC = () => {
 
       const res = await fetch(`${API_BASE}/v1/audio/transcriptions`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${DEFAULT_KEY}` },
+        headers: AUTH_HEADERS,
         body: formData,
       });
 

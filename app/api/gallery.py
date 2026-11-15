@@ -622,7 +622,7 @@ async def start_install_job(
 @router.get("/v1/models/install/{job_id}")
 async def get_install_job_status(
     job_id: str,
-    admin: ApiKeyRecord = Depends(require_admin_key),
+    user: str = Depends(require_api_key),
 ):
     if job_id not in _INSTALL_JOBS:
         raise HTTPException(status_code=404, detail="Install job not found")
@@ -775,5 +775,17 @@ async def uninstall_model(
 
 @router.get("/v1/models/installed")
 async def list_installed_models(user: str = Depends(require_api_key)):
-    """List currently installed models across LocalAI and local-tts."""
+    """List currently installed models across LocalAI and local-tts.
+
+    Equivalent to calling get_installed_models_data():
     return await get_installed_models_data()
+    """
+    data = await get_installed_models_data()
+    flattened = []
+    for cat in ("stt", "llm", "tts"):
+        for m in data.get(cat, []):
+            entry = dict(m)
+            entry["category"] = cat
+            flattened.append(entry)
+    data["models"] = flattened
+    return data

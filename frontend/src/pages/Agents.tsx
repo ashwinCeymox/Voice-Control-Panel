@@ -17,10 +17,14 @@ import {
   X,
 } from 'lucide-react';
 import { Agent, Voice } from '../types/api';
+import { getApiBase, getApiKey } from '../api/client';
 
-const API_BASE = 'http://127.0.0.1:8000';
-const DEFAULT_KEY = 'dev-voice-key-12345';
-const AUTH_HEADERS = { Authorization: `Bearer ${DEFAULT_KEY}` };
+const API_BASE = getApiBase();
+const AUTH_HEADERS = {
+  get Authorization() {
+    return `Bearer ${getApiKey()}`;
+  },
+};
 
 const SYSTEM_PROMPT_PRESETS = [
   {

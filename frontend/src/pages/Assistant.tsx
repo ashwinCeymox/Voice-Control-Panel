@@ -14,12 +14,16 @@ import { AudioOrb, OrbState } from '../components/AudioOrb';
 import { StreamingPCMPlayer } from '../audio/pcmPlayer';
 import { VadController } from '../audio/vadController';
 import { ServerEvent, Agent } from '../types/api';
+import { getApiKey } from '../api/client';
 
 const host = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : '127.0.0.1';
 const API_BASE = `http://${host}:8000`;
 const WS_BASE = `ws://${host}:8000`;
-const DEFAULT_KEY = 'dev-voice-key-12345';
-const AUTH_HEADERS = { Authorization: `Bearer ${DEFAULT_KEY}` };
+const AUTH_HEADERS = {
+  get Authorization() {
+    return `Bearer ${getApiKey()}`;
+  },
+};
 
 type AssistantState = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
 

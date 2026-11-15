@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   Cpu,
   Download,
@@ -9,12 +9,10 @@ import {
   Activity,
   Search,
   Loader2,
+  RefreshCw,
 } from 'lucide-react';
 import { GalleryModel, SystemResources, InstallJob } from '../types/api';
-
-const API_BASE = 'http://127.0.0.1:8000';
-const API_KEY = 'dev-voice-key-12345';
-const AUTH_HEADERS = { Authorization: `Bearer ${API_KEY}` };
+import { getApiBase, getAuthHeaders } from '../api/client';
 
 export const ModelsRegistry: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'explore' | 'installed'>('explore');
@@ -28,33 +26,58 @@ export const ModelsRegistry: React.FC = () => {
   const [uninstallingId, setUninstallingId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
 
-  useEffect(() => {
-    fetchData();
-  }, [categoryFilter]);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
+      const base = getApiBase();
+      const headers = getAuthHeaders(false);
+
       // Fetch system resources
-      const resRes = await fetch(`${API_BASE}/v1/system/resources`, { headers: AUTH_HEADERS });
-      if (resRes.ok) {
-        const resData: SystemResources = await resRes.json();
-        setResources(resData);
+      try {
+        const resRes = await fetch(`${base}/v1/system/resources`, { headers });
+        if (resRes.ok) {
+          const resData: SystemResources = await resRes.json();
+          setResources(resData);
+        }
+      } catch (e) {
+        console.warn('Could not fetch system resources:', e);
       }
 
-      // Fetch gallery models
-      const catParam = categoryFilter !== 'all' ? `category=${categoryFilter}` : '';
-      const galRes = await fetch(`${API_BASE}/v1/gallery/models?${catParam}`, { headers: AUTH_HEADERS });
-      if (galRes.ok) {
-        const galData = await galRes.json();
-        setModels(galData.models || []);
+      // Fetch gallery models with query parameters
+      const params = new URLSearchParams();
+      if (categoryFilter && categoryFilter !== 'all') {
+        params.set('category', categoryFilter);
       }
+      if (searchQuery.trim()) {
+        params.set('q', searchQuery.trim());
+      }
+      const qs = params.toString() ? `?${params.toString()}` : '';
+
+      const galRes = await fetch(`${base}/v1/gallery/models${qs}`, { headers });
+      if (!galRes.ok) {
+        const errData = await galRes.json().catch(() => ({}));
+        const errMsg =
+          errData?.error?.message ||
+          errData?.detail ||
+          `Failed to fetch models (HTTP ${galRes.status})`;
+        setFeedback({ type: 'error', msg: errMsg });
+        setModels([]);
+        return;
+      }
+      const galData = await galRes.json();
+      setModels(galData.models || []);
     } catch (err: any) {
       console.error('Error loading gallery:', err);
+      setFeedback({ type: 'error', msg: err?.message || 'Network error loading gallery' });
+      setModels([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, [categoryFilter, searchQuery]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
   const handleInstallClick = (model: GalleryModel) => {
     if (model.fit_score < 50) {
@@ -67,14 +90,19 @@ export const ModelsRegistry: React.FC = () => {
   const executeInstall = async (modelId: string) => {
     setWarningModel(null);
     try {
-      const res = await fetch(`${API_BASE}/v1/models/install`, {
+      const base = getApiBase();
+      const res = await fetch(`${base}/v1/models/install`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
+        headers: getAuthHeaders(true),
         body: JSON.stringify({ model_id: modelId }),
       });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || 'Install request failed');
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(
+          errData?.error?.message ||
+          errData?.detail ||
+          `Install request failed (HTTP ${res.status})`
+        );
       }
       const job: InstallJob = await res.json();
       setActiveJobs((prev) => ({ ...prev, [modelId]: job }));
@@ -88,24 +116,59 @@ export const ModelsRegistry: React.FC = () => {
   const pollJob = (jobId: string, modelId: string) => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${API_BASE}/v1/models/install/${jobId}`, { headers: AUTH_HEADERS });
-        if (res.ok) {
-          const updated: InstallJob = await res.json();
-          setActiveJobs((prev) => ({ ...prev, [modelId]: updated }));
-
-          if (updated.status === 'completed') {
-            clearInterval(interval);
-            setFeedback({ type: 'success', msg: `Model ${modelId} installed successfully!` });
-            setTimeout(() => setFeedback(null), 5000);
-            fetchData();
-          } else if (updated.status === 'failed') {
-            clearInterval(interval);
-            setFeedback({ type: 'error', msg: updated.error_message || 'Installation failed' });
-            setTimeout(() => setFeedback(null), 6000);
-          }
+        const base = getApiBase();
+        const res = await fetch(`${base}/v1/models/install/${jobId}`, {
+          headers: getAuthHeaders(false),
+        });
+        if (!res.ok) {
+          clearInterval(interval);
+          const errData = await res.json().catch(() => ({}));
+          const errMsg =
+            errData?.error?.message ||
+            errData?.detail ||
+            `Installation progress poll failed (HTTP ${res.status})`;
+          setActiveJobs((prev) => {
+            const copy = { ...prev };
+            delete copy[modelId];
+            return copy;
+          });
+          setFeedback({ type: 'error', msg: errMsg });
+          setTimeout(() => setFeedback(null), 6000);
+          return;
         }
-      } catch {
+
+        const updated: InstallJob = await res.json();
+        setActiveJobs((prev) => ({ ...prev, [modelId]: updated }));
+
+        if (updated.status === 'completed') {
+          clearInterval(interval);
+          setActiveJobs((prev) => {
+            const copy = { ...prev };
+            delete copy[modelId];
+            return copy;
+          });
+          setFeedback({ type: 'success', msg: `Model ${modelId} installed successfully!` });
+          setTimeout(() => setFeedback(null), 5000);
+          await fetchData();
+        } else if (updated.status === 'failed') {
+          clearInterval(interval);
+          setActiveJobs((prev) => {
+            const copy = { ...prev };
+            delete copy[modelId];
+            return copy;
+          });
+          setFeedback({ type: 'error', msg: updated.error_message || 'Installation failed' });
+          setTimeout(() => setFeedback(null), 6000);
+        }
+      } catch (err: any) {
         clearInterval(interval);
+        setActiveJobs((prev) => {
+          const copy = { ...prev };
+          delete copy[modelId];
+          return copy;
+        });
+        setFeedback({ type: 'error', msg: err?.message || 'Polling network error' });
+        setTimeout(() => setFeedback(null), 6000);
       }
     }, 800);
   };
@@ -114,13 +177,18 @@ export const ModelsRegistry: React.FC = () => {
     if (!confirm(`Are you sure you want to uninstall ${modelId}?`)) return;
     setUninstallingId(modelId);
     try {
-      const res = await fetch(`${API_BASE}/v1/models/${encodeURIComponent(modelId)}`, {
+      const base = getApiBase();
+      const res = await fetch(`${base}/v1/models/${encodeURIComponent(modelId)}`, {
         method: 'DELETE',
-        headers: AUTH_HEADERS,
+        headers: getAuthHeaders(false),
       });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || 'Uninstall failed');
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(
+          errData?.error?.message ||
+          errData?.detail ||
+          `Uninstall failed (HTTP ${res.status})`
+        );
       }
       setFeedback({ type: 'success', msg: `Model ${modelId} uninstalled and freed from disk.` });
       setTimeout(() => setFeedback(null), 4000);
@@ -189,36 +257,46 @@ export const ModelsRegistry: React.FC = () => {
           </p>
         </div>
 
-        {resources && (
-          <div className="flex items-center gap-3 bg-slate-950 border border-slate-800 px-4 py-2 rounded-xl text-xs">
-            <div className="flex items-center gap-1.5 text-slate-300">
-              <Activity className="w-3.5 h-3.5 text-indigo-400" />
-              <span>RAM:</span>
-              <span className="font-mono text-indigo-300 font-semibold">
-                {(resources.memory.available_mb / 1024).toFixed(1)} GB Avail
-              </span>
-              <span className="text-slate-500">
-                / {(resources.memory.total_mb / 1024).toFixed(1)} GB
-              </span>
-            </div>
-            <div className="h-3 w-px bg-slate-800" />
-            <div className="flex items-center gap-1.5 text-slate-300">
-              <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Disk:</span>
-              <span className="font-mono text-emerald-300 font-semibold">
-                {resources.disk.free_gb.toFixed(0)} GB Free
-              </span>
-            </div>
-            {resources.hardware?.has_metal_gpu && (
-              <>
-                <div className="h-3 w-px bg-slate-800" />
-                <span className="px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20 font-mono">
-                  Metal GPU
+        <div className="flex items-center gap-3">
+          {resources && (
+            <div className="flex items-center gap-3 bg-slate-950 border border-slate-800 px-4 py-2 rounded-xl text-xs">
+              <div className="flex items-center gap-1.5 text-slate-300">
+                <Activity className="w-3.5 h-3.5 text-indigo-400" />
+                <span>RAM:</span>
+                <span className="font-mono text-indigo-300 font-semibold">
+                  {(resources.memory.available_mb / 1024).toFixed(1)} GB Avail
                 </span>
-              </>
-            )}
-          </div>
-        )}
+                <span className="text-slate-500">
+                  / {(resources.memory.total_mb / 1024).toFixed(1)} GB
+                </span>
+              </div>
+              <div className="h-3 w-px bg-slate-800" />
+              <div className="flex items-center gap-1.5 text-slate-300">
+                <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Disk:</span>
+                <span className="font-mono text-emerald-300 font-semibold">
+                  {resources.disk.free_gb.toFixed(0)} GB Free
+                </span>
+              </div>
+              {resources.hardware?.has_metal_gpu && (
+                <>
+                  <div className="h-3 w-px bg-slate-800" />
+                  <span className="px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20 font-mono">
+                    Metal GPU
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+          <button
+            onClick={() => fetchData()}
+            disabled={loading}
+            className="p-2.5 bg-slate-950 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-slate-200 rounded-xl transition disabled:opacity-50"
+            title="Refresh Registry"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-indigo-400' : ''}`} />
+          </button>
+        </div>
       </div>
 
       {feedback && (
