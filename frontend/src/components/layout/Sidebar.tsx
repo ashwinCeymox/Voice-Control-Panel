@@ -1,7 +1,23 @@
 import React from 'react';
-import { Mic, Bot, Volume2, AudioLines, Library, Cpu, Settings, Activity } from 'lucide-react';
+import {
+  Mic, Bot, Volume2, AudioLines, Library, Cpu, Settings, Activity,
+  BarChart3, Key, Code2, FileText, Sliders
+} from 'lucide-react';
 
-export type TabId = 'assistant' | 'stt' | 'vad-test' | 'agents' | 'tts' | 'voices' | 'models' | 'system';
+export type TabId =
+  | 'assistant'
+  | 'stt'
+  | 'vad-test'
+  | 'agents'
+  | 'tts'
+  | 'voices'
+  | 'models'
+  | 'system'
+  | 'dev-overview'
+  | 'dev-keys'
+  | 'dev-snippets'
+  | 'dev-logs'
+  | 'dev-settings';
 
 interface SidebarProps {
   activeTab: TabId;
@@ -17,7 +33,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
     { id: 'tts', label: 'Text-to-Speech', icon: Volume2 },
     { id: 'voices', label: 'Voice Library', icon: Library, section: 'Resources' },
     { id: 'models', label: 'Models & Engines', icon: Cpu },
-    { id: 'system', label: 'System & Health', icon: Settings },
+    { id: 'dev-overview', label: 'Overview', icon: BarChart3, section: 'Developers' },
+    { id: 'dev-keys', label: 'API Keys', icon: Key },
+    { id: 'dev-snippets', label: 'Docs & Snippets', icon: Code2 },
+    { id: 'dev-logs', label: 'Request Log', icon: FileText },
+    { id: 'dev-settings', label: 'Settings', icon: Sliders },
+    { id: 'system', label: 'System & Health', icon: Settings, section: 'Platform' },
   ];
 
   return (

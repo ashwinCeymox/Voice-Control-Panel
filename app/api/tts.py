@@ -49,6 +49,7 @@ async def text_to_speech_stream(
     key: ApiKeyRecord = Depends(require_scope("tts")),
 ):
     await KeyManager.check_quota(key, cost_type="audio")
+    KeyManager.check_model_allowed(key, request.model_id or "kokoro")
     if len(request.text) > settings.MAX_TTS_TEXT_CHARS:
         raise PayloadTooLargeError(
             f"TTS text length ({len(request.text)} characters) exceeds limit of {settings.MAX_TTS_TEXT_CHARS}"

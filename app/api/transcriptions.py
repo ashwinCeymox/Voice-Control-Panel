@@ -23,6 +23,7 @@ async def create_transcription(
     key: ApiKeyRecord = Depends(require_scope("stt")),
 ):
     await KeyManager.check_quota(key, cost_type="audio")
+    KeyManager.check_model_allowed(key, model or settings.LOCALAI_STT_MODEL)
     if settings.LOCALAI_ALLOWED_STT_MODELS:
         allowed = [m.strip() for m in settings.LOCALAI_ALLOWED_STT_MODELS.split(",") if m.strip()]
         req_model = model or settings.LOCALAI_STT_MODEL

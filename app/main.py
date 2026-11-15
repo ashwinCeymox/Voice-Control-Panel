@@ -13,6 +13,8 @@ from app.api.system import system_router
 from app.api.gallery import gallery_router
 from app.api.agents import agents_router
 from app.api.admin_keys import router as admin_keys_router
+from app.api.admin_profiles import router as admin_profiles_router
+from app.api.admin_usage import router as admin_usage_router
 from app.api.metrics import router as metrics_router
 from app.api.stream_stt import router as stream_stt_router
 from app.core.config import settings
@@ -126,6 +128,8 @@ app.include_router(system_router)
 app.include_router(gallery_router)
 app.include_router(agents_router)
 app.include_router(admin_keys_router)
+app.include_router(admin_profiles_router)
+app.include_router(admin_usage_router)
 app.include_router(stream_stt_router)
 app.include_router(metrics_router)
 

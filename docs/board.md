@@ -62,3 +62,20 @@
 | **M2-QUOTA** | Daily/monthly key quotas (`max_daily_tokens`, `max_daily_audio_seconds`) & 429 gate | BE-KEYS | `gemini-3.8-flash-high` | **DONE** | None | `app/services/key_manager.py`, `tests/unit/test_m2_quotas.py` |
 | **M2-METRICS** | Prometheus `/metrics` endpoint with counters, gauges, and latency buckets | BE-OPS | `gemini-3.8-flash-high` | **DONE** | None | `app/api/metrics.py`, `tests/unit/test_m2_metrics.py` |
 | **M2-BACKUP** | Automated SQLite snapshot backup script and admin backup endpoint | BE-OPS | `gemini-3.8-flash-high` | **DONE** | None | `scripts/backup-db.sh`, `app/api/system.py` |
+
+---
+
+# Multi-Agent Task Board: Developer Dashboard Plan
+
+**Goal:** Admin dashboard for Usage, Profiles, API Keys (cards, pause/rotate/revoke), Request Log, and Copyable Snippets.  
+**Rules:** Failing test first, handoff in `docs/handoff/<id>.md`, only ORCH merges, no secrets or customer transcripts in logs/exports.
+
+| ID | Task | Owner | Model | Status | Blocked By | Deliverable / Handoff |
+|---|---|---|---|---|---|---|
+| **D0** | Preconditions check & `pre-dashboard` tag | ORCH | `gemini-3.8-flash-high` | **DONE** | None | `pre-dashboard` tag, preconditions verified |
+| **D1-BACKEND** | Profiles CRUD, Key extensions (profile_id, status, model/ip allowlist, rotate, patch), settings, audit log | BE | `gemini-3.8-flash-high` | **DONE** | D0 | `docs/handoff/D1.md`, `app/api/admin_profiles.py`, `app/api/admin_keys.py` |
+| **D2-USAGE** | Usage events pipeline (latency, ttfb, units), summary, timeseries, paged request log with CSV export, models/status | BE | `gemini-3.8-flash-high` | **DONE** | D1-BACKEND | `docs/handoff/D2.md`, `app/api/admin_usage.py`, `app/services/usage_service.py` |
+| **D3-UI** | Developers sidebar group: Overview cards/charts, Profiles & Key cards, Create key modal with one-time copy, Request log, Settings | FE | `gemini-3.8-flash-high` | **DONE** | D1-BACKEND, D2-USAGE | `docs/handoff/D3.md`, `frontend/src/pages/developers/` |
+| **D4-SNIPPETS** | Snippet templates & renderer (Python, curl, JS, OpenAI SDK), Docs & Snippets page with Try-it | FE + BE | `gemini-3.8-flash-high` | **DONE** | D1-BACKEND | `docs/handoff/D4.md`, `frontend/src/pages/developers/DocsSnippets.tsx`, `docs/snippets/` |
+| **D5-QA** | Automated snippet runner tests, IP allowlist tests, rotation tests, privacy audit | QA | `gemini-3.8-flash-high` | **DONE** | D2-USAGE, D4-SNIPPETS | `docs/reviews/developer-dashboard-qa.md`, `tests/unit/test_d5_snippets_and_qa.py` |
+| **D6-ROLLOUT** | Verification, LAN settings, and `dashboard-complete` tag | ORCH | `gemini-3.8-flash-high` | **DONE** | D5-QA | `docs/handoff/D6-ROLLOUT.md`, `dashboard-complete` tag |

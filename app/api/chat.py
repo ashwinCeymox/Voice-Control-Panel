@@ -21,6 +21,7 @@ async def chat_completions(
     key: ApiKeyRecord = Depends(require_scope("llm")),
 ):
     await KeyManager.check_quota(key, cost_type="tokens")
+    KeyManager.check_model_allowed(key, request.model or settings.LOCALAI_LLM_MODEL)
     if settings.LOCALAI_ALLOWED_LLM_MODELS:
         allowed = [m.strip() for m in settings.LOCALAI_ALLOWED_LLM_MODELS.split(",") if m.strip()]
         req_model = request.model or settings.LOCALAI_LLM_MODEL

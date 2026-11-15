@@ -1,12 +1,12 @@
 """
-Admin API router for API key management, permissions, and usage reporting.
+Admin API router for API key management, permissions, usage reporting, settings, and audit logs.
 """
 import os
 from pathlib import Path
 import time
 from typing import Any, Dict, List, Optional
 import aiosqlite
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from app.core.config import settings
 from app.core.security import require_admin_key
@@ -25,6 +25,33 @@ class CreateKeyRequest(BaseModel):
     max_daily_tokens: Optional[int] = Field(None, ge=1, description="Daily token quota cap")
     max_daily_audio_seconds: Optional[float] = Field(None, ge=1.0, description="Daily audio duration quota cap in seconds")
     expires_in_days: Optional[float] = None
+    profile_id: Optional[str] = None
+    model_allowlist: Optional[List[str]] = None
+    ip_allowlist: Optional[List[str]] = None
+
+
+class PatchKeyRequest(BaseModel):
+    name: Optional[str] = None
+    status: Optional[str] = Field(None, pattern="^(active|paused|revoked)$")
+    scopes: Optional[List[str]] = None
+    rate_limit: Optional[int] = Field(None, ge=1, le=10000)
+    max_concurrent: Optional[int] = Field(None, ge=1, le=100)
+    max_daily_tokens: Optional[int] = None
+    max_daily_audio_seconds: Optional[float] = None
+    model_allowlist: Optional[List[str]] = None
+    ip_allowlist: Optional[List[str]] = None
+    expires_in_days: Optional[float] = None
+
+
+class RotateKeyRequest(BaseModel):
+    grace_period_days: float = Field(1.0, ge=0.0, le=30.0, description="Days old key remains valid before expiring")
+
+
+class UpdateDashboardSettingsRequest(BaseModel):
+    base_url: Optional[str] = None
+    default_rate_limit: Optional[int] = Field(None, ge=1)
+    default_max_concurrent: Optional[int] = Field(None, ge=1)
+    usage_retention_days: Optional[int] = Field(None, ge=1, le=365)
 
 
 @router.post("/keys", status_code=status.HTTP_201_CREATED)
@@ -35,7 +62,6 @@ async def create_key(
     """Create a new API key. The plain key is returned only once in this response."""
     expires_at = None
     if req.expires_in_days:
-        import time
         expires_at = time.time() + (req.expires_in_days * 86400)
 
     result = await KeyManager.create_key(
@@ -47,16 +73,89 @@ async def create_key(
         max_daily_tokens=req.max_daily_tokens,
         max_daily_audio_seconds=req.max_daily_audio_seconds,
         expires_at=expires_at,
+        profile_id=req.profile_id,
+        model_allowlist=req.model_allowlist,
+        ip_allowlist=req.ip_allowlist,
+    )
+
+    await KeyManager.record_audit(
+        admin_id=admin.id,
+        action="key.create",
+        target_type="key",
+        target_id=result["id"],
+        details={"name": req.name, "prefix": result["prefix"], "profile_id": req.profile_id},
     )
     return result
 
 
 @router.get("/keys")
 async def list_keys(
+    profile_id: Optional[str] = Query(None, description="Optional profile ID filter"),
     admin: ApiKeyRecord = Depends(require_admin_key),
 ) -> List[Dict[str, Any]]:
-    """List all API keys (without plain secrets or hashes)."""
-    return await KeyManager.list_keys()
+    """List API keys (without plain secrets or hashes)."""
+    return await KeyManager.list_keys(profile_id=profile_id)
+
+
+@router.patch("/keys/{key_id}")
+async def patch_key(
+    key_id: str,
+    req: PatchKeyRequest,
+    admin: ApiKeyRecord = Depends(require_admin_key),
+) -> Dict[str, Any]:
+    """Update key metadata, status (active/paused), allowlists, or rate limits."""
+    updates: Dict[str, Any] = {}
+    if req.name is not None:
+        updates["name"] = req.name
+    if req.status is not None:
+        updates["status"] = req.status
+    if req.scopes is not None:
+        updates["scopes"] = req.scopes
+    if req.rate_limit is not None:
+        updates["rate_limit"] = req.rate_limit
+    if req.max_concurrent is not None:
+        updates["max_concurrent"] = req.max_concurrent
+    if req.max_daily_tokens is not None:
+        updates["max_daily_tokens"] = req.max_daily_tokens
+    if req.max_daily_audio_seconds is not None:
+        updates["max_daily_audio_seconds"] = req.max_daily_audio_seconds
+    if req.model_allowlist is not None:
+        updates["model_allowlist"] = req.model_allowlist
+    if req.ip_allowlist is not None:
+        updates["ip_allowlist"] = req.ip_allowlist
+    if req.expires_in_days is not None:
+        updates["expires_at"] = time.time() + (req.expires_in_days * 86400)
+
+    updated = await KeyManager.patch_key(key_id, updates)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Key not found")
+
+    await KeyManager.record_audit(
+        admin_id=admin.id,
+        action="key.patch",
+        target_type="key",
+        target_id=key_id,
+        details=updates,
+    )
+    return updated
+
+
+@router.post("/keys/{key_id}/rotate", status_code=status.HTTP_201_CREATED)
+async def rotate_key(
+    key_id: str,
+    req: RotateKeyRequest,
+    admin: ApiKeyRecord = Depends(require_admin_key),
+) -> Dict[str, Any]:
+    """Rotate an API key: generates a new key with grace period for the old key."""
+    new_key = await KeyManager.rotate_key(key_id, grace_period_days=req.grace_period_days)
+    await KeyManager.record_audit(
+        admin_id=admin.id,
+        action="key.rotate",
+        target_type="key",
+        target_id=key_id,
+        details={"new_key_id": new_key["id"], "grace_period_days": req.grace_period_days},
+    )
+    return new_key
 
 
 @router.delete("/keys/{key_id}")
@@ -68,6 +167,13 @@ async def revoke_key(
     success = await KeyManager.revoke_key(key_id)
     if not success:
         raise HTTPException(status_code=404, detail="Key not found or already revoked")
+
+    await KeyManager.record_audit(
+        admin_id=admin.id,
+        action="key.revoke",
+        target_type="key",
+        target_id=key_id,
+    )
     return {"id": key_id, "status": "revoked"}
 
 
@@ -88,6 +194,51 @@ async def get_usage(
     return await KeyManager.get_usage_summary()
 
 
+# -------------------------------------------------------------------
+# Dashboard Settings & Audit Log
+# -------------------------------------------------------------------
+@router.get("/settings/dashboard")
+async def get_dashboard_settings(
+    admin: ApiKeyRecord = Depends(require_admin_key),
+) -> Dict[str, Any]:
+    """Retrieve developer dashboard settings."""
+    return await KeyManager.get_dashboard_settings()
+
+
+@router.put("/settings/dashboard")
+async def update_dashboard_settings(
+    req: UpdateDashboardSettingsRequest,
+    admin: ApiKeyRecord = Depends(require_admin_key),
+) -> Dict[str, Any]:
+    """Update developer dashboard settings."""
+    updated = await KeyManager.update_dashboard_settings(
+        base_url=req.base_url,
+        default_rate_limit=req.default_rate_limit,
+        default_max_concurrent=req.default_max_concurrent,
+        usage_retention_days=req.usage_retention_days,
+    )
+    await KeyManager.record_audit(
+        admin_id=admin.id,
+        action="settings.update",
+        target_type="settings",
+        target_id="dashboard",
+        details=req.model_dump(exclude_none=True),
+    )
+    return updated
+
+
+@router.get("/audit")
+async def get_audit_log(
+    limit: int = Query(100, ge=1, le=1000),
+    admin: ApiKeyRecord = Depends(require_admin_key),
+) -> List[Dict[str, Any]]:
+    """Retrieve administrative audit trail."""
+    return await KeyManager.get_audit_log(limit=limit)
+
+
+# -------------------------------------------------------------------
+# Disaster Recovery & Backups
+# -------------------------------------------------------------------
 @router.post("/backup")
 async def trigger_database_backup(
     admin: ApiKeyRecord = Depends(require_admin_key),
@@ -103,11 +254,9 @@ async def trigger_database_backup(
         dest_file.unlink()
     dest_path_str = str(dest_file.resolve())
 
-    # Execute VACUUM INTO via database connection
     async with get_db() as db:
         await db.execute(f"VACUUM INTO '{dest_path_str}'")
 
-    # Verify integrity of the snapshot
     integrity = "failed"
     async with aiosqlite.connect(dest_path_str) as snap_db:
         async with snap_db.execute("PRAGMA integrity_check;") as cursor:

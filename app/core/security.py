@@ -22,6 +22,23 @@ class ApiKeyRecord(BaseModel):
     expires_at: Optional[float] = None
     revoked_at: Optional[float] = None
     created_at: float
+    profile_id: Optional[str] = None
+    prefix: Optional[str] = None
+    status: str = "active"
+    model_allowlist: Optional[List[str]] = None
+    ip_allowlist: Optional[List[str]] = None
+    rotated_from: Optional[str] = None
+    rotation_expires_at: Optional[float] = None
+    last_used_at: Optional[float] = None
+
+
+def check_model_allowed(key: ApiKeyRecord, model_id: Optional[str]) -> None:
+    """Enforce model_allowlist on API key if defined."""
+    if not key or key.role == "admin" or not model_id:
+        return
+    if key.model_allowlist and len(key.model_allowlist) > 0:
+        if model_id not in key.model_allowlist:
+            raise ForbiddenError(f"Model '{model_id}' is not allowed for this key.")
 
 # In-memory ticket storage: {ticket_str: (created_at_timestamp, user_id)}
 _TICKETS: Dict[str, Tuple[float, str]] = {}
@@ -40,11 +57,13 @@ def hash_api_key(plain_key: str) -> str:
     ).hexdigest()
 
 
-def generate_api_key() -> Tuple[str, str]:
-    """Generate a high-entropy random key and its hash."""
-    raw_key = f"va-{secrets.token_urlsafe(32)}"
+def generate_api_key() -> Tuple[str, str, str]:
+    """Generate a high-entropy random key, its prefix, and its hash."""
+    random_part = secrets.token_urlsafe(32)
+    raw_key = f"va-{random_part}"
+    prefix = f"va_live_{random_part[:4]}..."
     key_hash = hash_api_key(raw_key)
-    return raw_key, key_hash
+    return raw_key, prefix, key_hash
 
 
 def register_api_key(plain_key: str, owner: str = "admin") -> None:
@@ -86,7 +105,8 @@ async def get_authenticated_key(
 
     # 1. Database check
     from app.services.key_manager import KeyManager
-    record = await KeyManager.authenticate(key)
+    client_ip = request.client.host if request.client else None
+    record = await KeyManager.authenticate(key, client_ip=client_ip)
     if record:
         request.state.api_key = record
         request.state.user = record.role

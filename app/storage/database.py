@@ -77,7 +77,47 @@ CREATE TABLE IF NOT EXISTS api_keys (
     max_daily_audio_seconds REAL DEFAULT NULL,
     expires_at REAL,
     revoked_at REAL,
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    profile_id TEXT,
+    prefix TEXT,
+    status TEXT DEFAULT 'active',
+    model_allowlist TEXT,
+    ip_allowlist TEXT,
+    rotated_from TEXT,
+    rotation_expires_at REAL,
+    last_used_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS profiles (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    contact TEXT,
+    notes TEXT,
+    disabled_at REAL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dashboard_settings (
+    id TEXT PRIMARY KEY,
+    base_url TEXT DEFAULT 'http://127.0.0.1:8000',
+    default_rate_limit INTEGER DEFAULT 60,
+    default_max_concurrent INTEGER DEFAULT 5,
+    usage_retention_days INTEGER DEFAULT 30,
+    kill_switches_json TEXT DEFAULT '{}',
+    cors_origins_json TEXT DEFAULT '["*"]',
+    updated_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS admin_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp REAL NOT NULL,
+    admin_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_type TEXT,
+    target_id TEXT,
+    details TEXT
 );
 
 CREATE TABLE IF NOT EXISTS usage (
@@ -92,6 +132,29 @@ CREATE TABLE IF NOT EXISTS usage (
 );
 
 CREATE INDEX IF NOT EXISTS idx_usage_key ON usage(key_id, timestamp);
+
+CREATE TABLE IF NOT EXISTS usage_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    key_id TEXT,
+    profile_id TEXT,
+    endpoint TEXT NOT NULL,
+    model TEXT,
+    status INTEGER NOT NULL,
+    latency_ms REAL NOT NULL,
+    ttfb_ms REAL,
+    input_units REAL DEFAULT 0.0,
+    output_units REAL DEFAULT 0.0,
+    bytes_in INTEGER DEFAULT 0,
+    bytes_out INTEGER DEFAULT 0,
+    error_code TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_events_ts ON usage_events(ts);
+CREATE INDEX IF NOT EXISTS idx_usage_events_key ON usage_events(key_id, ts);
+CREATE INDEX IF NOT EXISTS idx_usage_events_profile ON usage_events(profile_id, ts);
+CREATE INDEX IF NOT EXISTS idx_usage_events_model ON usage_events(model, ts);
+
 
 """
 
@@ -122,11 +185,35 @@ async def init_db():
         await db.execute("PRAGMA busy_timeout = 5000;")
         await db.execute("PRAGMA foreign_keys = ON;")
         await db.executescript(SCHEMA_SQL)
-        for col_def in ("max_daily_tokens INTEGER DEFAULT NULL", "max_daily_audio_seconds REAL DEFAULT NULL"):
+        
+        # Safe column migrations on api_keys
+        extra_columns = [
+            "max_daily_tokens INTEGER DEFAULT NULL",
+            "max_daily_audio_seconds REAL DEFAULT NULL",
+            "profile_id TEXT DEFAULT NULL",
+            "prefix TEXT DEFAULT NULL",
+            "status TEXT DEFAULT 'active'",
+            "model_allowlist TEXT DEFAULT NULL",
+            "ip_allowlist TEXT DEFAULT NULL",
+            "rotated_from TEXT DEFAULT NULL",
+            "rotation_expires_at REAL DEFAULT NULL",
+            "last_used_at REAL DEFAULT NULL",
+        ]
+        for col_def in extra_columns:
             try:
                 await db.execute(f"ALTER TABLE api_keys ADD COLUMN {col_def}")
             except Exception:
                 pass
+
+        # Ensure default dashboard settings exist
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO dashboard_settings (id, base_url, default_rate_limit, default_max_concurrent, usage_retention_days, updated_at)
+            VALUES ('default', 'http://127.0.0.1:8000', 60, 5, 30, ?)
+            """,
+            (1700000000.0,),
+        )
+
         for mid, name, cat, prov, sz in DEFAULT_INSTALLED_MODELS:
             await db.execute(
                 "INSERT OR IGNORE INTO installed_models (id, name, category, provider, size_mb) VALUES (?, ?, ?, ?, ?)",
