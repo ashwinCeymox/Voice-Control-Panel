@@ -64,17 +64,18 @@ async def update_stt_settings(
 async def audio_transcription_stream(
     websocket: WebSocket,
     ticket: Optional[str] = Query(None),
+    api_key: Optional[str] = Query(None),
 ):
     """Public WebSocket streaming STT endpoint for live partial transcription."""
     await websocket.accept()
 
-    # 1. Authentication: Validate via single-use ticket or header
+    # 1. Authentication: Validate via single-use ticket or header or api_key query param
     user = None
     key_record: Optional[ApiKeyRecord] = None
 
     if ticket:
         user = validate_and_consume_ticket(ticket)
-        if user == "admin" or user == "developer":
+        if user in ("admin", "developer"):
             key_record = ApiKeyRecord(
                 id="ticket-admin",
                 name="Admin Ticket",
@@ -92,11 +93,27 @@ async def audio_transcription_stream(
                 created_at=0.0,
             )
     else:
-        # Check authorization header
+        # Check authorization header or query param
         auth_header = websocket.headers.get("authorization") or websocket.headers.get("xi-api-key")
+        plain_key: Optional[str] = None
         if auth_header:
             plain_key = auth_header.replace("Bearer ", "").strip()
+        elif api_key:
+            plain_key = api_key.strip()
+
+        if plain_key:
             key_record = await KeyManager.authenticate(plain_key)
+            if not key_record:
+                owner = verify_api_key(plain_key)
+                if owner:
+                    role = "admin" if owner in ("admin", "developer") else "caller"
+                    key_record = ApiKeyRecord(
+                        id=f"key-mem-{owner}",
+                        name=owner,
+                        role=role,
+                        scopes=["stt_stream", "stt", "llm", "tts", "admin"] if role == "admin" else ["stt_stream", "stt"],
+                        created_at=0.0,
+                    )
 
     if not key_record:
         await websocket.send_json({"type": "error", "message": "Unauthorized: Missing or invalid ticket/API key"})
