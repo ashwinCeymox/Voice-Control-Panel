@@ -113,3 +113,30 @@ def test_backup_script_execution():
     )
     assert result.returncode == 0, f"Script failed with: {result.stderr}"
     assert "Backup completed successfully" in result.stdout or "OK" in result.stdout
+
+
+def test_restore_script_execution(tmp_path):
+    """scripts/restore-db.sh verifies snapshot and restores database cleanly."""
+    backup_script = "scripts/backup-db.sh"
+    restore_script = "scripts/restore-db.sh"
+    assert os.path.exists(restore_script), f"Restore script missing at {restore_script}"
+
+    # 1. Produce a backup
+    subprocess.run(["bash", backup_script], check=True, capture_output=True)
+
+    # Find the newest backup in data/backups
+    backup_dir = "data/backups"
+    backups = sorted([os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.endswith(".db")])
+    assert len(backups) > 0
+    latest_backup = backups[-1]
+
+    # 2. Restore to a new location
+    target_restore_db = str(tmp_path / "restored_voice_platform.db")
+    res = subprocess.run(
+        ["bash", restore_script, latest_backup, target_restore_db],
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, f"Restore failed: {res.stderr}"
+    assert "Restore completed successfully" in res.stdout
+    assert os.path.exists(target_restore_db)

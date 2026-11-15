@@ -25,7 +25,7 @@
 | **P4-DOCKER** | Docker Compose with 4 services, volumes, private network | OPS | `gemini-3.8-flash-high` | **DONE** | H8 | `docker-compose.yml`, `Dockerfile`, `docs/handoff/P4-DOCKER.md` |
 | **P4-TTS** | Linux Kokoro spike (ONNX/PyTorch) | OPS | `gemini-3.8-flash-high` | **DONE** | None | `docs/handoff/P4-TTS.md` |
 | **P5** | Linux benchmark evaluation | QA + OPS | `gemini-3.8-flash-high` | **TODO** | P0, P4-DOCKER | `docs/p5-measurements.md` |
-| **P6** | Go-live configuration, Prometheus metrics, backup cron | OPS | `gemini-3.8-flash-high` | **TODO** | P4-DOCKER | `docs/handoff/P6.md` |
+| **P6** | Go-live configuration, Prometheus metrics, backup cron | OPS | `gemini-3.8-flash-high` | **DONE** | P4-DOCKER | `docs/handoff/P6.md` |
 | **P7** | STT streaming decision | QA + OPS | `gemini-3.8-flash-high` | **DONE** | P0, P5 | `docs/decisions/stt-streaming.md` |
 | **REV** | Adversarial review across changes | REV | `gemini-3.8-flash-high` | **DONE** | Each handoff | `docs/reviews/migration-phase1.md` |
 

@@ -106,6 +106,21 @@ services:
     depends_on:
       - gateway
 
+  prometheus:
+    image: prom/prometheus:v2.50.1
+    container_name: voice-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - public_web
+    depends_on:
+      - gateway
+
 networks:
   # Internal network isolating LocalAI and TTS backends from direct external access
   private_internal:
@@ -118,3 +133,4 @@ volumes:
   gateway_data:
   localai_cache:
   tts_models:
+  prometheus_data:

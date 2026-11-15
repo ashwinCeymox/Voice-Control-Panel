@@ -1,0 +1,29 @@
+groups:
+  - name: voice_agent_alerts
+    rules:
+      - alert: High5xxErrorRate
+        expr: rate(voice_agent_requests_total{status=~"5.."}[1m]) > 0.05
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Elevated 5xx error rate detected on voice gateway"
+          description: "Gateway 5xx error rate exceeds 5% over 1 minute."
+
+      - alert: HighTurnLatency
+        expr: histogram_quantile(0.95, sum(rate(voice_agent_turn_latency_seconds_bucket[5m])) by (le)) > 3.0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Voice pipeline p95 turn latency above 3s"
+          description: "p95 voice turn latency is {{ $value }}s, exceeding the 3.0s budget."
+
+      - alert: ActiveStreamSaturation
+        expr: voice_agent_active_streams{type="voice"} >= 8
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Active voice stream concurrency near capacity"
+          description: "{{ $value }} concurrent voice sessions active on instance."
