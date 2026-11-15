@@ -124,9 +124,9 @@ export const AgentsPage: React.FC = () => {
         const modRes = await fetch(`${API_BASE}/v1/models/installed`, { headers: AUTH_HEADERS });
         if (modRes.ok) {
           const modData = await modRes.json();
-          const llms = Array.isArray(modData.llm) ? modData.llm.map((m: any) => ({ id: m.id, name: m.name || m.id })) : [];
-          const stts = Array.isArray(modData.stt) ? modData.stt.map((m: any) => ({ id: m.id, name: m.name || m.id })) : [];
-          const ttss = Array.isArray(modData.tts) ? modData.tts.map((m: any) => ({ id: m.id, name: m.name || m.id })) : [];
+          const llms = Array.isArray(modData.llm) ? modData.llm.map((m: any) => ({ id: m.id, name: m.name || m.id, kind: m.kind, provider: m.provider })) : [];
+          const stts = Array.isArray(modData.stt) ? modData.stt.map((m: any) => ({ id: m.id, name: m.name || m.id, kind: m.kind, provider: m.provider })) : [];
+          const ttss = Array.isArray(modData.tts) ? modData.tts.map((m: any) => ({ id: m.id, name: m.name || m.id, kind: m.kind, provider: m.provider })) : [];
           setInstalledModels({ llm: llms, stt: stts, tts: ttss });
         }
       } catch {}

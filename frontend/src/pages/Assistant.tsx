@@ -692,7 +692,9 @@ export const AssistantView: React.FC = () => {
             <p className="text-xs text-slate-400 mt-0.5 font-mono flex items-center gap-2">
               <span>LLM: {activeAgent?.llm?.model || 'llama-3.2-1b-instruct'}</span>
               <span>•</span>
-              <span>STT: {activeAgent?.stt?.model || 'whisper-base'}</span>
+              <span>
+                STT: {activeAgent?.stt?.model || 'whisper-base'} ({activeAgent?.stt?.kind || 'batch'})
+              </span>
               <span>•</span>
               <span>Voice: {activeAgent?.tts?.voice_id || 'af_heart'}</span>
             </p>
