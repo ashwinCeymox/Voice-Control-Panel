@@ -14,6 +14,7 @@ from app.core.limits import stream_limiter
 from app.core.security import require_admin_key, validate_and_consume_ticket, verify_api_key
 from app.providers.streaming_stt_client import StreamingSTTClient
 from app.services.key_manager import KeyManager, ApiKeyRecord
+from app.services.metrics import metrics_collector
 
 logger = logging.getLogger("voice_agent.api.stream_stt")
 
@@ -108,6 +109,14 @@ async def audio_transcription_stream(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
+    # 2b. Quota verification
+    try:
+        await KeyManager.check_quota(key_record, cost_type="audio")
+    except AppError as quota_err:
+        await websocket.send_json({"type": "error", "message": quota_err.message})
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
     # 3. Check kill switch
     if not settings.STT_STREAM_ENABLED:
         await websocket.send_json({
@@ -119,6 +128,7 @@ async def audio_transcription_stream(
 
     start_t = time.time()
     total_audio_bytes = 0
+    metrics_collector.inc_active_streams("stt")
 
     # 4. Stream handling with limiter
     try:
@@ -163,6 +173,7 @@ async def audio_transcription_stream(
         except Exception:
             pass
     finally:
+        metrics_collector.dec_active_streams("stt")
         dur_ms = (time.time() - start_t) * 1000.0
         audio_sec = round(total_audio_bytes / 32000.0, 2)
         await KeyManager.log_usage(key_record.id, "/v1/audio/transcriptions/stream", dur_ms, audio_sec, 200)

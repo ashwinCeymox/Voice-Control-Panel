@@ -3,12 +3,14 @@ import asyncio
 import io
 import json
 import logging
+import time
 import uuid
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, WebSocket, WebSocketDisconnect
 from app.core.config import settings
 from app.core.errors import AppError, PayloadTooLargeError, UnauthorizedError
-from app.core.security import require_api_key, validate_and_consume_ticket
+from app.core.security import require_api_key, validate_and_consume_ticket, verify_api_key, ApiKeyRecord
+from app.services.key_manager import KeyManager
 from app.schemas.events import (
     AudioCompletedEvent,
     AudioStartedEvent,
@@ -24,6 +26,8 @@ from app.schemas.events import (
 from app.providers.streaming_stt_client import StreamingSTTClient
 from app.schemas.voice import VoiceTurnResponse
 from app.services.agent_manager import AgentManager
+from app.services.metrics import metrics_collector
+from app.services.server_vad import ServerVAD, SpeechStart, SpeechEnd, pcm_to_wav
 from app.services.text_chunker import TextChunker
 from app.services.voice_orchestrator import orchestrator
 from app.storage.repositories import SessionRepository
@@ -130,19 +134,76 @@ async def voice_turn(
 @router.websocket("/stream")
 async def voice_stream(
     websocket: WebSocket,
-    ticket: str = Query(...),
+    ticket: Optional[str] = Query(None),
+    api_key: Optional[str] = Query(None),
+    vad_engine: Optional[str] = Query(None),
 ):
     """Full-duplex real-time voice streaming with interruption support."""
-    # 1. Ticket-based authentication
-    user = validate_and_consume_ticket(ticket)
-    if not user:
-        await websocket.close(code=4401, reason="Invalid or expired ticket")
-        return
+    user: Optional[str] = None
+    key_record: Optional[ApiKeyRecord] = None
+
+    if ticket:
+        user = validate_and_consume_ticket(ticket)
+        if not user:
+            await websocket.close(code=4401, reason="Invalid or expired ticket")
+            return
+        key_record = ApiKeyRecord(
+            id=f"ticket-{user}",
+            name=user,
+            role="admin" if user in ("admin", "developer") else "caller",
+            scopes=["voice", "voice_stream", "llm", "stt", "tts", "admin"],
+            created_at=0.0,
+        )
+    else:
+        # Check authorization header or query param
+        auth_header = websocket.headers.get("authorization") or websocket.headers.get("xi-api-key")
+        plain_key: Optional[str] = None
+        if auth_header:
+            plain_key = auth_header.replace("Bearer ", "").strip()
+        elif api_key:
+            plain_key = api_key.strip()
+
+        if not plain_key:
+            await websocket.close(code=4401, reason="Missing credentials")
+            return
+
+        key_record = await KeyManager.authenticate(plain_key)
+        if not key_record:
+            owner = verify_api_key(plain_key)
+            if owner:
+                role = "admin" if owner in ("admin", "developer") else "caller"
+                key_record = ApiKeyRecord(
+                    id=f"key-mem-{owner}",
+                    name=owner,
+                    role=role,
+                    scopes=["voice", "voice_stream", "llm", "stt", "tts", "admin"] if role == "admin" else ["voice", "voice_stream", "llm", "stt", "tts"],
+                    created_at=0.0,
+                )
+            else:
+                await websocket.close(code=4401, reason="Invalid API key")
+                return
+
+        # Scope verification for caller keys
+        if key_record.role != "admin" and "voice" not in key_record.scopes and "voice_stream" not in key_record.scopes:
+            await websocket.close(code=4403, reason="Forbidden: missing scope")
+            return
+
+        # Quota verification for caller keys
+        try:
+            await KeyManager.check_quota(key_record, cost_type="audio")
+        except AppError:
+            await websocket.close(code=4429, reason="Quota exceeded")
+            return
+
+        user = key_record.name or key_record.role
 
     await websocket.accept()
 
     session_id = str(uuid.uuid4())
+    session_start_time = time.time()
+    session_turn_count = 0
     await SessionRepository.get_or_create_session(session_id, user)
+    metrics_collector.inc_active_streams("voice")
 
     # Resolve active agent on initial connect (may be overridden by session.start)
     agent = await _resolve_agent(None)
@@ -157,6 +218,18 @@ async def voice_stream(
             agent_name=agent_name,
         ).model_dump_json()
     )
+
+    # Server-side VAD initialization (for headless/telephony streams)
+    server_vad: Optional[ServerVAD] = None
+    resolved_vad_engine = vad_engine
+    if not resolved_vad_engine and agent:
+        resolved_vad_engine = (agent.get("vad") or {}).get("engine")
+    if resolved_vad_engine == "server_silero":
+        try:
+            server_vad = ServerVAD()
+            logger.info("Enabled server-side Silero VAD for session %s", session_id)
+        except Exception as vad_err:
+            logger.warning("Failed to initialize ServerVAD for session %s: %s", session_id, vad_err)
 
     audio_buffer = bytearray()
     webm_header = bytearray()
@@ -189,7 +262,7 @@ async def voice_stream(
         streaming_fallback_reason: Optional[str] = None,
     ):
         """Execute a single STT->LLM->TTS turn, using per-agent config where available."""
-        nonlocal consecutive_unclear
+        nonlocal consecutive_unclear, session_turn_count
         # If streaming STT experienced failure, emit stt.fallback immediately
         if streaming_fallback_reason:
             await websocket.send_text(
@@ -428,6 +501,7 @@ async def voice_stream(
 
             # Save turn & history
             await SessionRepository.add_message(session_id, "assistant", full_response_text)
+            session_turn_count += 1
             await websocket.send_text(
                 TurnCompletedEvent(turn_id=turn_id).model_dump_json()
             )
@@ -475,6 +549,13 @@ async def voice_stream(
                             agent_name = agent["name"] if agent else agent_name
 
                     session_stt_kind = event_data.get("stt_kind")
+                    if event_data.get("vad_engine") == "server_silero" or (event_data.get("vad") or {}).get("engine") == "server_silero":
+                        if server_vad is None:
+                            try:
+                                server_vad = ServerVAD()
+                                logger.info("Enabled server-side Silero VAD via session.start for session %s", session_id)
+                            except Exception as vad_err:
+                                logger.warning("Failed to initialize ServerVAD on session.start: %s", vad_err)
                     input_audio = event_data.get("input_audio", {})
                     input_container = input_audio.get("container", "webm")
                     audio_buffer.clear()
@@ -644,6 +725,92 @@ async def voice_stream(
                             webm_header = bytearray(audio_buffer[:c_idx])
                             logger.info("Captured WebM stream header (%d bytes) for session %s", len(webm_header), session_id)
 
+                if server_vad is not None:
+                    vad_pcm = chunk
+                    if chunk.startswith(b"RIFF") and len(chunk) > 44 and chunk[8:12] == b"WAVE":
+                        vad_pcm = chunk[44:]
+                    vad_events = server_vad.feed_pcm(vad_pcm)
+                    for ve in vad_events:
+                        if isinstance(ve, SpeechStart):
+                            logger.info("ServerVAD speech start detected for session %s", session_id)
+                            if current_turn_task and not current_turn_task.done():
+                                current_turn_task.cancel()
+                            orchestrator.cancel_stream_task(session_id)
+                            active_turn_id = f"turn-{uuid.uuid4()}"
+                            audio_buffer.clear()
+                            streaming_error = None
+                            stream_events.clear()
+                            if stream_task and not stream_task.done():
+                                stream_task.cancel()
+                            stream_task = None
+                            stream_feed_queue = None
+
+                            if get_stt_kind(agent) == "streaming":
+                                feed_q = asyncio.Queue()
+                                stream_feed_queue = feed_q
+                                turn_id_for_stream = active_turn_id
+
+                                async def _stream_feeder():
+                                    while True:
+                                        b = await feed_q.get()
+                                        if b is None:
+                                            break
+                                        yield b
+
+                                async def _run_stt_stream():
+                                    nonlocal streaming_error
+                                    try:
+                                        target_model = (agent.get("stt", {}).get("model") if agent else None) or settings.STREAMING_STT_DEFAULT_MODEL
+                                        seq = 0
+                                        async for evt in streaming_stt_client.stream(_stream_feeder(), model=target_model):
+                                            if evt.get("type") == "transcript.partial":
+                                                stream_events.append(evt)
+                                                await websocket.send_text(
+                                                    TranscriptPartialEvent(
+                                                        turn_id=turn_id_for_stream,
+                                                        text=evt.get("text", ""),
+                                                        is_final=False,
+                                                        sequence=seq,
+                                                    ).model_dump_json()
+                                                )
+                                                seq += 1
+                                    except Exception as stream_err:
+                                        logger.warning("Streaming STT failure during turn %s: %s", turn_id_for_stream, stream_err)
+                                        streaming_error = str(stream_err)
+
+                                stream_task = asyncio.create_task(_run_stt_stream())
+
+                        elif isinstance(ve, SpeechEnd):
+                            logger.info("ServerVAD speech end detected for session %s (dur=%.2fs)", session_id, ve.duration_sec)
+                            if stream_feed_queue is not None:
+                                stream_feed_queue.put_nowait(None)
+                            if stream_task:
+                                try:
+                                    await asyncio.wait_for(stream_task, timeout=1.5)
+                                except Exception:
+                                    pass
+
+                            captured_events = list(stream_events)
+                            captured_error = streaming_error
+                            final_stream_text = None
+                            if not captured_error and captured_events:
+                                final_stream_text = captured_events[-1].get("text", "").strip()
+
+                            wav_bytes = pcm_to_wav(ve.pcm_bytes, sample_rate=server_vad.sample_rate)
+                            turn_id_to_proc = active_turn_id or f"turn-{uuid.uuid4()}"
+                            active_turn_id = None
+
+                            current_turn_task = asyncio.create_task(
+                                process_turn(
+                                    turn_id=turn_id_to_proc,
+                                    utterance_bytes=wav_bytes,
+                                    turn_agent=agent,
+                                    container="wav",
+                                    streaming_transcript=final_stream_text,
+                                    streaming_fallback_reason=captured_error,
+                                )
+                            )
+
     except WebSocketDisconnect:
         logger.info("Client disconnected from WebSocket session %s", session_id)
     except RuntimeError as exc:
@@ -652,8 +819,23 @@ async def voice_stream(
         else:
             raise
     finally:
+        metrics_collector.dec_active_streams("voice")
         if stream_task and not stream_task.done():
             stream_task.cancel()
         if current_turn_task and not current_turn_task.done():
             current_turn_task.cancel()
         orchestrator.cancel_stream_task(session_id)
+        if key_record and key_record.id and not key_record.id.startswith("ticket-"):
+            try:
+                import anyio
+                duration_ms = (time.time() - session_start_time) * 1000.0
+                with anyio.CancelScope(shield=True):
+                    await KeyManager.log_usage(
+                        key_id=key_record.id,
+                        endpoint="/v1/voice/stream",
+                        duration_ms=duration_ms,
+                        tokens_or_seconds=float(session_turn_count),
+                        status=200,
+                    )
+            except BaseException as exc:
+                logger.error("Logging usage error: %s", exc)

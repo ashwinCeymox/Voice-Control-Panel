@@ -47,3 +47,18 @@
 | **S5-SCHEMA** | Bump agent schema to v2 (`stt.kind: batch\|streaming`), UI switch | BE + FE | `gemini-3.8-flash-high` | **DONE** | None | `app/schemas/agent.py`, `frontend/src/pages/Agents.tsx` |
 | **S6-QA** | Soak test (1, 3, 5 streams), kill mid-stream fallback, adversarial checks | QA | `gemini-3.8-flash-high` | **DONE** | S4-VOICE, S5-SCHEMA | `docs/reviews/streaming-stt-qa.md` |
 | **S7-ROLLOUT** | Controlled rollout validation, default settings | ORCH | `gemini-3.8-flash-high` | **DONE** | S6-QA | `docs/handoff/S7-ROLLOUT.md` |
+
+---
+
+# Multi-Agent Task Board: Cloud Migration Phase 2
+
+**Goal:** External Callers (Voice WebSocket API, Server-Side VAD, Usage Quotas, Prometheus Metrics, Backup)  
+**Rules:** Failing test first, handoff in `docs/handoff/<id>.md`, only ORCH merges, zero external cloud dependencies.
+
+| ID | Task | Owner | Model | Status | Blocked By | Deliverable / Handoff |
+|---|---|---|---|---|---|---|
+| **M2-VOICE-AUTH** | Direct API key auth on `WS /v1/voice/stream` with `voice` scope & usage tracking | BE-SEC | `gemini-3.8-flash-high` | **DONE** | None | `app/api/voice.py`, `tests/unit/test_m2_voice_auth.py` |
+| **M2-SERVER-VAD** | Server-side Silero VAD for headless audio streams (telephony/SIP) | BE-CORE | `gemini-3.8-flash-high` | **DONE** | None | `app/services/server_vad.py`, `tests/unit/test_m2_server_vad.py` |
+| **M2-QUOTA** | Daily/monthly key quotas (`max_daily_tokens`, `max_daily_audio_seconds`) & 429 gate | BE-KEYS | `gemini-3.8-flash-high` | **DONE** | None | `app/services/key_manager.py`, `tests/unit/test_m2_quotas.py` |
+| **M2-METRICS** | Prometheus `/metrics` endpoint with counters, gauges, and latency buckets | BE-OPS | `gemini-3.8-flash-high` | **DONE** | None | `app/api/metrics.py`, `tests/unit/test_m2_metrics.py` |
+| **M2-BACKUP** | Automated SQLite snapshot backup script and admin backup endpoint | BE-OPS | `gemini-3.8-flash-high` | **DONE** | None | `scripts/backup-db.sh`, `app/api/system.py` |

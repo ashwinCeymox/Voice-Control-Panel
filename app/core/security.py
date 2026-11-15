@@ -17,6 +17,8 @@ class ApiKeyRecord(BaseModel):
     scopes: List[str]  # e.g. ["llm", "stt", "tts"]
     rate_limit: int = 60
     max_concurrent: int = 5
+    max_daily_tokens: Optional[int] = None
+    max_daily_audio_seconds: Optional[float] = None
     expires_at: Optional[float] = None
     revoked_at: Optional[float] = None
     created_at: float

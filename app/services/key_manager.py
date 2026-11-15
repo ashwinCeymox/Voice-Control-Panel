@@ -7,7 +7,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 from app.core.config import settings
-from app.core.errors import UnauthorizedError, ForbiddenError
+from app.core.errors import AppError, UnauthorizedError, ForbiddenError
 from app.core.security import hash_api_key, generate_api_key, ApiKeyRecord
 from app.storage.database import get_db
 
@@ -20,6 +20,8 @@ class KeyManager:
         scopes: Optional[List[str]] = None,
         rate_limit: int = 60,
         max_concurrent: int = 5,
+        max_daily_tokens: Optional[int] = None,
+        max_daily_audio_seconds: Optional[float] = None,
         expires_at: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Generate high-entropy key, store only slow hash in DB, return record with plain key once."""
@@ -34,10 +36,10 @@ class KeyManager:
         async with get_db() as db:
             await db.execute(
                 """
-                INSERT INTO api_keys (id, name, hash, role, scopes, rate_limit, max_concurrent, expires_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO api_keys (id, name, hash, role, scopes, rate_limit, max_concurrent, max_daily_tokens, max_daily_audio_seconds, expires_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (key_id, name, key_hash, role, scopes_str, rate_limit, max_concurrent, expires_at, now),
+                (key_id, name, key_hash, role, scopes_str, rate_limit, max_concurrent, max_daily_tokens, max_daily_audio_seconds, expires_at, now),
             )
             await db.commit()
 
@@ -49,6 +51,8 @@ class KeyManager:
             "scopes": scopes,
             "rate_limit": rate_limit,
             "max_concurrent": max_concurrent,
+            "max_daily_tokens": max_daily_tokens,
+            "max_daily_audio_seconds": max_daily_audio_seconds,
             "expires_at": expires_at,
             "revoked_at": None,
             "created_at": now,
@@ -59,7 +63,7 @@ class KeyManager:
         """List active and revoked keys. Never return key hashes or plain keys."""
         async with get_db() as db:
             async with db.execute(
-                "SELECT id, name, role, scopes, rate_limit, max_concurrent, expires_at, revoked_at, created_at FROM api_keys ORDER BY created_at DESC"
+                "SELECT id, name, role, scopes, rate_limit, max_concurrent, max_daily_tokens, max_daily_audio_seconds, expires_at, revoked_at, created_at FROM api_keys ORDER BY created_at DESC"
             ) as cursor:
                 rows = await cursor.fetchall()
 
@@ -72,9 +76,11 @@ class KeyManager:
                 "scopes": [s.strip() for s in r[3].split(",") if s.strip()],
                 "rate_limit": r[4],
                 "max_concurrent": r[5],
-                "expires_at": r[6],
-                "revoked_at": r[7],
-                "created_at": r[8],
+                "max_daily_tokens": r[6],
+                "max_daily_audio_seconds": r[7],
+                "expires_at": r[8],
+                "revoked_at": r[9],
+                "created_at": r[10],
             })
         return results
 
@@ -114,7 +120,7 @@ class KeyManager:
         async with get_db() as db:
             async with db.execute(
                 """
-                SELECT id, name, role, scopes, rate_limit, max_concurrent, expires_at, revoked_at, created_at
+                SELECT id, name, role, scopes, rate_limit, max_concurrent, max_daily_tokens, max_daily_audio_seconds, expires_at, revoked_at, created_at
                 FROM api_keys WHERE hash = ?
                 """,
                 (k_hash,),
@@ -124,7 +130,7 @@ class KeyManager:
         if not row:
             return None
 
-        key_id, name, role, scopes_str, rate_limit, max_concurrent, expires_at, revoked_at, created_at = row
+        key_id, name, role, scopes_str, rate_limit, max_concurrent, max_daily_tokens, max_daily_audio_seconds, expires_at, revoked_at, created_at = row
 
         # Check revocation
         if revoked_at is not None:
@@ -142,10 +148,100 @@ class KeyManager:
             scopes=scopes,
             rate_limit=rate_limit,
             max_concurrent=max_concurrent,
+            max_daily_tokens=max_daily_tokens,
+            max_daily_audio_seconds=max_daily_audio_seconds,
             expires_at=expires_at,
             revoked_at=revoked_at,
             created_at=created_at,
         )
+
+    @staticmethod
+    async def check_quota(key: ApiKeyRecord, cost_type: str = "tokens") -> None:
+        """Enforce daily key quota limits (max_daily_tokens, max_daily_audio_seconds). Admin is exempt."""
+        if key.role == "admin":
+            return
+
+        now = time.time()
+        window_start = now - 86400.0
+
+        if cost_type == "tokens" and key.max_daily_tokens is not None:
+            async with get_db() as db:
+                async with db.execute(
+                    """
+                    SELECT COALESCE(SUM(tokens_or_seconds), 0)
+                    FROM usage
+                    WHERE key_id = ? AND timestamp >= ? AND endpoint LIKE '%chat%'
+                    """,
+                    (key.id, window_start),
+                ) as cursor:
+                    row = await cursor.fetchone()
+            used_tokens = float(row[0]) if row else 0.0
+            if used_tokens >= key.max_daily_tokens:
+                raise AppError(
+                    status_code=429,
+                    code="QUOTA_EXCEEDED",
+                    message=f"Daily token quota exceeded ({used_tokens:.0f}/{key.max_daily_tokens})",
+                )
+
+        elif cost_type == "audio" and key.max_daily_audio_seconds is not None:
+            async with get_db() as db:
+                async with db.execute(
+                    """
+                    SELECT COALESCE(SUM(tokens_or_seconds), 0)
+                    FROM usage
+                    WHERE key_id = ? AND timestamp >= ? AND (
+                        endpoint LIKE '%audio%' OR endpoint LIKE '%text-to-speech%' OR endpoint LIKE '%voice%'
+                    )
+                    """,
+                    (key.id, window_start),
+                ) as cursor:
+                    row = await cursor.fetchone()
+            used_audio = float(row[0]) if row else 0.0
+            if used_audio >= key.max_daily_audio_seconds:
+                raise AppError(
+                    status_code=429,
+                    code="QUOTA_EXCEEDED",
+                    message=f"Daily audio quota exceeded ({used_audio:.1f}s/{key.max_daily_audio_seconds:.1f}s)",
+                )
+
+    @staticmethod
+    async def get_key_quota(key_id: str) -> Dict[str, Any]:
+        """Get configured quotas and current 24h usage totals for a key."""
+        async with get_db() as db:
+            async with db.execute(
+                "SELECT max_daily_tokens, max_daily_audio_seconds FROM api_keys WHERE id = ?",
+                (key_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+
+        max_tokens = row[0] if row else None
+        max_audio = row[1] if row else None
+
+        now = time.time()
+        window_start = now - 86400.0
+        async with get_db() as db:
+            async with db.execute(
+                """
+                SELECT
+                    COALESCE(SUM(CASE WHEN endpoint LIKE '%chat%' THEN tokens_or_seconds ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN endpoint LIKE '%audio%' OR endpoint LIKE '%text-to-speech%' OR endpoint LIKE '%voice%' THEN tokens_or_seconds ELSE 0 END), 0)
+                FROM usage
+                WHERE key_id = ? AND timestamp >= ?
+                """,
+                (key_id, window_start),
+            ) as cursor:
+                usage_row = await cursor.fetchone()
+
+        used_tokens = float(usage_row[0]) if usage_row else 0.0
+        used_audio = float(usage_row[1]) if usage_row else 0.0
+
+        return {
+            "key_id": key_id,
+            "max_daily_tokens": max_tokens,
+            "used_daily_tokens": used_tokens,
+            "max_daily_audio_seconds": max_audio,
+            "used_daily_audio_seconds": used_audio,
+        }
 
     @staticmethod
     async def log_usage(

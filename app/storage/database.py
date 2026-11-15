@@ -73,6 +73,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
     scopes TEXT NOT NULL,
     rate_limit INTEGER DEFAULT 60,
     max_concurrent INTEGER DEFAULT 5,
+    max_daily_tokens INTEGER DEFAULT NULL,
+    max_daily_audio_seconds REAL DEFAULT NULL,
     expires_at REAL,
     revoked_at REAL,
     created_at REAL NOT NULL
@@ -120,6 +122,11 @@ async def init_db():
         await db.execute("PRAGMA busy_timeout = 5000;")
         await db.execute("PRAGMA foreign_keys = ON;")
         await db.executescript(SCHEMA_SQL)
+        for col_def in ("max_daily_tokens INTEGER DEFAULT NULL", "max_daily_audio_seconds REAL DEFAULT NULL"):
+            try:
+                await db.execute(f"ALTER TABLE api_keys ADD COLUMN {col_def}")
+            except Exception:
+                pass
         for mid, name, cat, prov, sz in DEFAULT_INSTALLED_MODELS:
             await db.execute(
                 "INSERT OR IGNORE INTO installed_models (id, name, category, provider, size_mb) VALUES (?, ?, ?, ?, ?)",
