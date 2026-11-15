@@ -17,7 +17,7 @@ from app.schemas.agent import (
     AgentLoadResponse,
     TestChatRequest,
 )
-from app.services.agent_manager import AgentManager, DEFAULT_AGENT
+from app.services.agent_manager import AgentManager, DEFAULT_AGENT, VAD_PRESETS
 from app.api.gallery import get_installed_models_data
 
 logger = logging.getLogger("voice_agent.api.agents")
@@ -107,6 +107,12 @@ async def get_active_agent(admin: ApiKeyRecord = Depends(require_admin_key)):
         "active_agent_id": active_id,
         "active_agent": agent,
     }
+
+
+@router.get("/presets/vad")
+async def get_vad_presets(admin: ApiKeyRecord = Depends(require_admin_key)):
+    """Get recommended Silero VAD presets calibrated for streaming (Sherpa) vs batch."""
+    return VAD_PRESETS
 
 
 @router.get("/{id}")

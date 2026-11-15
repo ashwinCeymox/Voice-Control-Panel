@@ -1,6 +1,6 @@
 """Agent schemas matching docs/contracts/openapi.yaml and docs/contracts/agent-schema.json."""
 from typing import Dict, Any, List, Optional
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 class LLMConfig(BaseModel):
@@ -61,6 +61,33 @@ class AgentConfig(BaseModel):
     tts: TTSConfig
     vad: Optional[VADConfig] = Field(default_factory=VADConfig)
     audio: Optional[AudioConfig] = Field(default_factory=AudioConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def apply_streaming_vad_defaults(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            stt = data.get("stt") or {}
+            vad = data.get("vad")
+            if isinstance(stt, dict) and stt.get("kind") == "streaming":
+                streaming_defaults = {
+                    "engine": "silero",
+                    "positive_speech_threshold": 0.50,
+                    "negative_speech_threshold": 0.35,
+                    "redemption_ms": 450,
+                    "min_silence_ms": 450,
+                    "pre_speech_pad_ms": 150,
+                    "min_speech_ms": 200,
+                    "min_rms": 0.015,
+                    "noise_suppression": "browser",
+                    "barge_in": True,
+                    "barge_in_confirm_ms": 200,
+                    "playback_threshold_boost": 0.15,
+                }
+                if vad is None:
+                    data["vad"] = streaming_defaults
+                elif isinstance(vad, dict) and "redemption_ms" not in vad and "min_silence_ms" not in vad:
+                    data["vad"] = {**streaming_defaults, **vad}
+        return data
 
 
 class AgentUpdateConfig(BaseModel):

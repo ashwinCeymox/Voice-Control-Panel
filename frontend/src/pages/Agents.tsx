@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react';
 import { Agent, Voice } from '../types/api';
+import { VAD_PRESETS } from '../audio/vadController';
 import { getApiBase, getApiKey } from '../api/client';
 
 const API_BASE = getApiBase();
@@ -151,6 +152,28 @@ export const AgentsPage: React.FC = () => {
     setChatMessages([]);
     setErrorMsg(null);
     setSuccessMsg(null);
+  };
+
+  const applyVadPreset = (presetKey: 'streaming' | 'conversational' | 'batch') => {
+    if (!selectedAgent) return;
+    const preset = VAD_PRESETS[presetKey];
+    setSelectedAgent({
+      ...selectedAgent,
+      vad: {
+        ...selectedAgent.vad,
+        engine: 'silero',
+        positive_speech_threshold: preset.positiveSpeechThreshold,
+        negative_speech_threshold: preset.negativeSpeechThreshold,
+        redemption_ms: preset.redemptionMs,
+        min_silence_ms: preset.redemptionMs,
+        pre_speech_pad_ms: preset.preSpeechPadMs,
+        min_speech_ms: preset.minSpeechMs,
+        min_rms: preset.minRms,
+        barge_in: preset.bargeIn,
+        barge_in_confirm_ms: preset.bargeInConfirmMs,
+        playback_threshold_boost: preset.playbackThresholdBoost,
+      },
+    });
   };
 
   const handleActivate = async (agentId: string) => {
@@ -657,6 +680,8 @@ export const AgentsPage: React.FC = () => {
                         onClick={() => {
                           const streamModels = installedModels.stt.filter((m) => m.kind === 'streaming');
                           const firstStream = streamModels[0]?.id || 'sherpa-onnx-streaming-zipformer-en-20M';
+                          const curRedemption = selectedAgent.vad?.redemption_ms ?? selectedAgent.vad?.min_silence_ms ?? 800;
+                          const shouldAutoTuneVad = curRedemption >= 700;
                           setSelectedAgent({
                             ...selectedAgent,
                             stt: {
@@ -665,6 +690,21 @@ export const AgentsPage: React.FC = () => {
                               model: firstStream,
                               fallback_model: selectedAgent.stt.fallback_model || 'whisper-base',
                             },
+                            vad: shouldAutoTuneVad
+                              ? {
+                                  ...selectedAgent.vad,
+                                  engine: 'silero',
+                                  positive_speech_threshold: 0.50,
+                                  negative_speech_threshold: 0.35,
+                                  redemption_ms: 450,
+                                  min_silence_ms: 450,
+                                  pre_speech_pad_ms: 150,
+                                  min_speech_ms: 200,
+                                  min_rms: 0.015,
+                                  barge_in: true,
+                                  barge_in_confirm_ms: 200,
+                                }
+                              : selectedAgent.vad,
                           });
                         }}
                         className={`px-2.5 py-1 rounded transition-colors ${
@@ -852,6 +892,62 @@ export const AgentsPage: React.FC = () => {
                       <option value="silero">Silero Neural VAD (v5 Local ONNX)</option>
                       <option value="legacy">Legacy RMS Gate (Web Audio)</option>
                     </select>
+                  </div>
+
+                  {/* Silero VAD Presets */}
+                  <div className="p-2.5 bg-slate-950/70 border border-slate-800/80 rounded-lg space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-medium text-slate-400">
+                        VAD Preset:
+                      </span>
+                      {selectedAgent.stt.kind === 'streaming' ? (
+                        <span className="text-[10px] text-sky-400 bg-sky-950/80 border border-sky-800/70 px-1.5 py-0.5 rounded font-mono">
+                          ★ Fast Sherpa streaming profile recommended
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          Batch Whisper profile recommended
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => applyVadPreset('streaming')}
+                        className={`px-2.5 py-1 text-xs rounded border transition-colors flex items-center gap-1 ${
+                          (selectedAgent.vad?.redemption_ms || selectedAgent.vad?.min_silence_ms || 800) <= 500
+                            ? 'bg-sky-600 text-white border-sky-500 font-semibold shadow-sm shadow-sky-900/50'
+                            : 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800 hover:border-slate-700'
+                        }`}
+                        title="Fast 450ms endpointing calibrated for streaming models like Sherpa Zipformer 20M"
+                      >
+                        ⚡ Fast Streaming (Sherpa - 450ms)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyVadPreset('conversational')}
+                        className={`px-2.5 py-1 text-xs rounded border transition-colors ${
+                          (selectedAgent.vad?.redemption_ms || selectedAgent.vad?.min_silence_ms || 800) === 700
+                            ? 'bg-indigo-600 text-white border-indigo-500 font-semibold'
+                            : 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800 hover:border-slate-700'
+                        }`}
+                        title="Balanced 700ms silence allowance"
+                      >
+                        🗣 Balanced (700ms)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyVadPreset('batch')}
+                        className={`px-2.5 py-1 text-xs rounded border transition-colors ${
+                          (selectedAgent.vad?.redemption_ms || selectedAgent.vad?.min_silence_ms || 800) >= 800
+                            ? 'bg-slate-700 text-white border-slate-600 font-semibold'
+                            : 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800 hover:border-slate-700'
+                        }`}
+                        title="Relaxed 800ms silence allowance for batch Whisper"
+                      >
+                        🧘 Relaxed / Whisper (800ms)
+                      </button>
+                    </div>
                   </div>
 
                   {/* How long to wait after you stop talking */}

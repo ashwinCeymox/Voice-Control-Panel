@@ -194,15 +194,16 @@ export const AssistantView: React.FC = () => {
 
       // Update live VAD settings if instance is active
       if (vadRef.current && switched?.vad) {
+        const isStreaming = switched?.stt?.kind === 'streaming';
         vadRef.current.setOptions({
-          positiveSpeechThreshold: switched.vad.positive_speech_threshold,
-          negativeSpeechThreshold: switched.vad.negative_speech_threshold,
-          redemptionMs: switched.vad.redemption_ms || switched.vad.min_silence_ms,
-          preSpeechPadMs: switched.vad.pre_speech_pad_ms,
-          minSpeechMs: switched.vad.min_speech_ms,
-          minRms: switched.vad.min_rms,
-          bargeInConfirmMs: switched.vad.barge_in_confirm_ms,
-          playbackThresholdBoost: switched.vad.playback_threshold_boost,
+          positiveSpeechThreshold: switched.vad.positive_speech_threshold ?? (isStreaming ? 0.50 : 0.45),
+          negativeSpeechThreshold: switched.vad.negative_speech_threshold ?? (isStreaming ? 0.35 : 0.30),
+          redemptionMs: switched.vad.redemption_ms || switched.vad.min_silence_ms || (isStreaming ? 450 : 800),
+          preSpeechPadMs: switched.vad.pre_speech_pad_ms ?? (isStreaming ? 150 : 200),
+          minSpeechMs: switched.vad.min_speech_ms ?? (isStreaming ? 200 : 250),
+          minRms: switched.vad.min_rms ?? 0.015,
+          bargeInConfirmMs: switched.vad.barge_in_confirm_ms ?? (isStreaming ? 200 : 250),
+          playbackThresholdBoost: switched.vad.playback_threshold_boost ?? 0.15,
         });
       }
     } catch (err: any) {
@@ -489,7 +490,15 @@ export const AssistantView: React.FC = () => {
 
       const currentAgent = activeAgentRef.current;
       const vadConfig = currentAgent?.vad;
+      const isStreaming = currentAgent?.stt?.kind === 'streaming';
       const vadEngine = vadConfig?.engine || 'silero';
+
+      const defaultRedemption = isStreaming ? 450 : 800;
+      const defaultPosThreshold = isStreaming ? 0.50 : 0.45;
+      const defaultNegThreshold = isStreaming ? 0.35 : 0.30;
+      const defaultPrePad = isStreaming ? 150 : 200;
+      const defaultMinSpeech = isStreaming ? 200 : 250;
+      const defaultConfirmMs = isStreaming ? 200 : 250;
 
       const vad = new VadController(
         {
@@ -549,15 +558,15 @@ export const AssistantView: React.FC = () => {
         {
           engine: vadEngine,
           model: 'v5',
-          positiveSpeechThreshold: vadConfig?.positive_speech_threshold || 0.45,
-          negativeSpeechThreshold: vadConfig?.negative_speech_threshold || 0.30,
-          redemptionMs: vadConfig?.redemption_ms || vadConfig?.min_silence_ms || 800,
-          preSpeechPadMs: vadConfig?.pre_speech_pad_ms || 200,
-          minSpeechMs: vadConfig?.min_speech_ms || 250,
+          positiveSpeechThreshold: vadConfig?.positive_speech_threshold ?? defaultPosThreshold,
+          negativeSpeechThreshold: vadConfig?.negative_speech_threshold ?? defaultNegThreshold,
+          redemptionMs: vadConfig?.redemption_ms ?? vadConfig?.min_silence_ms ?? defaultRedemption,
+          preSpeechPadMs: vadConfig?.pre_speech_pad_ms ?? defaultPrePad,
+          minSpeechMs: vadConfig?.min_speech_ms ?? defaultMinSpeech,
           minRms: vadConfig?.min_rms ?? 0.015,
           bargeIn: true,
-          bargeInConfirmMs: vadConfig?.barge_in_confirm_ms || 250,
-          playbackThresholdBoost: vadConfig?.playback_threshold_boost || 0.15,
+          bargeInConfirmMs: vadConfig?.barge_in_confirm_ms ?? defaultConfirmMs,
+          playbackThresholdBoost: vadConfig?.playback_threshold_boost ?? 0.15,
           audioMode,
         }
       );
@@ -694,6 +703,10 @@ export const AssistantView: React.FC = () => {
               <span>•</span>
               <span>
                 STT: {activeAgent?.stt?.model || 'whisper-base'} ({activeAgent?.stt?.kind || 'batch'})
+              </span>
+              <span>•</span>
+              <span>
+                VAD: {activeAgent?.vad?.engine || 'silero'} ({activeAgent?.vad?.redemption_ms || activeAgent?.vad?.min_silence_ms || (activeAgent?.stt?.kind === 'streaming' ? 450 : 800)}ms)
               </span>
               <span>•</span>
               <span>Voice: {activeAgent?.tts?.voice_id || 'af_heart'}</span>

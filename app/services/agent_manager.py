@@ -35,6 +35,61 @@ DEFAULT_AGENT = {
     "schema_version": 2,
 }
 
+# Optimal Silero VAD presets calibrated for real-time streaming (Sherpa Zipformer) vs batch
+SILERO_STREAMING_DEFAULTS = {
+    "engine": "silero",
+    "positive_speech_threshold": 0.50,
+    "negative_speech_threshold": 0.35,
+    "redemption_ms": 450,
+    "pre_speech_pad_ms": 150,
+    "min_speech_ms": 200,
+    "min_rms": 0.015,
+    "noise_suppression": "browser",
+    "barge_in": True,
+    "barge_in_confirm_ms": 200,
+    "playback_threshold_boost": 0.15,
+    "threshold": 0.045,
+    "min_silence_ms": 450,
+}
+
+SILERO_CONVERSATIONAL_DEFAULTS = {
+    "engine": "silero",
+    "positive_speech_threshold": 0.45,
+    "negative_speech_threshold": 0.30,
+    "redemption_ms": 700,
+    "pre_speech_pad_ms": 200,
+    "min_speech_ms": 250,
+    "min_rms": 0.015,
+    "noise_suppression": "browser",
+    "barge_in": True,
+    "barge_in_confirm_ms": 250,
+    "playback_threshold_boost": 0.15,
+    "threshold": 0.045,
+    "min_silence_ms": 700,
+}
+
+SILERO_BATCH_DEFAULTS = {
+    "engine": "silero",
+    "positive_speech_threshold": 0.45,
+    "negative_speech_threshold": 0.30,
+    "redemption_ms": 800,
+    "pre_speech_pad_ms": 200,
+    "min_speech_ms": 250,
+    "min_rms": 0.015,
+    "noise_suppression": "browser",
+    "barge_in": True,
+    "barge_in_confirm_ms": 250,
+    "playback_threshold_boost": 0.15,
+    "threshold": 0.045,
+    "min_silence_ms": 800,
+}
+
+VAD_PRESETS = {
+    "streaming": SILERO_STREAMING_DEFAULTS,
+    "conversational": SILERO_CONVERSATIONAL_DEFAULTS,
+    "batch": SILERO_BATCH_DEFAULTS,
+}
+
 _ACTIVE_AGENT_ID: str = "agent-default-assistant"
 _ACTIVE_LOAD_STATE: str = "ready"  # idle, loading, ready, error
 _LOAD_LOCK = asyncio.Lock()
@@ -55,10 +110,13 @@ def _normalize_stt(stt_raw: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
-def _normalize_vad(vad_raw: Dict[str, Any]) -> Dict[str, Any]:
-    merged = {**DEFAULT_AGENT["vad"], **vad_raw}
+def _normalize_vad(vad_raw: Dict[str, Any], stt_kind: str = "batch") -> Dict[str, Any]:
+    base = SILERO_STREAMING_DEFAULTS if stt_kind == "streaming" else DEFAULT_AGENT["vad"]
+    merged = {**base, **vad_raw}
     if "min_silence_ms" in vad_raw and "redemption_ms" not in vad_raw:
         merged["redemption_ms"] = vad_raw["min_silence_ms"]
+    elif "redemption_ms" in vad_raw and "min_silence_ms" not in vad_raw:
+        merged["min_silence_ms"] = vad_raw["redemption_ms"]
     return merged
 
 
@@ -96,15 +154,16 @@ class AgentManager:
             rows = await cursor.fetchall()
             agents = []
             for r in rows:
+                stt_norm = _normalize_stt(json.loads(r["stt_json"]))
                 agents.append({
                     "id": r["id"],
                     "name": r["name"],
                     "description": r["description"],
                     "system_prompt": r["system_prompt"],
                     "llm": json.loads(r["llm_json"]),
-                    "stt": _normalize_stt(json.loads(r["stt_json"])),
+                    "stt": stt_norm,
                     "tts": json.loads(r["tts_json"]),
-                    "vad": _normalize_vad(json.loads(r["vad_json"])),
+                    "vad": _normalize_vad(json.loads(r["vad_json"]), stt_kind=stt_norm.get("kind", "batch")),
                     "audio": json.loads(r["audio_json"]),
                     "is_active": bool(r["is_active"]),
                     "created_at": r["created_at"],
@@ -123,15 +182,16 @@ class AgentManager:
             r = await cursor.fetchone()
             if not r:
                 return None
+            stt_norm = _normalize_stt(json.loads(r["stt_json"]))
             return {
                 "id": r["id"],
                 "name": r["name"],
                 "description": r["description"],
                 "system_prompt": r["system_prompt"],
                 "llm": json.loads(r["llm_json"]),
-                "stt": _normalize_stt(json.loads(r["stt_json"])),
+                "stt": stt_norm,
                 "tts": json.loads(r["tts_json"]),
-                "vad": _normalize_vad(json.loads(r["vad_json"])),
+                "vad": _normalize_vad(json.loads(r["vad_json"]), stt_kind=stt_norm.get("kind", "batch")),
                 "audio": json.loads(r["audio_json"]),
                 "is_active": bool(r["is_active"]),
                 "created_at": r["created_at"],
@@ -143,6 +203,9 @@ class AgentManager:
     @staticmethod
     async def create_agent(data: Dict[str, Any]) -> Dict[str, Any]:
         agent_id = data.get("id") or str(uuid.uuid4())
+        stt_kind = data.get("stt", {}).get("kind", "batch")
+        default_vad = SILERO_STREAMING_DEFAULTS if stt_kind == "streaming" else {"mode": "energy", "threshold": 0.045, "min_silence_ms": 650}
+        vad_data = data.get("vad") or default_vad
         async with get_db() as db:
             await db.execute(
                 """
@@ -157,7 +220,7 @@ class AgentManager:
                     json.dumps(data["llm"]),
                     json.dumps(data["stt"]),
                     json.dumps(data["tts"]),
-                    json.dumps(data.get("vad", {"mode": "energy", "threshold": 0.045, "min_silence_ms": 650})),
+                    json.dumps(vad_data),
                     json.dumps(data.get("audio", {"echo_mode": "laptop_speakers", "barge_in": True})),
                 ),
             )

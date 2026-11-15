@@ -21,6 +21,76 @@ export interface VadControllerConfig {
   audioMode?: 'laptop_speakers' | 'headphones';
 }
 
+export interface VadPreset {
+  name: string;
+  description: string;
+  engine: 'silero' | 'legacy';
+  positiveSpeechThreshold: number;
+  negativeSpeechThreshold: number;
+  redemptionMs: number;
+  preSpeechPadMs: number;
+  minSpeechMs: number;
+  minRms: number;
+  bargeIn: boolean;
+  bargeInConfirmMs: number;
+  playbackThresholdBoost: number;
+}
+
+/**
+ * Optimized Silero VAD preset calibrated for streaming STT models (e.g. Sherpa Zipformer 20M).
+ * Provides fast 450ms turn completion without mid-utterance false cutoffs.
+ */
+export const SILERO_STREAMING_PRESET: VadPreset = {
+  name: 'Streaming (Fast Responsive / Sherpa)',
+  description: 'Fast 450ms redemption endpointing tuned for Sherpa-ONNX streaming Zipformer.',
+  engine: 'silero',
+  positiveSpeechThreshold: 0.50,
+  negativeSpeechThreshold: 0.35,
+  redemptionMs: 450,
+  preSpeechPadMs: 150,
+  minSpeechMs: 200,
+  minRms: 0.015,
+  bargeIn: true,
+  bargeInConfirmMs: 200,
+  playbackThresholdBoost: 0.15,
+};
+
+export const SILERO_CONVERSATIONAL_PRESET: VadPreset = {
+  name: 'Conversational (Balanced)',
+  description: 'Balanced 700ms silence allowance for natural speech with mid-sentence pauses.',
+  engine: 'silero',
+  positiveSpeechThreshold: 0.45,
+  negativeSpeechThreshold: 0.30,
+  redemptionMs: 700,
+  preSpeechPadMs: 200,
+  minSpeechMs: 250,
+  minRms: 0.015,
+  bargeIn: true,
+  bargeInConfirmMs: 250,
+  playbackThresholdBoost: 0.15,
+};
+
+export const SILERO_BATCH_PRESET: VadPreset = {
+  name: 'Relaxed (Batch Whisper)',
+  description: 'Generous 800ms silence window ideal for chunk-based Whisper transcription.',
+  engine: 'silero',
+  positiveSpeechThreshold: 0.45,
+  negativeSpeechThreshold: 0.30,
+  redemptionMs: 800,
+  preSpeechPadMs: 200,
+  minSpeechMs: 250,
+  minRms: 0.015,
+  bargeIn: true,
+  bargeInConfirmMs: 250,
+  playbackThresholdBoost: 0.15,
+};
+
+export const VAD_PRESETS = {
+  streaming: SILERO_STREAMING_PRESET,
+  conversational: SILERO_CONVERSATIONAL_PRESET,
+  batch: SILERO_BATCH_PRESET,
+};
+
 export interface VadControllerCallbacks {
   onSpeechStart?: () => void;
   onSpeechRealStart?: () => void;
