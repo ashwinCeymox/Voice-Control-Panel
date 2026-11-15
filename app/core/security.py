@@ -97,6 +97,9 @@ async def get_authenticated_key(
         parts = authorization.split(" ", 1)
         if len(parts) == 2 and parts[0].lower() == "bearer":
             key = parts[1].strip()
+        elif len(parts) == 1 and parts[0].strip():
+            # Tolerate direct Authorization: <api-key> without Bearer prefix
+            key = parts[0].strip()
     elif xi_api_key:
         key = xi_api_key.strip()
 
