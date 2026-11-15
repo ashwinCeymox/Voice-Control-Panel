@@ -24,7 +24,15 @@ async def list_models(user: str = Depends(require_api_key)):
                     mid = m.get("id")
                     if mid and mid not in seen:
                         seen.add(mid)
-                        m_type = "stt" if "whisper" in mid.lower() else "llm"
+                        lower_m = mid.lower()
+                        if any(k in lower_m for k in ("whisper", "parakeet", "nemo", "crispasr", "stt", "asr")):
+                            m_type = "stt"
+                        elif any(k in lower_m for k in ("vits", "piper", "tts")):
+                            m_type = "tts"
+                        elif "silero" in lower_m or "vad" in lower_m:
+                            continue
+                        else:
+                            m_type = "llm"
                         models.append(
                             ModelInfo(
                                 id=mid,

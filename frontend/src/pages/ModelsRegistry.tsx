@@ -25,6 +25,8 @@ export const ModelsRegistry: React.FC = () => {
   const [warningModel, setWarningModel] = useState<GalleryModel | null>(null);
   const [uninstallingId, setUninstallingId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const PAGE_SIZE = 24;
 
   const fetchData = useCallback(async () => {
     try {
@@ -214,6 +216,16 @@ export const ModelsRegistry: React.FC = () => {
     return true;
   });
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [categoryFilter, searchQuery, activeTab]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredModels.length / PAGE_SIZE));
+  const paginatedModels = filteredModels.slice(
+    (currentPage - 1) * PAGE_SIZE,
+    currentPage * PAGE_SIZE
+  );
+
   const getFitBadge = (score: number) => {
     if (score >= 90) {
       return (
@@ -318,7 +330,7 @@ export const ModelsRegistry: React.FC = () => {
 
       {/* Tabs & Search Controls */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => setActiveTab('explore')}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
@@ -339,6 +351,12 @@ export const ModelsRegistry: React.FC = () => {
           >
             Installed Models ({models.filter((m) => m.installed).length})
           </button>
+          {models.length > 50 && (
+            <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-800/50 px-2.5 py-1 rounded-full">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              Live LocalAI Gallery ({models.length} available)
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
@@ -415,88 +433,163 @@ export const ModelsRegistry: React.FC = () => {
           No models found matching criteria.
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {filteredModels.map((model) => {
-            const job = activeJobs[model.id];
-            const isInstalling = job && ['queued', 'downloading', 'verifying', 'registering'].includes(job.status);
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {paginatedModels.map((model) => {
+              const job = activeJobs[model.id];
+              const isInstalling = job && ['queued', 'downloading', 'verifying', 'registering'].includes(job.status);
 
-            return (
-              <div
-                key={model.id}
-                className="bg-slate-950 border border-slate-800 rounded-xl p-5 flex flex-col justify-between space-y-4 hover:border-slate-700 transition"
-              >
-                <div className="space-y-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <h3 className="font-semibold text-slate-100 text-sm">{model.name}</h3>
-                      <span className="text-[11px] font-mono text-slate-500">{model.id}</span>
+              return (
+                <div
+                  key={model.id}
+                  className="bg-slate-950 border border-slate-800 rounded-xl p-5 flex flex-col justify-between space-y-4 hover:border-slate-700 transition"
+                >
+                  <div className="space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h3 className="font-semibold text-slate-100 text-sm">{model.name}</h3>
+                        <span className="text-[11px] font-mono text-slate-500">{model.id}</span>
+                      </div>
+                      <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-indigo-400 shrink-0">
+                        {model.category}
+                      </span>
                     </div>
-                    <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-indigo-400 shrink-0">
-                      {model.category}
-                    </span>
+
+                    <p className="text-xs text-slate-400 leading-relaxed line-clamp-2">
+                      {model.description}
+                    </p>
+
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      {getFitBadge(model.fit_score)}
+                      <span className="text-[11px] font-mono text-slate-500">
+                        RAM: ~{model.ram_required_mb} MB
+                      </span>
+                    </div>
                   </div>
 
-                  <p className="text-xs text-slate-400 leading-relaxed line-clamp-2">
-                    {model.description}
-                  </p>
+                  <div className="space-y-3 pt-3 border-t border-slate-900">
+                    <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono">
+                      <span>Size: {model.size_mb} MB</span>
+                      <span>Backend: {model.provider}</span>
+                    </div>
 
-                  <div className="flex flex-wrap items-center gap-2 pt-1">
-                    {getFitBadge(model.fit_score)}
-                    <span className="text-[11px] font-mono text-slate-500">
-                      RAM: ~{model.ram_required_mb} MB
-                    </span>
+                    {isInstalling ? (
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between text-[11px] text-indigo-400 capitalize">
+                          <span>{job.status === 'registering' ? 'Registering with engine...' : job.status === 'verifying' ? 'Verifying model...' : 'Downloading weights...'}</span>
+                          <span>{job.progress_percent}%</span>
+                        </div>
+                        <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
+                          <div
+                            className="bg-indigo-500 h-1.5 transition-all duration-300"
+                            style={{ width: `${job.progress_percent}%` }}
+                          />
+                        </div>
+                      </div>
+                    ) : model.installed ? (
+                      <div className="flex items-center justify-between">
+                        <span className="flex items-center gap-1.5 text-xs text-emerald-400 font-medium">
+                          <CheckCircle className="w-3.5 h-3.5" /> Installed
+                        </span>
+                        <button
+                          onClick={() => handleUninstall(model.id)}
+                          disabled={uninstallingId === model.id}
+                          className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-slate-900 rounded-md transition disabled:opacity-50"
+                          title="Uninstall Model"
+                        >
+                          {uninstallingId === model.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-400" />
+                          ) : (
+                            <Trash2 className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleInstallClick(model)}
+                        className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-slate-900 hover:bg-indigo-600 text-slate-200 hover:text-white rounded-lg text-xs font-medium transition border border-slate-800 hover:border-transparent"
+                      >
+                        <Download className="w-3.5 h-3.5" /> Install Model
+                      </button>
+                    )}
                   </div>
                 </div>
+              );
+            })}
+          </div>
 
-                <div className="space-y-3 pt-3 border-t border-slate-900">
-                  <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono">
-                    <span>Size: {model.size_mb} MB</span>
-                    <span>Backend: {model.provider}</span>
-                  </div>
-
-                  {isInstalling ? (
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between text-[11px] text-indigo-400 capitalize">
-                        <span>{job.status === 'registering' ? 'Registering with engine...' : job.status === 'verifying' ? 'Verifying model...' : 'Downloading weights...'}</span>
-                        <span>{job.progress_percent}%</span>
-                      </div>
-                      <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
-                        <div
-                          className="bg-indigo-500 h-1.5 transition-all duration-300"
-                          style={{ width: `${job.progress_percent}%` }}
-                        />
-                      </div>
-                    </div>
-                  ) : model.installed ? (
-                    <div className="flex items-center justify-between">
-                      <span className="flex items-center gap-1.5 text-xs text-emerald-400 font-medium">
-                        <CheckCircle className="w-3.5 h-3.5" /> Installed
-                      </span>
+          {/* Pagination Bar */}
+          {totalPages > 1 && (
+            <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-slate-800 text-xs text-slate-400">
+              <div>
+                Showing{' '}
+                <span className="font-semibold text-slate-200">
+                  {(currentPage - 1) * PAGE_SIZE + 1}
+                </span>{' '}
+                to{' '}
+                <span className="font-semibold text-slate-200">
+                  {Math.min(currentPage * PAGE_SIZE, filteredModels.length)}
+                </span>{' '}
+                of{' '}
+                <span className="font-semibold text-slate-200">
+                  {filteredModels.length}
+                </span>{' '}
+                models
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1.5 rounded-lg border border-slate-800 bg-slate-950 text-slate-300 hover:bg-slate-900 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  Previous
+                </button>
+                <div className="flex items-center gap-1 font-mono">
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNum = i + 1;
+                    if (totalPages > 5 && currentPage > 3) {
+                      pageNum = Math.min(totalPages - 4, currentPage - 2) + i;
+                    }
+                    return (
                       <button
-                        onClick={() => handleUninstall(model.id)}
-                        disabled={uninstallingId === model.id}
-                        className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-slate-900 rounded-md transition disabled:opacity-50"
-                        title="Uninstall Model"
+                        key={pageNum}
+                        onClick={() => setCurrentPage(pageNum)}
+                        className={`w-7 h-7 rounded-lg border text-xs transition ${
+                          currentPage === pageNum
+                            ? 'bg-indigo-600 border-indigo-500 text-white font-bold'
+                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-900'
+                        }`}
                       >
-                        {uninstallingId === model.id ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-400" />
-                        ) : (
-                          <Trash2 className="w-3.5 h-3.5" />
-                        )}
+                        {pageNum}
                       </button>
-                    </div>
-                  ) : (
+                    );
+                  })}
+                  {totalPages > 5 && currentPage < totalPages - 2 && (
+                    <span className="px-1 text-slate-600">...</span>
+                  )}
+                  {totalPages > 5 && currentPage < totalPages - 2 && (
                     <button
-                      onClick={() => handleInstallClick(model)}
-                      className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-slate-900 hover:bg-indigo-600 text-slate-200 hover:text-white rounded-lg text-xs font-medium transition border border-slate-800 hover:border-transparent"
+                      onClick={() => setCurrentPage(totalPages)}
+                      className={`w-7 h-7 rounded-lg border text-xs transition ${
+                        currentPage === totalPages
+                          ? 'bg-indigo-600 border-indigo-500 text-white font-bold'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-900'
+                      }`}
                     >
-                      <Download className="w-3.5 h-3.5" /> Install Model
+                      {totalPages}
                     </button>
                   )}
                 </div>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="px-3 py-1.5 rounded-lg border border-slate-800 bg-slate-950 text-slate-300 hover:bg-slate-900 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  Next
+                </button>
               </div>
-            );
-          })}
+            </div>
+          )}
         </div>
       )}
     </div>

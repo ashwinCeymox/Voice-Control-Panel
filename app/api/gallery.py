@@ -301,7 +301,7 @@ def validate_model_id(model_id: Any) -> str:
     cleaned = model_id.strip()
     if (
         len(cleaned) > 128
-        or not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9_\-\.]*$", cleaned)
+        or not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9_\-\.:]*$", cleaned)
         or ".." in cleaned
     ):
         raise HTTPException(status_code=400, detail="Invalid model_id format: must be alphanumeric and cannot contain path traversal sequences")
@@ -335,8 +335,23 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                     size_mb = catalog_match["size_mb"] if catalog_match else 500
                     display_name = catalog_match["name"] if catalog_match else effective_id
                     entry = {"id": effective_id, "name": display_name, "provider": "localai", "size_mb": size_mb}
-                    if "whisper" in raw_id.lower() or (catalog_match and catalog_match["category"] == "stt"):
+
+                    lower_id = raw_id.lower()
+                    if catalog_match and catalog_match.get("category"):
+                        cat = catalog_match["category"]
+                    elif any(k in lower_id for k in ("whisper", "parakeet", "nemo", "crispasr", "stt", "asr", "transcription")):
+                        cat = "stt"
+                    elif any(k in lower_id for k in ("vits", "piper", "tts", "kokoro", "kitten")):
+                        cat = "tts"
+                    elif "silero" in lower_id or "vad" in lower_id:
+                        continue  # Utility VAD model, not agent triad
+                    else:
+                        cat = "llm"
+
+                    if cat == "stt":
                         stt_models.append(entry)
+                    elif cat == "tts":
+                        tts_models.append(entry)
                     else:
                         llm_models.append(entry)
     except Exception:
@@ -452,6 +467,31 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
     }
 
 
+# In-memory cache for LocalAI's dynamic available models catalog
+_AVAILABLE_MODELS_CACHE: Optional[List[Dict[str, Any]]] = None
+_AVAILABLE_MODELS_TIMESTAMP: float = 0.0
+_AVAILABLE_MODELS_TTL: float = 300.0  # 5 minutes
+
+
+async def fetch_localai_available_models() -> List[Dict[str, Any]]:
+    global _AVAILABLE_MODELS_CACHE, _AVAILABLE_MODELS_TIMESTAMP
+    now = time.time()
+    if _AVAILABLE_MODELS_CACHE is not None and (now - _AVAILABLE_MODELS_TIMESTAMP) < _AVAILABLE_MODELS_TTL:
+        return _AVAILABLE_MODELS_CACHE
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            resp = await client.get(f"{settings.LOCALAI_BASE_URL}/models/available")
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list):
+                    _AVAILABLE_MODELS_CACHE = data
+                    _AVAILABLE_MODELS_TIMESTAMP = now
+                    return data
+    except Exception as e:
+        logger.debug("LocalAI /models/available not reachable or timed out: %s", e)
+    return _AVAILABLE_MODELS_CACHE or []
+
+
 @router.get("/v1/gallery/models")
 async def list_gallery_models(
     category: Optional[str] = Query(None, description="stt, llm, tts, or all"),
@@ -467,38 +507,147 @@ async def list_gallery_models(
         m["id"] for cat_models in installed_data.values() for m in cat_models
     }
 
-    results = []
-    for m in GALLERY_CATALOG:
-        if category and category != "all" and m["category"] != category:
-            continue
-        if q and q.lower() not in m["name"].lower() and q.lower() not in m["id"].lower():
+    curated_map = {c["id"]: c for c in GALLERY_CATALOG}
+    localai_models = await fetch_localai_available_models()
+
+    seen_ids = set()
+    results: List[Dict[str, Any]] = []
+
+    # 1. Process all available models from LocalAI endpoint
+    for lm in localai_models:
+        raw_name = lm.get("name") or lm.get("id")
+        if not raw_name or raw_name in seen_ids:
             continue
 
-        fit_score = compute_fit_score(m["ram_required_mb"], avail_mb)
+        base_name = raw_name.split(":")[0] if ":" in raw_name else raw_name
+        curated = curated_map.get(raw_name) or curated_map.get(base_name)
+
+        tags = [str(t).lower() for t in lm.get("tags", [])]
+        name_lower = raw_name.lower()
+
+        # Infer category
+        if curated and curated.get("category"):
+            cat = curated["category"]
+        elif any(t in tags for t in ("stt", "asr", "speech-to-text", "transcription")) or any(k in name_lower for k in ("whisper", "parakeet", "crispasr")):
+            cat = "stt"
+        elif any(t in tags for t in ("tts", "text-to-speech", "voice-model")) or any(k in name_lower for k in ("vits", "piper", "kokoro", "kitten")):
+            cat = "tts"
+        elif "silero" in name_lower and "vad" in name_lower:
+            continue  # Utility model, omit from agent model gallery
+        else:
+            cat = "llm"
+
+        # Filter by category if requested
+        if category and category != "all" and cat != category:
+            continue
+
+        # Filter by query if requested
+        if q:
+            ql = q.lower()
+            desc = (lm.get("description") or "").lower()
+            tag_str = " ".join(tags)
+            if ql not in name_lower and ql not in raw_name.lower() and ql not in desc and ql not in tag_str:
+                continue
+
+        # Size & RAM estimation
+        if curated and curated.get("size_mb"):
+            sz = curated["size_mb"]
+            ram_req = curated.get("ram_required_mb", int(sz * 1.35))
+        else:
+            sz = 500
+            for t in tags + [name_lower]:
+                mb_m = re.search(r"(\d+(?:\.\d+)?)\s*b\b", t)
+                if mb_m:
+                    b = float(mb_m.group(1))
+                    sz = max(200, int(b * 650))
+                    break
+                mm_m = re.search(r"(\d+)\s*m\b", t)
+                if mm_m:
+                    m_val = int(mm_m.group(1))
+                    sz = max(30, int(m_val * 1.5))
+                    break
+            if "whisper" in name_lower:
+                if "tiny" in name_lower: sz = 75
+                elif "base" in name_lower: sz = 145
+                elif "small" in name_lower: sz = 480
+                elif "medium" in name_lower: sz = 1500
+                elif "large" in name_lower or "turbo" in name_lower: sz = 1600
+            elif "vits" in name_lower or "piper" in name_lower:
+                sz = 80
+            ram_req = int(sz * 1.35)
+
+        fit_score = compute_fit_score(ram_req, avail_mb)
         if fits_only and fit_score < 60:
             continue
 
-        item = dict(m)
+        disp_name = curated["name"] if curated else raw_name.replace("-", " ").replace("_", " ").title()
+        quant = curated.get("quantization") if curated else ("Q4_K_M" if "q4" in name_lower else ("INT8" if "int8" in name_lower else ("FP16" if "fp16" in name_lower else "GGUF/Metal")))
+        is_inst = raw_name in installed_ids or base_name in installed_ids or bool(lm.get("installed"))
+
+        desc = lm.get("description") or (curated.get("description") if curated else f"{cat.upper()} model in LocalAI gallery.")
+        if len(desc) > 300:
+            desc = desc[:297].rstrip() + "..."
+
+        model_tags = lm.get("tags") or (curated.get("tags") if curated else [cat])
+        if curated and "recommended" in curated.get("tags", []) and "recommended" not in model_tags:
+            model_tags = ["recommended"] + list(model_tags)
+
+        seen_ids.add(raw_name)
+        if base_name != raw_name:
+            seen_ids.add(base_name)
+
+        results.append({
+            "id": raw_name,
+            "name": disp_name,
+            "category": cat,
+            "provider": curated.get("provider", "localai") if curated else "localai",
+            "size_mb": sz,
+            "ram_required_mb": ram_req,
+            "description": desc.strip(),
+            "license": lm.get("license") or (curated.get("license") if curated else "Open"),
+            "quantization": quant,
+            "tags": model_tags,
+            "fit_score": fit_score,
+            "fits_budget": fit_score >= 60,
+            "installed": is_inst,
+        })
+
+    # 2. Add any curated models that weren't in LocalAI's models/available (e.g. Kokoro TTS, Sherpa Zipformer)
+    for c in GALLERY_CATALOG:
+        cid = c["id"]
+        if cid in seen_ids:
+            continue
+        if category and category != "all" and c["category"] != category:
+            continue
+        if q and q.lower() not in c["name"].lower() and q.lower() not in cid.lower():
+            continue
+
+        fit_score = compute_fit_score(c["ram_required_mb"], avail_mb)
+        if fits_only and fit_score < 60:
+            continue
+
+        item = dict(c)
         item["fit_score"] = fit_score
         item["fits_budget"] = fit_score >= 60
-        item["installed"] = m["id"] in installed_ids
+        item["installed"] = cid in installed_ids
+        seen_ids.add(cid)
         results.append(item)
 
-    # Ensure any model currently installed in providers is visible if not already in catalog
-    existing_ids = {r["id"] for r in results}
+    # 3. Ensure any model installed in providers is visible if not yet in results
     for cat_name, cat_models in installed_data.items():
         if category and category != "all" and category != cat_name:
             continue
         for im in cat_models:
-            if im["id"] not in existing_ids:
-                if q and q.lower() not in im.get("name", "").lower() and q.lower() not in im["id"].lower():
+            imid = im["id"]
+            if imid not in seen_ids:
+                if q and q.lower() not in im.get("name", "").lower() and q.lower() not in imid.lower():
                     continue
                 sz = im.get("size_mb", 500)
                 ram_req = int(sz * 1.3)
                 score = compute_fit_score(ram_req, avail_mb)
                 results.append({
-                    "id": im["id"],
-                    "name": im.get("name", im["id"]),
+                    "id": imid,
+                    "name": im.get("name", imid),
                     "category": cat_name,
                     "provider": im.get("provider", "localai"),
                     "size_mb": sz,
@@ -511,10 +660,15 @@ async def list_gallery_models(
                     "fits_budget": score >= 60,
                     "installed": True,
                 })
-                existing_ids.add(im["id"])
+                seen_ids.add(imid)
 
-    # Sort by fit score descending
-    results.sort(key=lambda x: x["fit_score"], reverse=True)
+    # Sort: Installed and recommended first, then by fit_score descending
+    def sort_key(x):
+        is_rec = 1 if "recommended" in x.get("tags", []) else 0
+        is_inst = 1 if x.get("installed") else 0
+        return (is_inst, is_rec, x.get("fit_score", 0))
+
+    results.sort(key=sort_key, reverse=True)
     return {"models": results}
 
 
