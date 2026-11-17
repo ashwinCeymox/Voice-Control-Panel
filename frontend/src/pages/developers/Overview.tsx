@@ -1,6 +1,19 @@
-import React, { useState, useEffect } from 'react';
-import { Activity, Clock, Cpu, RefreshCw, Zap, Server, AlertTriangle } from 'lucide-react';
-import { fetchAdminJson } from './api';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  Activity,
+  Clock,
+  Cpu,
+  RefreshCw,
+  Zap,
+  Server,
+  AlertTriangle,
+  Trash2,
+  Shield,
+  CheckCircle2,
+  X,
+  Radio,
+} from 'lucide-react';
+import { fetchAdminJson, getAdminApiKey, getAdminHeaders } from './api';
 
 interface UsageSummary {
   since: number;
@@ -19,6 +32,7 @@ interface UsageSummary {
   stt_audio_seconds_in: number;
   tts_audio_seconds_out: number;
   tts_characters_in: number;
+  stt_fallbacks?: Record<string, number>;
   groups: Array<{
     name: string;
     requests: number;
@@ -43,45 +57,119 @@ interface TimeseriesPoint {
   p95_latency_ms: number;
 }
 
-interface ModelStatus {
+interface ResidentModel {
   id: string;
   name: string;
-  category: string;
-  provider: string;
-  size_mb: number;
-  status: 'warm' | 'idle';
-  memory_mb: number;
+  engine: string;
+  state: 'active' | 'idle' | 'stale';
+  is_protected: boolean;
+  in_flight: number;
+  memory_rss_bytes: number;
+  memory_rss_mb: number;
+  last_used: number;
+  source: string;
 }
 
-interface ModelsStatusResponse {
-  models: ModelStatus[];
-  system_memory: {
-    total_mb: number;
-    available_mb: number;
-    used_mb: number;
-  };
+interface ResidencyStatusResponse {
+  idle_timeout_seconds: number;
+  stale_timeout_seconds: number;
+  auto_flush_seconds: number;
+  auto_flush_enabled: boolean;
+  protected_models: string[];
+  models: ResidentModel[];
+}
+
+interface SystemMemoryInfo {
+  total_mb: number;
+  available_mb: number;
+  used_mb: number;
+  percent: number;
+}
+
+interface ModelActivityItem {
+  model_id: string;
+  display_name: string;
+  engine: string;
+  state: string;
+  memory_mb: number;
+  requests: number;
+  errors: number;
+  p50_latency_ms: number;
+  p95_latency_ms: number;
+  ttfb_ms?: number | null;
+  last_used_ts: number;
+  last_used_iso: string;
+  top_keys: Array<{ name: string; requests: number }>;
+}
+
+interface ToastMessage {
+  id: string;
+  level: 'info' | 'warning' | 'error';
+  message: string;
+  timestamp: number;
 }
 
 export const Overview: React.FC = () => {
   const [timeWindow, setTimeWindow] = useState<'1h' | '24h' | '7d' | '30d'>('24h');
   const [summary, setSummary] = useState<UsageSummary | null>(null);
   const [timeseries, setTimeseries] = useState<TimeseriesPoint[]>([]);
-  const [modelsStatus, setModelsStatus] = useState<ModelsStatusResponse | null>(null);
+  const [residency, setResidency] = useState<ResidencyStatusResponse | null>(null);
+  const [systemMemory, setSystemMemory] = useState<SystemMemoryInfo | null>(null);
+  const [modelActivity, setModelActivity] = useState<ModelActivityItem[]>([]);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const seenToastIds = useRef<Set<string>>(new Set());
+  const toastCooldowns = useRef<Map<string, number>>(new Map());
+
+  const addToast = (message: string, level: 'info' | 'warning' | 'error' = 'info', customId?: string) => {
+    const toastId = customId || `toast-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    if (seenToastIds.current.has(toastId)) return;
+
+    // Throttle identical or repeated flush notifications within 10s
+    const now = Date.now();
+    const lastSeen = toastCooldowns.current.get(message) || 0;
+    if (now - lastSeen < 10000) {
+      return;
+    }
+    toastCooldowns.current.set(message, now);
+    seenToastIds.current.add(toastId);
+
+    const newToast: ToastMessage = {
+      id: toastId,
+      level,
+      message,
+      timestamp: Date.now(),
+    };
+    setToasts((prev) => {
+      if (prev.some((t) => t.id === toastId || t.message === message)) {
+        return prev;
+      }
+      return [...prev.slice(-3), newToast];
+    });
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== newToast.id));
+    }, 5000);
+  };
 
   const loadData = async () => {
     setLoading(true);
     setError(null);
     try {
-      const [sumData, tsData, modData] = await Promise.all([
+      const [sumData, tsData, resData, statusData, actData] = await Promise.all([
         fetchAdminJson<UsageSummary>(`/v1/admin/usage/summary?since=${timeWindow}&group_by=model`),
         fetchAdminJson<{ series: TimeseriesPoint[] }>(`/v1/admin/usage/timeseries?interval=hour&since=${timeWindow}`),
-        fetchAdminJson<ModelsStatusResponse>('/v1/admin/models/status'),
+        fetchAdminJson<ResidencyStatusResponse>('/v1/admin/residency'),
+        fetchAdminJson<{ system_memory: SystemMemoryInfo }>('/v1/admin/models/status'),
+        fetchAdminJson<ModelActivityItem[]>(`/v1/admin/usage/models?since=${timeWindow}`),
       ]);
       setSummary(sumData);
       setTimeseries(tsData.series || []);
-      setModelsStatus(modData);
+      setResidency(resData);
+      if (statusData?.system_memory) setSystemMemory(statusData.system_memory);
+      setModelActivity(Array.isArray(actData) ? actData : []);
     } catch (err: any) {
       setError(err?.message || 'Failed to load telemetry metrics');
     } finally {
@@ -91,19 +179,137 @@ export const Overview: React.FC = () => {
 
   useEffect(() => {
     loadData();
-    const timer = setInterval(loadData, 30000);
+    const timer = setInterval(loadData, 20000);
     return () => clearInterval(timer);
   }, [timeWindow]);
 
+  // Connect to SSE Live stream for realtime telemetry and toasts
+  useEffect(() => {
+    const adminKey = getAdminApiKey();
+    const url = adminKey ? `/v1/admin/stream/overview?api_key=${encodeURIComponent(adminKey)}` : '/v1/admin/stream/overview';
+
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource(url, { withCredentials: true });
+
+      eventSource.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.residency) setResidency(payload.residency);
+          if (payload.system_memory) setSystemMemory(payload.system_memory);
+          if (Array.isArray(payload.toasts) && payload.toasts.length > 0) {
+            payload.toasts.forEach((t: any) => {
+              const msg = t.message || (typeof t === 'string' ? t : JSON.stringify(t));
+              const lvl = t.level || 'info';
+              const tid = t.id || `toast-${t.model_id || msg}`;
+              if (!seenToastIds.current.has(tid)) {
+                addToast(msg, lvl, tid);
+              }
+            });
+          }
+        } catch (e) {
+          // ignore parse errors
+        }
+      };
+
+      eventSource.onerror = () => {
+        if (eventSource) eventSource.close();
+      };
+    } catch (e) {
+      // EventSource fallback
+    }
+
+    return () => {
+      if (eventSource) eventSource.close();
+    };
+  }, []);
+
+  const handleFlushModel = async (modelId: string, force = false) => {
+    setActionLoading(modelId);
+    try {
+      const res = await fetch(`/v1/admin/residency/${encodeURIComponent(modelId)}/flush?force=${force}`, {
+        method: 'POST',
+        headers: getAdminHeaders(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const flushId = `flush-${modelId}-${Math.floor(Date.now() / 8000)}`;
+        addToast(data.message || `Model '${modelId}' unloaded successfully`, 'info', flushId);
+        await loadData();
+      } else {
+        addToast(data.detail || `Could not unload '${modelId}'`, 'warning');
+      }
+    } catch (err: any) {
+      addToast(`Flush failed: ${err.message}`, 'error');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleFlushIdle = async () => {
+    setActionLoading('flush_idle');
+    try {
+      const res = await fetch('/v1/admin/residency/flush-idle', {
+        method: 'POST',
+        headers: getAdminHeaders(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const count = data.results?.length || 0;
+        const flushIdleId = `flush-idle-${Math.floor(Date.now() / 8000)}`;
+        addToast(`Flushed ${count} idle models from memory`, 'info', flushIdleId);
+        await loadData();
+      } else {
+        addToast(data.detail || 'Could not flush idle models', 'warning');
+      }
+    } catch (err: any) {
+      addToast(`Flush failed: ${err.message}`, 'error');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const maxRequests = Math.max(...timeseries.map((p) => p.requests), 1);
+  const totalVolume = timeseries.reduce((sum, p) => sum + p.requests, 0);
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
+      {/* Toast Notifications Overlay */}
+      {toasts.length > 0 && (
+        <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2 max-w-sm pointer-events-none">
+          {toasts.map((t) => (
+            <div
+              key={t.id}
+              className={`p-3 rounded-xl shadow-xl border text-xs flex items-center justify-between gap-3 pointer-events-auto transition-all ${
+                t.level === 'error'
+                  ? 'bg-rose-950/90 text-rose-200 border-rose-500/30'
+                  : t.level === 'warning'
+                  ? 'bg-amber-950/90 text-amber-200 border-amber-500/30'
+                  : 'bg-indigo-950/90 text-indigo-200 border-indigo-500/30'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-indigo-400" />
+                <span>{t.message}</span>
+              </div>
+              <button
+                onClick={() => setToasts((prev) => prev.filter((item) => item.id !== t.id))}
+                className="text-slate-400 hover:text-slate-200 p-0.5"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Header & Filter Controls */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-100">Developer Dashboard Overview</h1>
-          <p className="text-sm text-slate-400">Live API usage, latency percentiles, throughput, and warm engine states</p>
+          <p className="text-sm text-slate-400">
+            Live API usage, latency percentiles, throughput, and warm engine states
+          </p>
         </div>
 
         <div className="flex items-center gap-3">
@@ -182,7 +388,8 @@ export const Overview: React.FC = () => {
             <Clock className="w-4 h-4 text-sky-400" />
           </div>
           <div className="text-2xl font-bold text-slate-100">
-            {summary?.p50_latency_ms || 0} <span className="text-xs font-normal text-slate-400">/ {summary?.p95_latency_ms || 0} ms</span>
+            {summary?.p50_latency_ms || 0}{' '}
+            <span className="text-xs font-normal text-slate-400">/ {summary?.p95_latency_ms || 0} ms</span>
           </div>
           <div className="text-xs text-slate-500 flex items-center justify-between">
             <span>Avg Stream TTFB</span>
@@ -208,29 +415,60 @@ export const Overview: React.FC = () => {
         </div>
       </div>
 
+      {/* STT Fallback Counters by Reason */}
+      <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg text-amber-400">
+            <Radio className="w-4 h-4" />
+          </div>
+          <div>
+            <h4 className="text-xs font-semibold text-slate-200">Streaming STT Fallback Counters</h4>
+            <p className="text-[11px] text-slate-500">Explicit telemetry tracking engine substitutions and unavailable models</p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <div className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg flex items-center gap-2">
+            <span className="text-slate-400">Model Unavailable:</span>
+            <span className="font-mono font-semibold text-rose-400">{summary?.stt_fallbacks?.model_unavailable || 0}</span>
+          </div>
+          <div className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg flex items-center gap-2">
+            <span className="text-slate-400">Empty Model Rejected:</span>
+            <span className="font-mono font-semibold text-amber-400">{summary?.stt_fallbacks?.empty_model || 0}</span>
+          </div>
+          <div className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg flex items-center gap-2">
+            <span className="text-slate-400">Service Unreachable:</span>
+            <span className="font-mono font-semibold text-sky-400">{summary?.stt_fallbacks?.service_unreachable || 0}</span>
+          </div>
+          <div className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg flex items-center gap-2">
+            <span className="text-slate-400">Stream Timeouts:</span>
+            <span className="font-mono font-semibold text-slate-300">{summary?.stt_fallbacks?.timeout || 0}</span>
+          </div>
+        </div>
+      </div>
+
       {/* Activity Timeseries Bar Chart */}
       <div className="bg-slate-950 border border-slate-800 rounded-xl p-6 space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="font-semibold text-slate-200 text-sm">Request Volume Over Time</h3>
-            <p className="text-xs text-slate-500">Hourly activity breakdown</p>
+            <p className="text-xs text-slate-500">Hourly activity breakdown (zero-filled continuous interval)</p>
           </div>
         </div>
 
-        {timeseries.length === 0 ? (
-          <div className="h-40 flex items-center justify-center text-xs text-slate-500 border border-dashed border-slate-800 rounded-lg">
-            No telemetry events recorded in selected time window ({timeWindow}).
+        {timeseries.length === 0 || totalVolume === 0 ? (
+          <div className="h-40 flex flex-col items-center justify-center text-xs text-slate-500 border border-dashed border-slate-800 rounded-lg gap-1">
+            <Activity className="w-5 h-5 text-slate-600 mb-1" />
+            <span>No requests in this range ({timeWindow})</span>
+            <span className="text-[11px] text-slate-600">Send requests via API or Playgrounds to see live volume</span>
           </div>
         ) : (
           <div className="h-44 flex items-end gap-1.5 pt-6 pb-2 border-b border-slate-800 overflow-x-auto">
             {timeseries.map((pt, i) => {
-              const heightPct = Math.max((pt.requests / maxRequests) * 100, 6);
+              const heightPct = Math.max((pt.requests / maxRequests) * 100, pt.requests > 0 ? 6 : 2);
               const hasErrors = pt.errors > 0;
               return (
-                <div
-                  key={i}
-                  className="flex-1 min-w-[14px] flex flex-col items-center justify-end group relative"
-                >
+                <div key={i} className="flex-1 min-w-[14px] flex flex-col items-center justify-end group relative">
                   {/* Tooltip */}
                   <div className="absolute -top-12 hidden group-hover:flex flex-col items-center z-20 pointer-events-none">
                     <div className="bg-slate-900 border border-slate-700 text-slate-200 text-[10px] px-2 py-1 rounded shadow-lg whitespace-nowrap">
@@ -241,7 +479,11 @@ export const Overview: React.FC = () => {
                   <div
                     style={{ height: `${heightPct}%` }}
                     className={`w-full rounded-t transition-all ${
-                      hasErrors ? 'bg-amber-500 hover:bg-amber-400' : 'bg-indigo-600 hover:bg-indigo-500'
+                      pt.requests === 0
+                        ? 'bg-slate-900'
+                        : hasErrors
+                        ? 'bg-amber-500 hover:bg-amber-400'
+                        : 'bg-indigo-600 hover:bg-indigo-500'
                     }`}
                   />
                 </div>
@@ -251,104 +493,171 @@ export const Overview: React.FC = () => {
         )}
       </div>
 
-      {/* Bottom Grid: Models Warm State & Model Breakdown */}
+      {/* Bottom Grid: Warm Engines & Model Activity */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Warm Engines & Memory */}
         <div className="bg-slate-950 border border-slate-800 rounded-xl p-6 space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="font-semibold text-slate-200 text-sm">Warm Engines & Memory</h3>
-              <p className="text-xs text-slate-500">Local AI inference engine memory allocation</p>
+              <p className="text-xs text-slate-500">Live resident models in process memory</p>
             </div>
-            <Server className="w-4 h-4 text-slate-400" />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleFlushIdle}
+                disabled={actionLoading === 'flush_idle'}
+                className="px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-slate-100 flex items-center gap-1.5 transition-all disabled:opacity-50"
+                title="Unload all idle models"
+              >
+                <Trash2 className="w-3 h-3 text-rose-400" />
+                <span>Flush all idle</span>
+              </button>
+              <Server className="w-4 h-4 text-slate-400" />
+            </div>
           </div>
 
           {/* System Memory Bar */}
-          {modelsStatus?.system_memory && (
+          {systemMemory && (
             <div className="space-y-1.5 bg-slate-900/60 border border-slate-800/80 p-3 rounded-lg text-xs">
               <div className="flex justify-between text-slate-400">
-                <span>System RAM</span>
-                <span>
-                  {modelsStatus.system_memory.used_mb} MB / {modelsStatus.system_memory.total_mb} MB
+                <span>System RAM (Measured)</span>
+                <span className="font-mono">
+                  {systemMemory.used_mb} MB / {systemMemory.total_mb} MB ({systemMemory.percent}%)
                 </span>
               </div>
               <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-indigo-500 rounded-full"
-                  style={{
-                    width: `${Math.min(
-                      (modelsStatus.system_memory.used_mb / modelsStatus.system_memory.total_mb) * 100,
-                      100
-                    )}%`,
-                  }}
+                  className={`h-full rounded-full transition-all ${
+                    systemMemory.percent > 85 ? 'bg-rose-500' : systemMemory.percent > 70 ? 'bg-amber-500' : 'bg-indigo-500'
+                  }`}
+                  style={{ width: `${Math.min(systemMemory.percent, 100)}%` }}
                 />
               </div>
             </div>
           )}
 
-          {/* Models Status Pills List */}
+          {/* Models Residency List */}
           <div className="space-y-2">
-            {modelsStatus?.models.map((m) => (
-              <div
-                key={m.id}
-                className="flex items-center justify-between p-3 bg-slate-900 border border-slate-800/60 rounded-lg text-xs"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Cpu className="w-4 h-4 text-indigo-400" />
-                  <div>
-                    <div className="font-medium text-slate-200">{m.name}</div>
-                    <div className="text-[10px] text-slate-500 uppercase tracking-wide">
-                      {m.category} · {m.provider}
+            {(!residency?.models || residency.models.length === 0) ? (
+              <div className="h-32 flex flex-col items-center justify-center text-xs text-slate-500 border border-dashed border-slate-800 rounded-lg gap-1">
+                <Cpu className="w-4 h-4 text-slate-600 mb-1" />
+                <span>No models currently loaded in memory</span>
+                <span className="text-[11px] text-slate-600">Models load automatically on first request</span>
+              </div>
+            ) : (
+              residency.models.map((m) => {
+                const isIdle = m.state === 'idle';
+
+                return (
+                  <div
+                    key={m.id}
+                    className="flex items-center justify-between p-3 bg-slate-900 border border-slate-800/60 rounded-lg text-xs"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Cpu className="w-4 h-4 text-indigo-400" />
+                      <div>
+                        <div className="font-medium text-slate-200">{m.name || m.id}</div>
+                        <div className="text-[10px] text-slate-500 tracking-wide">
+                          {m.engine} · {m.memory_rss_mb > 0 ? `${m.memory_rss_mb} MB (measured)` : 'Active'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2.5">
+                      {m.is_protected && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-indigo-500/10 text-indigo-400 border-indigo-500/20 flex items-center gap-1">
+                          <Shield className="w-2.5 h-2.5" />
+                          PROTECTED
+                        </span>
+                      )}
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                          m.state === 'active'
+                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                            : isIdle
+                            ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                            : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                        }`}
+                      >
+                        {m.state.toUpperCase()}
+                      </span>
+
+                      <button
+                        onClick={() => handleFlushModel(m.id, m.is_protected)}
+                        disabled={actionLoading === m.id}
+                        className="px-2 py-1 rounded bg-slate-800 hover:bg-rose-500/20 hover:text-rose-300 text-slate-400 text-[11px] border border-slate-700/60 transition-all disabled:opacity-50"
+                        title="Flush model from memory"
+                      >
+                        {actionLoading === m.id ? (
+                          <RefreshCw className="w-3 h-3 animate-spin text-rose-400" />
+                        ) : (
+                          'Flush'
+                        )}
+                      </button>
                     </div>
                   </div>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <span className="text-slate-400 font-mono">{m.size_mb} MB</span>
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
-                      m.status === 'warm'
-                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                        : 'bg-slate-800 text-slate-400 border-slate-700'
-                    }`}
-                  >
-                    {m.status.toUpperCase()}
-                  </span>
-                </div>
-              </div>
-            ))}
+                );
+              })
+            )}
           </div>
         </div>
 
-        {/* Model Usage Breakdown */}
+        {/* Model Activity Breakdown Table */}
         <div className="bg-slate-950 border border-slate-800 rounded-xl p-6 space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="font-semibold text-slate-200 text-sm">Model Activity Breakdown</h3>
-              <p className="text-xs text-slate-500">Volume and latency per model</p>
+              <p className="text-xs text-slate-500">Telemetry, percentiles, and top keys</p>
             </div>
             <Activity className="w-4 h-4 text-slate-400" />
           </div>
 
-          {(!summary?.groups || summary.groups.length === 0) ? (
+          {modelActivity.length === 0 ? (
             <div className="h-48 flex items-center justify-center text-xs text-slate-500 border border-dashed border-slate-800 rounded-lg">
-              No model usage logged yet.
+              No model telemetry recorded in selected window ({timeWindow}).
             </div>
           ) : (
-            <div className="space-y-2">
-              {summary.groups.map((g) => (
+            <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
+              {modelActivity.map((item) => (
                 <div
-                  key={g.name}
+                  key={item.model_id}
                   className="p-3 bg-slate-900 border border-slate-800/60 rounded-lg space-y-2 text-xs"
                 >
                   <div className="flex items-center justify-between">
-                    <span className="font-medium text-slate-200 font-mono">{g.name}</span>
-                    <span className="text-slate-400 font-semibold">{g.requests} reqs</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-slate-200 font-mono">{item.display_name || item.model_id}</span>
+                      <span className="text-[10px] text-slate-500 uppercase">{item.engine}</span>
+                    </div>
+                    <span className="text-slate-300 font-mono font-medium">
+                      {item.requests} reqs {item.errors > 0 && <span className="text-rose-400">({item.errors} err)</span>}
+                    </span>
                   </div>
-                  <div className="flex items-center justify-between text-slate-500 text-[11px]">
-                    <span>Avg Latency: <span className="text-slate-300 font-mono">{g.avg_latency_ms} ms</span></span>
-                    <span>Errors: <span className={g.errors > 0 ? 'text-amber-400 font-medium' : 'text-slate-400'}>{g.errors}</span></span>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px] text-slate-400 pt-1 border-t border-slate-800/50">
+                    <div>
+                      <span className="text-slate-500">Latency: </span>
+                      <span className="text-slate-300 font-mono">{item.p50_latency_ms} / {item.p95_latency_ms} ms</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">TTFB: </span>
+                      <span className="text-sky-400 font-mono">{item.ttfb_ms !== null && item.ttfb_ms !== undefined ? `${item.ttfb_ms} ms` : '—'}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Memory: </span>
+                      <span className="text-slate-300 font-mono">{item.memory_mb > 0 ? `${item.memory_mb} MB` : '—'}</span>
+                    </div>
                   </div>
+
+                  {item.top_keys && item.top_keys.length > 0 && (
+                    <div className="text-[10px] text-slate-500 flex flex-wrap items-center gap-1.5 pt-0.5">
+                      <span className="text-slate-600 font-medium">Top Keys:</span>
+                      {item.top_keys.map((k) => (
+                        <span key={k.name} className="bg-slate-800/80 text-slate-300 px-1.5 py-0.5 rounded font-mono">
+                          {k.name} ({k.requests})
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

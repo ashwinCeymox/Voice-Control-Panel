@@ -1,0 +1,68 @@
+{
+    auto_https off
+    servers {
+        timeouts {
+            read_header 10s
+            idle 2m
+        }
+    }
+}
+
+# RunPod HTTP proxy terminates TLS and forwards plain HTTP to the pod port.
+# Catch-all address matches any host (<pod-id>-<port>.proxy.runpod.net)
+:{$POD_PUBLIC_PORT:3000} {
+    encode zstd gzip
+
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "microphone=(self), camera=(), geolocation=(), payment=()"
+        -Server
+    }
+
+    # Hard block metrics and docs
+    @blocked path /metrics /metrics/* /docs /docs/* /redoc /redoc/* /openapi.json
+    handle @blocked {
+        respond 404
+    }
+
+    # API and WebSocket proxy to Gateway
+    handle /v1/* {
+        request_body {
+            max_size 25MB
+        }
+        reverse_proxy 127.0.0.1:8000 {
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Real-IP {remote_host}
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 300s
+            }
+        }
+    }
+
+    handle /health/* {
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    # Control panel with second-layer basic auth for public proxy URL
+    redir /voicecontrolpanel /voicecontrolpanel/ 308
+    handle_path /voicecontrolpanel/* {
+        basic_auth {
+            admin $2a$14$REPLACE_WITH_HASH_FROM_CADDY_HASH_PASSWORD
+        }
+        root * /workspace/frontend/dist
+
+        @assets path /assets/*
+        header @assets Cache-Control "public, max-age=31536000, immutable"
+        header /index.html Cache-Control "no-store"
+
+        try_files {path} /index.html
+        file_server
+    }
+
+    handle {
+        respond 404
+    }
+}

@@ -7,9 +7,11 @@ interface RequestLogItem {
   ts: number;
   timestamp_iso: string;
   key_id?: string;
+  key_name?: string;
   key_prefix: string;
   profile_id?: string;
   profile_name: string;
+  actor_type?: string;
   endpoint: string;
   model: string;
   status: number;
@@ -41,6 +43,8 @@ export const RequestLog: React.FC = () => {
   const [filterEndpoint, setFilterEndpoint] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<string>('');
   const [filterSince, setFilterSince] = useState<string>('24h');
+  const [filterActorType, setFilterActorType] = useState<string>('');
+  const [filterModel, setFilterModel] = useState<string>('');
 
   const loadRequests = async () => {
     setLoading(true);
@@ -50,6 +54,8 @@ export const RequestLog: React.FC = () => {
       if (filterEndpoint) query += `&endpoint=${encodeURIComponent(filterEndpoint)}`;
       if (filterStatus) query += `&status=${filterStatus}`;
       if (filterSince) query += `&since=${filterSince}`;
+      if (filterActorType) query += `&actor_type=${filterActorType}`;
+      if (filterModel) query += `&model=${encodeURIComponent(filterModel)}`;
 
       const data = await fetchAdminJson<RequestLogResponse>(query);
       setItems(data.items || []);
@@ -63,7 +69,7 @@ export const RequestLog: React.FC = () => {
 
   useEffect(() => {
     loadRequests();
-  }, [offset, filterEndpoint, filterStatus, filterSince]);
+  }, [offset, filterEndpoint, filterStatus, filterSince, filterActorType, filterModel]);
 
   const handleExportCsv = () => {
     const adminKey = getAdminApiKey();
@@ -71,12 +77,13 @@ export const RequestLog: React.FC = () => {
     if (filterEndpoint) url += `&endpoint=${encodeURIComponent(filterEndpoint)}`;
     if (filterStatus) url += `&status=${filterStatus}`;
     if (filterSince) url += `&since=${filterSince}`;
+    if (filterActorType) url += `&actor_type=${filterActorType}`;
+    if (filterModel) url += `&model=${encodeURIComponent(filterModel)}`;
 
     // Direct fetch with download
     fetch(url, {
-      headers: {
-        Authorization: `Bearer ${adminKey}`,
-      },
+      credentials: 'include',
+      headers: adminKey ? { Authorization: `Bearer ${adminKey}` } : {},
     })
       .then((res) => res.blob())
       .then((blob) => {
@@ -187,6 +194,33 @@ export const RequestLog: React.FC = () => {
           <option value="503">503 Service Unavailable</option>
         </select>
 
+        {/* Actor type filter */}
+        <select
+          value={filterActorType}
+          onChange={(e) => {
+            setOffset(0);
+            setFilterActorType(e.target.value);
+          }}
+          className="bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 outline-none"
+        >
+          <option value="">All Actors</option>
+          <option value="key">API Keys</option>
+          <option value="admin">Admin Session</option>
+          <option value="system">System / Internal</option>
+        </select>
+
+        {/* Model filter */}
+        <input
+          type="text"
+          placeholder="Filter model..."
+          value={filterModel}
+          onChange={(e) => {
+            setOffset(0);
+            setFilterModel(e.target.value);
+          }}
+          className="bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 outline-none w-32 placeholder:text-slate-600"
+        />
+
         <div className="ml-auto text-slate-500 font-mono text-[11px]">
           Showing {items.length} of {total} events
         </div>
@@ -227,20 +261,38 @@ export const RequestLog: React.FC = () => {
                   const isRateLimit = item.status === 429;
                   const is5xx = item.status >= 500;
 
+                  const keyLabel =
+                    item.key_name && item.key_name !== 'None'
+                      ? item.key_name
+                      : item.key_prefix && item.key_prefix !== 'None'
+                      ? item.key_prefix
+                      : item.actor_type === 'admin'
+                      ? 'Admin'
+                      : 'System (unattributed)';
+
+                  const profileLabel =
+                    item.profile_name && item.profile_name !== 'None' && item.profile_name !== '—'
+                      ? item.profile_name
+                      : item.actor_type
+                      ? `[${item.actor_type}]`
+                      : '—';
+
+                  const modelLabel = item.model && item.model !== 'None' ? item.model : '—';
+
                   return (
                     <tr key={item.id} className="hover:bg-slate-900/40 transition-colors">
                       <td className="py-2.5 px-4 text-slate-400 whitespace-nowrap">
                         {item.timestamp_iso ? item.timestamp_iso.replace('T', ' ').replace('Z', '') : '-'}
                       </td>
                       <td className="py-2.5 px-4 whitespace-nowrap">
-                        <div className="text-slate-200 font-sans font-medium">{item.profile_name}</div>
-                        <div className="text-[10px] text-slate-500">{item.key_prefix}</div>
+                        <div className="text-slate-200 font-sans font-medium">{keyLabel}</div>
+                        <div className="text-[10px] text-slate-500">{profileLabel}</div>
                       </td>
                       <td className="py-2.5 px-4 font-sans text-slate-300 truncate max-w-[200px]" title={item.endpoint}>
                         {item.endpoint}
                       </td>
-                      <td className="py-2.5 px-4 text-slate-400 truncate max-w-[140px]" title={item.model}>
-                        {item.model}
+                      <td className="py-2.5 px-4 text-slate-400 truncate max-w-[140px]" title={modelLabel}>
+                        {modelLabel}
                       </td>
                       <td className="py-2.5 px-4 whitespace-nowrap">
                         <span

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Save, AlertTriangle, Key, Check } from 'lucide-react';
-import { fetchAdminJson, getAdminApiKey, setAdminApiKey } from './api';
+import { Save, AlertTriangle, Check } from 'lucide-react';
+import { fetchAdminJson } from './api';
 
 interface DashboardSettings {
   base_url: string;
@@ -15,7 +15,6 @@ export const Settings: React.FC = () => {
   const [defaultRateLimit, setDefaultRateLimit] = useState<number>(60);
   const [defaultMaxConcurrent, setDefaultMaxConcurrent] = useState<number>(5);
   const [retentionDays, setRetentionDays] = useState<number>(30);
-  const [adminKey, setAdminKeyState] = useState<string>('');
 
   const [_loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
@@ -23,8 +22,6 @@ export const Settings: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setAdminKeyState(getAdminApiKey());
-
     const loadSettings = async () => {
       setLoading(true);
       setError(null);
@@ -49,11 +46,6 @@ export const Settings: React.FC = () => {
     setSaving(true);
     setSaveSuccess(false);
     setError(null);
-
-    // Save client admin key
-    if (adminKey.trim()) {
-      setAdminApiKey(adminKey.trim());
-    }
 
     try {
       await fetchAdminJson<DashboardSettings>('/v1/admin/settings/dashboard', {
@@ -185,27 +177,6 @@ export const Settings: React.FC = () => {
               max="365"
               value={retentionDays}
               onChange={(e) => setRetentionDays(Number(e.target.value))}
-              className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono text-xs outline-none focus:border-indigo-500"
-            />
-          </div>
-        </div>
-
-        {/* Control Panel Session Admin Key */}
-        <div className="bg-slate-950 border border-slate-800 rounded-xl p-6 space-y-4 text-xs">
-          <div className="flex items-center gap-2">
-            <Key className="w-4 h-4 text-indigo-400" />
-            <h3 className="font-semibold text-slate-200 text-sm">Admin Session Key</h3>
-          </div>
-          <p className="text-slate-400">
-            The admin authorization key used by this browser session to authenticate requests to <code>/v1/admin/*</code>.
-          </p>
-
-          <div className="max-w-lg">
-            <input
-              type="password"
-              value={adminKey}
-              onChange={(e) => setAdminKeyState(e.target.value)}
-              placeholder="dev-voice-key-12345"
               className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono text-xs outline-none focus:border-indigo-500"
             />
           </div>

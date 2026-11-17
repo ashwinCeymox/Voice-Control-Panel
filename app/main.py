@@ -17,6 +17,7 @@ from app.api.admin_profiles import router as admin_profiles_router
 from app.api.admin_usage import router as admin_usage_router
 from app.api.metrics import router as metrics_router
 from app.api.stream_stt import router as stream_stt_router
+from app.api.admin_auth import router as panel_auth_router
 from app.core.config import settings
 from app.core.errors import AppError, app_error_handler
 from app.core.logging import setup_logging
@@ -76,10 +77,38 @@ async def _prewarm_models():
 async def lifespan(app: FastAPI):
     # Startup
     setup_logging()
+    env = settings.ENVIRONMENT.lower()
+    if env not in ("development", "staging", "production"):
+        raise RuntimeError(
+            f"Invalid ENVIRONMENT '{settings.ENVIRONMENT}'. Allowed values: development, staging, production."
+        )
+    if env in ("production", "staging"):
+        if settings.ADMIN_API_KEY == "dev-voice-key-12345" or not settings.ADMIN_API_KEY:
+            raise RuntimeError(
+                f"CRITICAL SECURITY CONFIGURATION ERROR: Running in {env} mode with default or empty ADMIN_API_KEY! "
+                "Generate a 256-bit random key with 'openssl rand -hex 32' and set ADMIN_API_KEY in .env before starting."
+            )
+        if "dev-secret-key" in settings.API_KEY_HASH_SECRET:
+            raise RuntimeError(
+                f"CRITICAL SECURITY CONFIGURATION ERROR: Running in {env} mode with default API_KEY_HASH_SECRET! "
+                "Generate a high-entropy secret with 'openssl rand -hex 32' and set API_KEY_HASH_SECRET in .env."
+            )
     await init_db()
+    from app.services.admin_auth import AdminAuthService
+    await AdminAuthService.seed_admin_user()
+    try:
+        from app.services.model_manifest import model_manifest
+        await model_manifest.sync_manifest()
+        from app.services.residency_manager import residency_manager
+        await residency_manager.initialize()
+    except Exception as e:
+        logger.warning("Initial models manifest/residency sync failed: %s", e)
+    from app.services.hygiene_manager import hygiene_manager
+    hygiene_manager.start()
     asyncio.create_task(_prewarm_models())
     yield
     # Shutdown
+    hygiene_manager.stop()
 
 
 app = FastAPI(
@@ -132,6 +161,7 @@ app.include_router(admin_profiles_router)
 app.include_router(admin_usage_router)
 app.include_router(stream_stt_router)
 app.include_router(metrics_router)
+app.include_router(panel_auth_router)
 
 
 @app.get("/")

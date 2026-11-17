@@ -86,62 +86,102 @@ def verify_api_key(plain_key: str) -> Optional[str]:
     return None
 
 
+def resolve_client_ip(request: Request) -> str:
+    """Extract real client IP taking into account TRUSTED_PROXY_IPS."""
+    direct_peer = request.client.host if request.client else "127.0.0.1"
+    trusted_proxies = settings.trusted_proxies
+    if direct_peer in trusted_proxies:
+        forwarded_for = request.headers.get("x-forwarded-for")
+        if forwarded_for:
+            # Client IP is the first entry in X-Forwarded-For
+            return forwarded_for.split(",")[0].strip()
+    return direct_peer
+
+
 async def get_authenticated_key(
     request: Request,
     authorization: Optional[str] = Header(None),
     xi_api_key: Optional[str] = Header(None, alias="xi-api-key"),
+    api_key: Optional[str] = Query(None),
 ) -> ApiKeyRecord:
-    """Resolve API key to an ApiKeyRecord from DB or admin fallback."""
+    """Resolve API key or panel session to an ApiKeyRecord."""
     key = None
-    if authorization:
-        parts = authorization.split(" ", 1)
+    auth_val = authorization if isinstance(authorization, str) else request.headers.get("authorization")
+    xi_val = xi_api_key if isinstance(xi_api_key, str) else request.headers.get("xi-api-key")
+    query_val = api_key if isinstance(api_key, str) else request.query_params.get("api_key")
+
+    if auth_val:
+        parts = auth_val.split(" ", 1)
         if len(parts) == 2 and parts[0].lower() == "bearer":
             key = parts[1].strip()
         elif len(parts) == 1 and parts[0].strip():
             # Tolerate direct Authorization: <api-key> without Bearer prefix
             key = parts[0].strip()
-    elif xi_api_key:
-        key = xi_api_key.strip()
+    elif xi_val:
+        key = xi_val.strip()
+    elif query_val:
+        key = query_val.strip()
 
-    if not key:
-        raise UnauthorizedError("Missing API key. Provide Bearer or xi-api-key header.")
+    client_ip = resolve_client_ip(request)
 
-    # 1. Database check
-    from app.services.key_manager import KeyManager
-    client_ip = request.client.host if request.client else None
-    record = await KeyManager.authenticate(key, client_ip=client_ip)
-    if record:
-        request.state.api_key = record
-        request.state.user = record.role
-        return record
+    # 1. If an explicit API key was supplied, validate it
+    if key:
+        from app.services.key_manager import KeyManager
+        record = await KeyManager.authenticate(key, client_ip=client_ip)
+        if record:
+            request.state.api_key = record
+            request.state.user = record.role
+            return record
 
-    # 2. In-memory hash check for test fixtures
-    owner = verify_api_key(key)
-    if owner:
-        role = "admin" if owner in ("admin", "developer") else "caller"
-        record = ApiKeyRecord(
-            id=f"key-mem-{owner}",
-            name=owner,
-            role=role,
-            scopes=["llm", "stt", "tts", "admin"] if role == "admin" else ["llm", "stt", "tts"],
-            rate_limit=1000,
-            max_concurrent=50,
-            created_at=0.0,
-        )
-        request.state.api_key = record
-        request.state.user = owner
-        return record
+        owner = verify_api_key(key)
+        if owner:
+            role = "admin" if owner in ("admin", "developer") else "caller"
+            record = ApiKeyRecord(
+                id=f"key-mem-{owner}",
+                name=owner,
+                role=role,
+                scopes=["llm", "stt", "tts", "admin", "voice", "voice_stream", "stt_stream"] if role == "admin" else ["llm", "stt", "tts"],
+                rate_limit=1000,
+                max_concurrent=50,
+                created_at=0.0,
+            )
+            request.state.api_key = record
+            request.state.user = owner
+            return record
 
-    raise UnauthorizedError("Invalid or revoked API key.")
+        raise UnauthorizedError("Invalid or revoked API key.")
+
+    # 2. Check for panel session cookie
+    session_id = request.cookies.get("admin_session")
+    if session_id:
+        from app.services.admin_auth import AdminAuthService
+        session_info = await AdminAuthService.validate_session(session_id)
+        if session_info:
+            record = ApiKeyRecord(
+                id="panel-super-admin",
+                name=session_info["email"],
+                role="admin",
+                scopes=["admin", "llm", "stt", "tts", "voice", "voice_stream", "stt_stream"],
+                rate_limit=10000,
+                max_concurrent=100,
+                created_at=0.0,
+            )
+            request.state.api_key = record
+            request.state.user = "admin"
+            return record
+        raise UnauthorizedError("Invalid or expired session.")
+
+    raise UnauthorizedError("Missing API key. Provide Bearer, xi-api-key header, or api_key query param.")
 
 
 async def require_api_key(
     request: Request,
     authorization: Optional[str] = Header(None),
     xi_api_key: Optional[str] = Header(None, alias="xi-api-key"),
+    api_key: Optional[str] = Query(None),
 ) -> str:
-    """FastAPI dependency accepting either Bearer or xi-api-key."""
-    record = await get_authenticated_key(request, authorization, xi_api_key)
+    """FastAPI dependency accepting either Bearer, xi-api-key, or api_key query."""
+    record = await get_authenticated_key(request, authorization, xi_api_key, api_key)
     return record.role
 
 
@@ -149,9 +189,10 @@ async def require_admin_key(
     request: Request,
     authorization: Optional[str] = Header(None),
     xi_api_key: Optional[str] = Header(None, alias="xi-api-key"),
+    api_key: Optional[str] = Query(None),
 ) -> ApiKeyRecord:
     """FastAPI dependency requiring role == 'admin'."""
-    record = await get_authenticated_key(request, authorization, xi_api_key)
+    record = await get_authenticated_key(request, authorization, xi_api_key, api_key)
     if record.role != "admin":
         raise ForbiddenError("Admin role required for this endpoint.")
     return record
@@ -163,8 +204,9 @@ def require_scope(required_scope: str):
         request: Request,
         authorization: Optional[str] = Header(None),
         xi_api_key: Optional[str] = Header(None, alias="xi-api-key"),
+        api_key: Optional[str] = Query(None),
     ) -> ApiKeyRecord:
-        record = await get_authenticated_key(request, authorization, xi_api_key)
+        record = await get_authenticated_key(request, authorization, xi_api_key, api_key)
         if record.role == "admin":
             return record
         if required_scope not in record.scopes:

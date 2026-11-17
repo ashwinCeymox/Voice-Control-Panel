@@ -9,10 +9,14 @@ class Settings(BaseSettings):
     APP_HOST: str = "127.0.0.1"
     APP_PORT: int = 8000
     APP_DATABASE_PATH: str = os.environ.get("APP_DATABASE_PATH", "voice_platform.db")
+    MODELS_MANIFEST_PATH: str = os.environ.get("MODELS_MANIFEST_PATH", "data/installed_models_manifest.json")
 
     # LocalAI
     LOCALAI_BASE_URL: str = "http://127.0.0.1:8080"
-    LOCALAI_MODELS_PATH: Optional[str] = os.environ.get("LOCALAI_MODELS_PATH", None)
+    LOCALAI_MODELS_PATH: Optional[str] = os.environ.get(
+        "LOCALAI_MODELS_PATH",
+        "../LocalAI/models" if os.path.isdir("../LocalAI/models") else "models",
+    )
     LOCALAI_API_KEY: Optional[str] = None
     LOCALAI_LLM_MODEL: str = "llama-3.2-1b-instruct"
     LOCALAI_STT_MODEL: str = "whisper-base"
@@ -34,9 +38,20 @@ class Settings(BaseSettings):
     STREAMING_STT_TIMEOUT_SECONDS: float = 15.0
     MAX_ACTIVE_STT_STREAMS: int = 5
     STREAMING_STT_DEFAULT_MODEL: str = "sherpa-onnx-streaming-zipformer-en-20M"
+    STREAMING_STT_PRECISION: str = os.environ.get("STREAMING_STT_PRECISION", "fp32")
+    STREAMING_STT_PROVIDER: str = os.environ.get("STREAMING_STT_PROVIDER", "cpu")
+    STREAMING_STT_CHUNK_MS: int = int(os.environ.get("STREAMING_STT_CHUNK_MS", "560"))
+    STREAMING_STT_LANGUAGE: str = os.environ.get("STREAMING_STT_LANGUAGE", "en")
 
     # Security & Administration
-    ADMIN_API_KEY: Optional[str] = None
+    ENVIRONMENT: str = os.environ.get("ENVIRONMENT", "development")
+    ADMIN_EMAIL: str = os.environ.get("ADMIN_EMAIL", "admin@voicepanel.io")
+    ADMIN_INITIAL_PASSWORD: Optional[str] = os.environ.get("ADMIN_INITIAL_PASSWORD", "adminVOICE3.md")
+    GATEWAY_HOST: str = os.environ.get("GATEWAY_HOST", "127.0.0.1")
+    GATEWAY_PORT: int = int(os.environ.get("GATEWAY_PORT", "8000"))
+    COOKIE_SECURE: Optional[bool] = None
+    TRUSTED_PROXY_IPS: str = os.environ.get("TRUSTED_PROXY_IPS", "")
+    ADMIN_API_KEY: Optional[str] = os.environ.get("ADMIN_API_KEY", "dev-voice-key-12345")
     API_KEY_HASH_SECRET: str = "dev-secret-key-change-me-in-production-use-high-entropy"
     CORS_ALLOWED_ORIGINS: List[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     ENABLE_DOCS: bool = False
@@ -62,6 +77,20 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @property
+    def cookie_secure(self) -> bool:
+        if self.COOKIE_SECURE is not None:
+            return self.COOKIE_SECURE
+        return self.ENVIRONMENT.lower() in ("staging", "production")
+
+    @property
+    def trusted_proxies(self) -> List[str]:
+        if not self.TRUSTED_PROXY_IPS:
+            return []
+        if isinstance(self.TRUSTED_PROXY_IPS, list):
+            return self.TRUSTED_PROXY_IPS
+        return [ip.strip() for ip in str(self.TRUSTED_PROXY_IPS).split(",") if ip.strip()]
 
     @property
     def allowed_llm_models(self) -> List[str]:

@@ -150,10 +150,47 @@ CREATE TABLE IF NOT EXISTS usage_events (
     error_code TEXT
 );
 
+CREATE TABLE IF NOT EXISTS model_overrides (
+    model_id TEXT PRIMARY KEY,
+    task TEXT NOT NULL,
+    kind TEXT,
+    display_name TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS residency_settings (
+    id TEXT PRIMARY KEY,
+    idle_timeout_seconds INTEGER DEFAULT 300,
+    stale_timeout_seconds INTEGER DEFAULT 420,
+    auto_flush_seconds INTEGER DEFAULT 600,
+    auto_flush_enabled INTEGER DEFAULT 0,
+    protected_models_json TEXT DEFAULT '[]',
+    updated_at REAL NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_usage_events_ts ON usage_events(ts);
 CREATE INDEX IF NOT EXISTS idx_usage_events_key ON usage_events(key_id, ts);
 CREATE INDEX IF NOT EXISTS idx_usage_events_profile ON usage_events(profile_id, ts);
 CREATE INDEX IF NOT EXISTS idx_usage_events_model ON usage_events(model, ts);
+
+CREATE TABLE IF NOT EXISTS admin_user (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  must_change_password INTEGER NOT NULL DEFAULT 0,
+  failed_attempts INTEGER NOT NULL DEFAULT 0,
+  locked_until TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS admin_session (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  user_agent TEXT
+);
+
 
 
 """
@@ -186,6 +223,12 @@ async def init_db():
         await db.execute("PRAGMA foreign_keys = ON;")
         await db.executescript(SCHEMA_SQL)
         
+        # Safe column migration on sessions
+        try:
+            await db.execute("ALTER TABLE sessions ADD COLUMN is_ephemeral INTEGER DEFAULT 0")
+        except Exception:
+            pass
+
         # Safe column migrations on api_keys
         extra_columns = [
             "max_daily_tokens INTEGER DEFAULT NULL",
@@ -205,11 +248,31 @@ async def init_db():
             except Exception:
                 pass
 
+        usage_extra_columns = [
+            "actor_type TEXT DEFAULT 'key'",
+            "key_name TEXT DEFAULT NULL",
+            "profile_name TEXT DEFAULT NULL",
+        ]
+        for col_def in usage_extra_columns:
+            try:
+                await db.execute(f"ALTER TABLE usage_events ADD COLUMN {col_def}")
+            except Exception:
+                pass
+
         # Ensure default dashboard settings exist
         await db.execute(
             """
             INSERT OR IGNORE INTO dashboard_settings (id, base_url, default_rate_limit, default_max_concurrent, usage_retention_days, updated_at)
             VALUES ('default', 'http://127.0.0.1:8000', 60, 5, 30, ?)
+            """,
+            (1700000000.0,),
+        )
+
+        # Ensure default residency settings exist
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO residency_settings (id, idle_timeout_seconds, stale_timeout_seconds, auto_flush_seconds, auto_flush_enabled, protected_models_json, updated_at)
+            VALUES ('default', 300, 420, 600, 0, '[]', ?)
             """,
             (1700000000.0,),
         )
@@ -220,4 +283,11 @@ async def init_db():
                 (mid, name, cat, prov, sz),
             )
         await db.commit()
+
+    # Seed initial super-admin account if admin_user is empty
+    try:
+        from app.services.admin_auth import AdminAuthService
+        await AdminAuthService.seed_admin_user()
+    except Exception as e:
+        logger.debug("Admin seed in init_db: %s", e)
     logger.info("SQLite database initialized in WAL mode at: %s", db_path.resolve())

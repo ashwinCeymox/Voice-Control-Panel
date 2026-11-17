@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, WebSocket, WebSocketDisconnect
 from app.core.config import settings
 from app.core.errors import AppError, PayloadTooLargeError, UnauthorizedError
-from app.core.security import require_api_key, validate_and_consume_ticket, verify_api_key, ApiKeyRecord
+from app.core.security import require_api_key, require_scope, validate_and_consume_ticket, verify_api_key, ApiKeyRecord
 from app.services.key_manager import KeyManager
 from app.schemas.events import (
     AudioCompletedEvent,
@@ -46,8 +46,32 @@ def is_transcript_silence(text: str) -> bool:
     return not cleaned or cleaned.lower() in (
         "(no speech detected)", "no speech detected",
         "silence", "(silence)", "[silence]",
+        "nothing heard", "(nothing heard)",
         "[blank_audio]", "(blank audio)",
     )
+
+
+def handle_stt_decode_failure(
+    exc: Exception, turn_id: str, audio_stats: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Handle STT engine or decoding errors honestly without masking them as '(no speech detected)'.
+    If audio_stats indicates true silence (RMS below threshold), return silence representation.
+    Otherwise, return STT_DECODE_ERROR with descriptive details.
+    """
+    is_silent = audio_stats.get("is_silent", False) if audio_stats else False
+    if is_silent:
+        return {
+            "code": "SILENCE_DETECTED",
+            "text": "Nothing heard",
+            "is_error": False,
+        }
+    return {
+        "code": "STT_DECODE_ERROR",
+        "text": f"Audio processing error: {str(exc)}",
+        "is_error": True,
+    }
+
 
 
 def is_transcript_unclear(text: str) -> bool:
@@ -109,7 +133,7 @@ async def voice_turn(
     llm_model: Optional[str] = Form(None),
     voice_id: Optional[str] = Form(None),
     tts_model: Optional[str] = Form(None),
-    user: str = Depends(require_api_key),
+    key_record: ApiKeyRecord = Depends(require_scope("voice")),
 ):
     """Execute one-shot synchronous voice turn."""
     audio_content = await file.read()
@@ -119,6 +143,7 @@ async def voice_turn(
             f"Uploaded audio ({len(audio_content)} bytes) exceeds limit of {settings.MAX_AUDIO_UPLOAD_MB}MB"
         )
 
+    user = key_record.name or key_record.role
     return await orchestrator.execute_turn(
         audio_bytes=audio_content,
         session_id=session_id,
@@ -164,24 +189,38 @@ async def voice_stream(
             plain_key = api_key.strip()
 
         if not plain_key:
-            await websocket.close(code=4401, reason="Missing credentials")
-            return
-
-        key_record = await KeyManager.authenticate(plain_key)
-        if not key_record:
-            owner = verify_api_key(plain_key)
-            if owner:
-                role = "admin" if owner in ("admin", "developer") else "caller"
-                key_record = ApiKeyRecord(
-                    id=f"key-mem-{owner}",
-                    name=owner,
-                    role=role,
-                    scopes=["voice", "voice_stream", "llm", "stt", "tts", "admin"] if role == "admin" else ["voice", "voice_stream", "llm", "stt", "tts"],
-                    created_at=0.0,
-                )
-            else:
-                await websocket.close(code=4401, reason="Invalid API key")
+            session_id = websocket.cookies.get("admin_session")
+            if session_id:
+                from app.services.admin_auth import AdminAuthService
+                session_info = await AdminAuthService.validate_session(session_id)
+                if session_info:
+                    key_record = ApiKeyRecord(
+                        id="panel-super-admin",
+                        name=session_info["email"],
+                        role="admin",
+                        scopes=["voice", "voice_stream", "llm", "stt", "tts", "admin"],
+                        created_at=0.0,
+                    )
+                    user = "admin"
+            if not key_record:
+                await websocket.close(code=4401, reason="Missing credentials")
                 return
+        else:
+            key_record = await KeyManager.authenticate(plain_key)
+            if not key_record:
+                owner = verify_api_key(plain_key)
+                if owner:
+                    role = "admin" if owner in ("admin", "developer") else "caller"
+                    key_record = ApiKeyRecord(
+                        id=f"key-mem-{owner}",
+                        name=owner,
+                        role=role,
+                        scopes=["voice", "voice_stream", "llm", "stt", "tts", "admin"] if role == "admin" else ["voice", "voice_stream", "llm", "stt", "tts"],
+                        created_at=0.0,
+                    )
+                else:
+                    await websocket.close(code=4401, reason="Invalid API key")
+                    return
 
         # Scope verification for caller keys
         if key_record.role != "admin" and "voice" not in key_record.scopes and "voice_stream" not in key_record.scopes:
@@ -287,11 +326,16 @@ async def voice_stream(
             llm_model = llm_cfg.get("model")
             llm_temperature = llm_cfg.get("temperature")
             stt_cfg = turn_agent.get("stt") or {}
-            # If fallback triggered or stt is streaming, use fallback_model or batch whisper
+            # If fallback triggered or stt is streaming, use fallback_model or batch whisper dynamically
+            from app.services.model_manifest import model_manifest
             if streaming_fallback_reason:
-                stt_model = stt_cfg.get("fallback_model") or settings.LOCALAI_STT_MODEL
+                stt_model = model_manifest.resolve_model_id(
+                    "stt", stt_cfg.get("fallback_model"), kind="batch"
+                ) or settings.LOCALAI_STT_MODEL
             else:
-                stt_model = stt_cfg.get("model")
+                stt_model = model_manifest.resolve_model_id(
+                    "stt", stt_cfg.get("model"), kind="batch"
+                )
             tts_cfg = turn_agent.get("tts") or {}
             tts_voice_id = tts_cfg.get("voice_id")
             tts_speed = tts_cfg.get("speed")
@@ -300,12 +344,44 @@ async def voice_stream(
         try:
             # Step A: STT
             if streaming_transcript is not None:
-                transcript = streaming_transcript or "(no speech detected)"
+                transcript = streaming_transcript or "Nothing heard"
             else:
-                if not utterance_bytes or (container == "webm" and len(utterance_bytes) < 1200):
-                    logger.info("Ignoring empty/sub-threshold utterance (%d bytes) for turn %s", len(utterance_bytes) if utterance_bytes else 0, turn_id)
+                if not utterance_bytes:
+                    logger.info("Ignoring empty utterance (0 bytes) for turn %s", turn_id)
                     await websocket.send_text(
-                        TranscriptCompletedEvent(turn_id=turn_id, text="(no speech detected)").model_dump_json()
+                        ErrorEvent(
+                            code="AUDIO_EMPTY",
+                            message="No audio frames received for turn",
+                            turn_id=turn_id,
+                        ).model_dump_json()
+                    )
+                    await websocket.send_text(
+                        TurnCompletedEvent(turn_id=turn_id).model_dump_json()
+                    )
+                    return
+
+                # Calculate operational audio statistics per turn (zero content stored)
+                from app.services.audio_utils import measure_audio_stats
+                try:
+                    audio_stats = measure_audio_stats(utterance_bytes)
+                    logger.info(
+                        "Turn %s audio stats: sr=%d dur=%.2fs rms=%.1f peak=%.1f bytes=%d silent=%s",
+                        turn_id,
+                        audio_stats["sample_rate"],
+                        audio_stats["duration_sec"],
+                        audio_stats["rms"],
+                        audio_stats["peak"],
+                        audio_stats["byte_count"],
+                        audio_stats["is_silent"],
+                    )
+                except Exception as stats_err:
+                    audio_stats = None
+                    logger.debug("Failed to calculate audio stats for turn %s: %s", turn_id, stats_err)
+
+                if audio_stats and audio_stats["is_silent"] and audio_stats["duration_sec"] < 0.2:
+                    logger.info("Ignoring sub-threshold silent audio for turn %s", turn_id)
+                    await websocket.send_text(
+                        TranscriptCompletedEvent(turn_id=turn_id, text="Nothing heard").model_dump_json()
                     )
                     await websocket.send_text(
                         TurnCompletedEvent(turn_id=turn_id).model_dump_json()
@@ -313,39 +389,42 @@ async def voice_stream(
                     return
 
                 try:
+                    agent_lang = turn_agent.get("stt", {}).get("language") if turn_agent else "en"
+                    if not agent_lang or agent_lang == "auto":
+                        agent_lang = "en"
                     transcript_resp = await asyncio.shield(
                         orchestrator.stt.transcribe(
                             audio_bytes=bytes(utterance_bytes),
                             filename=f"utterance.{container}",
                             content_type=f"audio/{container}",
                             model=stt_model,
+                            language=agent_lang,
                         )
                     )
                 except asyncio.CancelledError:
                     logger.info("Turn %s cancelled during STT transcription (LocalAI shielded)", turn_id)
                     raise
                 except Exception as stt_exc:
-                    err_str = str(stt_exc).lower()
-                    if any(k in err_str for k in ("end of file", "invalid data found", "could not find codec", "truncating packet", "silence")):
-                        logger.info("STT encountered unparseable/silent audio frame for turn %s, handling gracefully", turn_id)
+                    err_info = handle_stt_decode_failure(stt_exc, turn_id=turn_id, audio_stats=audio_stats)
+                    if not err_info["is_error"]:
+                        logger.info("STT silence detected for turn %s, handling quietly", turn_id)
                         await websocket.send_text(
-                            TranscriptCompletedEvent(turn_id=turn_id, text="(no speech detected)").model_dump_json()
+                            TranscriptCompletedEvent(turn_id=turn_id, text=err_info["text"]).model_dump_json()
                         )
-                        await websocket.send_text(
-                            TurnCompletedEvent(turn_id=turn_id).model_dump_json()
-                        )
+                        await websocket.send_text(TurnCompletedEvent(turn_id=turn_id).model_dump_json())
                         return
                     logger.error("STT failure (localai) for turn %s: %s", turn_id, str(stt_exc))
                     await websocket.send_text(
                         ErrorEvent(
-                            code="STT_ERROR",
-                            message=f"Speech-to-text transcription failed: {str(stt_exc)}",
+                            code=err_info["code"],
+                            message=f"Speech-to-text processing failed: {str(stt_exc)}",
                             turn_id=turn_id,
                         ).model_dump_json()
                     )
+                    await websocket.send_text(TurnCompletedEvent(turn_id=turn_id).model_dump_json())
                     return
 
-                transcript = transcript_resp.text or "(no speech detected)"
+                transcript = transcript_resp.text or "Nothing heard"
 
             # Emit transcript event
             await websocket.send_text(
@@ -601,6 +680,13 @@ async def voice_stream(
                             detected_container = "wav"
                         elif raw_data.startswith(b"\x1a\x45\xdf\xa3"):
                             detected_container = "webm"
+                        elif raw_data:
+                            # Raw PCM stream buffer (from streaming mode or headerless mic input)
+                            # Wrap into standard 16kHz mono 16-bit WAV with 44-byte RIFF header so batch Whisper succeeds
+                            from app.services.audio_utils import build_wav_from_pcm
+                            raw_data = build_wav_from_pcm(raw_data)
+                            detected_container = "wav"
+
 
                         # If continuous WebM stream emitted cluster frames without EBML header,
                         # auto-prepend cached WebM header to avoid FFmpeg EBML parsing errors.
@@ -672,9 +758,14 @@ async def voice_stream(
                         async def _run_stt_stream():
                             nonlocal streaming_error
                             try:
-                                target_model = (agent.get("stt", {}).get("model") if agent else None) or settings.STREAMING_STT_DEFAULT_MODEL
+                                from app.services.model_manifest import model_manifest
+                                raw_target = agent.get("stt", {}).get("model") if agent else None
+                                target_model = model_manifest.resolve_model_id("stt", raw_target, kind="streaming") or settings.STREAMING_STT_DEFAULT_MODEL
+                                target_lang = agent.get("stt", {}).get("language") if agent else "en"
+                                if not target_lang or target_lang == "auto":
+                                    target_lang = "en"
                                 seq = 0
-                                async for evt in streaming_stt_client.stream(_stream_feeder(), model=target_model):
+                                async for evt in streaming_stt_client.stream(_stream_feeder(), model=target_model, language=target_lang):
                                     if evt.get("type") == "transcript.partial":
                                         seq += 1
                                         await websocket.send_text(
@@ -760,9 +851,14 @@ async def voice_stream(
                                 async def _run_stt_stream():
                                     nonlocal streaming_error
                                     try:
-                                        target_model = (agent.get("stt", {}).get("model") if agent else None) or settings.STREAMING_STT_DEFAULT_MODEL
+                                        from app.services.model_manifest import model_manifest
+                                        raw_target = agent.get("stt", {}).get("model") if agent else None
+                                        target_model = model_manifest.resolve_model_id("stt", raw_target, kind="streaming") or settings.STREAMING_STT_DEFAULT_MODEL
+                                        target_lang = agent.get("stt", {}).get("language") if agent else "en"
+                                        if not target_lang or target_lang == "auto":
+                                            target_lang = "en"
                                         seq = 0
-                                        async for evt in streaming_stt_client.stream(_stream_feeder(), model=target_model):
+                                        async for evt in streaming_stt_client.stream(_stream_feeder(), model=target_model, language=target_lang):
                                             if evt.get("type") == "transcript.partial":
                                                 stream_events.append(evt)
                                                 await websocket.send_text(

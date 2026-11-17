@@ -26,18 +26,26 @@ class STTSettingsUpdate(BaseModel):
     stt_stream_enabled: Optional[bool] = None
     default_kind: Optional[str] = Field(None, pattern="^(batch|streaming)$")
     max_active_streams: Optional[int] = Field(None, ge=1, le=50)
+    precision: Optional[str] = Field(None, pattern="^(fp32|int8|f16)$")
+    provider: Optional[str] = Field(None, pattern="^(cpu|coreml)$")
+    chunk_ms: Optional[int] = Field(None, ge=100, le=2000)
+    language: Optional[str] = None
 
 
 @router.get("/v1/admin/settings/stt")
 async def get_stt_settings(
     admin: ApiKeyRecord = Depends(require_admin_key),
 ) -> Dict[str, Any]:
-    """Get global STT configuration (kill switch, default mode, stream caps)."""
+    """Get global STT configuration (kill switch, default mode, stream caps, precision, backend provider)."""
     return {
         "stt_stream_enabled": settings.STT_STREAM_ENABLED,
         "default_kind": "streaming" if settings.STT_STREAM_ENABLED else "batch",
         "max_active_streams": settings.MAX_ACTIVE_STT_STREAMS,
         "default_model": settings.STREAMING_STT_DEFAULT_MODEL,
+        "precision": settings.STREAMING_STT_PRECISION,
+        "provider": settings.STREAMING_STT_PROVIDER,
+        "chunk_ms": settings.STREAMING_STT_CHUNK_MS,
+        "language": settings.STREAMING_STT_LANGUAGE,
     }
 
 
@@ -51,11 +59,23 @@ async def update_stt_settings(
         settings.STT_STREAM_ENABLED = payload.stt_stream_enabled
     if payload.max_active_streams is not None:
         settings.MAX_ACTIVE_STT_STREAMS = payload.max_active_streams
+    if payload.precision is not None:
+        settings.STREAMING_STT_PRECISION = payload.precision
+    if payload.provider is not None:
+        settings.STREAMING_STT_PROVIDER = payload.provider
+    if payload.chunk_ms is not None:
+        settings.STREAMING_STT_CHUNK_MS = payload.chunk_ms
+    if payload.language is not None:
+        settings.STREAMING_STT_LANGUAGE = payload.language
 
     return {
         "stt_stream_enabled": settings.STT_STREAM_ENABLED,
         "default_kind": payload.default_kind or ("streaming" if settings.STT_STREAM_ENABLED else "batch"),
         "max_active_streams": settings.MAX_ACTIVE_STT_STREAMS,
+        "precision": settings.STREAMING_STT_PRECISION,
+        "provider": settings.STREAMING_STT_PROVIDER,
+        "chunk_ms": settings.STREAMING_STT_CHUNK_MS,
+        "language": settings.STREAMING_STT_LANGUAGE,
         "status": "updated",
     }
 
@@ -67,8 +87,6 @@ async def audio_transcription_stream(
     api_key: Optional[str] = Query(None),
 ):
     """Public WebSocket streaming STT endpoint for live partial transcription."""
-    await websocket.accept()
-
     # 1. Authentication: Validate via single-use ticket or header or api_key query param
     user = None
     key_record: Optional[ApiKeyRecord] = None
@@ -114,34 +132,42 @@ async def audio_transcription_stream(
                         scopes=["stt_stream", "stt", "llm", "tts", "admin"] if role == "admin" else ["stt_stream", "stt"],
                         created_at=0.0,
                     )
+        else:
+            session_id = websocket.cookies.get("admin_session")
+            if session_id:
+                from app.services.admin_auth import AdminAuthService
+                session_info = await AdminAuthService.validate_session(session_id)
+                if session_info:
+                    key_record = ApiKeyRecord(
+                        id="panel-super-admin",
+                        name=session_info["email"],
+                        role="admin",
+                        scopes=["stt_stream", "stt", "llm", "tts", "admin"],
+                        created_at=0.0,
+                    )
 
     if not key_record:
-        await websocket.send_json({"type": "error", "message": "Unauthorized: Missing or invalid ticket/API key"})
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        await websocket.close(code=4401, reason="Unauthorized: Missing or invalid ticket/API key")
         return
 
     # 2. Scope verification
     if key_record.role != "admin" and "stt_stream" not in key_record.scopes:
-        await websocket.send_json({"type": "error", "message": "Forbidden: Missing required scope: 'stt_stream'"})
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        await websocket.close(code=4403, reason="Forbidden: Missing required scope: 'stt_stream'")
         return
 
     # 2b. Quota verification
     try:
         await KeyManager.check_quota(key_record, cost_type="audio")
     except AppError as quota_err:
-        await websocket.send_json({"type": "error", "message": quota_err.message})
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        await websocket.close(code=4429, reason=quota_err.message)
         return
 
     # 3. Check kill switch
     if not settings.STT_STREAM_ENABLED:
-        await websocket.send_json({
-            "type": "stt.fallback",
-            "reason": "Streaming STT is temporarily disabled by administrator. Please use batch endpoint.",
-        })
-        await websocket.close(code=status.WS_1013_TRY_AGAIN_LATER)
+        await websocket.close(code=status.WS_1013_TRY_AGAIN_LATER, reason="Streaming STT is temporarily disabled")
         return
+
+    await websocket.accept()
 
     start_t = time.time()
     total_audio_bytes = 0
@@ -150,6 +176,83 @@ async def audio_transcription_stream(
     # 4. Stream handling with limiter
     try:
         async with stream_limiter.acquire(key_id=key_record.id, backend="stream_stt", max_concurrent=key_record.max_concurrent):
+            # Receive stream.start handshake first
+            first_msg = await websocket.receive()
+            if "text" not in first_msg:
+                await websocket.send_json({"type": "error", "code": "INVALID_HANDSHAKE", "message": "Expected stream.start text frame"})
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+
+            try:
+                start_data = json.loads(first_msg["text"])
+            except Exception:
+                await websocket.send_json({"type": "error", "code": "INVALID_JSON", "message": "Malformed JSON in stream.start"})
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+
+            if start_data.get("type") != "stream.start":
+                await websocket.send_json({
+                    "type": "error",
+                    "code": "INVALID_HANDSHAKE",
+                    "message": f"Expected type 'stream.start', got '{start_data.get('type')}'",
+                })
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+
+            raw_model = start_data.get("model")
+            if not raw_model or not str(raw_model).strip():
+                metrics_collector.inc_stt_fallback("empty_model")
+                await websocket.send_json({
+                    "type": "error",
+                    "code": "STT_MODEL_REQUIRED",
+                    "message": "Missing required 'model' parameter in stream.start",
+                })
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+
+            req_model_str = str(raw_model).strip()
+            from app.services.model_manifest import model_manifest
+            available_models = [m["id"].lower() for m in model_manifest.get_models_by_category("stt", kind="streaming", available_only=True)]
+            valid_set = set(available_models).union({
+                settings.STREAMING_STT_DEFAULT_MODEL.lower(),
+                "sherpa-onnx-streaming-zipformer-en-20m",
+                "sherpa-onnx-streaming-zipformer-en-20m-2023-02-17",
+                "zipformer",
+                "default",
+            })
+
+            if req_model_str.lower() not in valid_set:
+                metrics_collector.inc_stt_fallback("model_unavailable")
+                # Determine explicit reason (backend_missing, not_streaming_capable, model_not_found)
+                all_stt = model_manifest.get_models_by_category("stt", available_only=False)
+                match = next((m for m in all_stt if m.get("id", "").lower() == req_model_str.lower()), None)
+                if match:
+                    if match.get("kind") != "streaming":
+                        reason = "not_streaming_capable"
+                        detail = f"Model '{req_model_str}' is configured for batch transcription, not live streaming"
+                    elif match.get("available") is False:
+                        reason = "backend_missing"
+                        detail = match.get("unavailable_reason") or "Required runtime backend is missing"
+                    else:
+                        reason = "not_streaming_capable"
+                        detail = f"Model '{req_model_str}' is not supported by the streaming STT engine"
+                else:
+                    reason = "model_not_found"
+                    detail = f"Model '{req_model_str}' is not installed"
+
+                await websocket.send_json({
+                    "type": "error",
+                    "code": "STT_MODEL_UNAVAILABLE",
+                    "reason": reason,
+                    "message": f"Requested streaming STT model '{req_model_str}' is unavailable ({reason}): {detail}",
+                })
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+
+            session_model = req_model_str
+            req_lang = start_data.get("language")
+            session_lang = req_lang if (req_lang and req_lang != "auto") else (settings.STREAMING_STT_LANGUAGE or "en")
+
             # Asynchronous generator feeding chunks from the client WebSocket to the internal engine
             async def client_audio_stream():
                 nonlocal total_audio_bytes
@@ -168,8 +271,8 @@ async def audio_transcription_stream(
                             total_audio_bytes += len(b)
                             yield b
 
-            # Stream through provider
-            async for event in streaming_client.stream(client_audio_stream()):
+            # Stream through provider with model and locked language
+            async for event in streaming_client.stream(client_audio_stream(), model=session_model, language=session_lang):
                 await websocket.send_json(event)
                 if event.get("type") in ("transcript.completed", "transcript.final"):
                     break
