@@ -4,6 +4,7 @@ Tests ServerVAD class, chunk processing, speech segment extraction,
 and automatic turn detection in WS /v1/voice/stream without client VAD control events.
 """
 
+import os
 import wave
 import pytest
 import pytest_asyncio
@@ -14,8 +15,16 @@ from app.services.key_manager import KeyManager
 from app.services.server_vad import ServerVAD, SpeechStart, SpeechEnd
 from app.storage.database import init_db
 
+SILERO_VAD_AVAILABLE = os.path.exists("frontend/public/vad/silero_vad_v5.onnx")
 
-TEST_WAV_PATH = "models/streaming-stt/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/test_wavs/0.wav"
+pytestmark = pytest.mark.skipif(
+    not SILERO_VAD_AVAILABLE,
+    reason="Silero VAD model not found on disk; run scripts/setup.sh to build VAD assets",
+)
+
+TEST_WAV_PATH = "tests/fixtures/sample_utterance.wav"
+if not os.path.exists(TEST_WAV_PATH):
+    TEST_WAV_PATH = "models/streaming-stt/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/test_wavs/0.wav"
 
 
 @pytest_asyncio.fixture(autouse=True)

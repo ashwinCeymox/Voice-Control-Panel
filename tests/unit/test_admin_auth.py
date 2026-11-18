@@ -232,11 +232,14 @@ def test_change_password_validation_and_session_invalidation(client):
     assert new_cookie != old_cookie
 
     # 6. Old session is no longer valid
-    resp_old_session = client.get("/v1/panel/me", cookies={"admin_session": old_cookie})
+    unauthed_client = TestClient(app)
+    resp_old_session = unauthed_client.get(
+        "/v1/panel/me", cookies={"admin_session": old_cookie}
+    )
     assert resp_old_session.status_code == 401
 
     # 7. New session works
-    resp_new_session = client.get("/v1/panel/me", cookies={"admin_session": new_cookie})
+    resp_new_session = client.get("/v1/panel/me")
     assert resp_new_session.status_code == 200
     assert resp_new_session.json()["must_change_password"] is False
 

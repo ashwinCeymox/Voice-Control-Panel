@@ -37,9 +37,13 @@ async def test_voice_turn_synchronous_mocked():
 
     with (
         patch(
-            "app.providers.localai_stt.LocalAISTTClient.transcribe",
+            "app.api.voice.orchestrator.stt.transcribe",
             new_callable=AsyncMock,
         ) as mock_stt,
+        patch(
+            "app.providers.localai_stt.LocalAISTTClient.transcribe",
+            new_callable=AsyncMock,
+        ),
         patch(
             "app.providers.localai_llm.LocalAILLMClient.complete",
             new_callable=AsyncMock,
