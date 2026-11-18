@@ -1,4 +1,5 @@
 """Database operations for sessions, turns, and messages."""
+
 import uuid
 from typing import List, Optional
 import aiosqlite
@@ -12,7 +13,10 @@ class SessionRepository:
         async with get_db() as db:
             db.row_factory = aiosqlite.Row
             if session_id:
-                cursor = await db.execute("SELECT id FROM sessions WHERE id = ? AND owner = ?", (session_id, owner))
+                cursor = await db.execute(
+                    "SELECT id FROM sessions WHERE id = ? AND owner = ?",
+                    (session_id, owner),
+                )
                 row = await cursor.fetchone()
                 if row:
                     return row["id"]
@@ -34,7 +38,9 @@ class SessionRepository:
             await db.commit()
 
     @staticmethod
-    async def get_recent_messages(session_id: str, limit: int = 20) -> List[ChatMessage]:
+    async def get_recent_messages(
+        session_id: str, limit: int = 20
+    ) -> List[ChatMessage]:
         async with get_db() as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
@@ -42,7 +48,9 @@ class SessionRepository:
                 (session_id, limit),
             )
             rows = await cursor.fetchall()
-            return [ChatMessage(role=row["role"], content=row["content"]) for row in rows]
+            return [
+                ChatMessage(role=row["role"], content=row["content"]) for row in rows
+            ]
 
     @staticmethod
     async def save_turn(
@@ -61,6 +69,15 @@ class SessionRepository:
                 INSERT INTO turns (id, session_id, transcript, response_text, stt_ms, llm_ms, tts_ms, total_ms)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (turn_id, session_id, transcript, response_text, stt_ms, llm_ms, tts_ms, total_ms),
+                (
+                    turn_id,
+                    session_id,
+                    transcript,
+                    response_text,
+                    stt_ms,
+                    llm_ms,
+                    tts_ms,
+                    total_ms,
+                ),
             )
             await db.commit()

@@ -1,4 +1,5 @@
 """Authentication, API-key hashing, and WebSocket ticket management."""
+
 import hashlib
 import hmac
 import secrets
@@ -40,6 +41,7 @@ def check_model_allowed(key: ApiKeyRecord, model_id: Optional[str]) -> None:
         if model_id not in key.model_allowlist:
             raise ForbiddenError(f"Model '{model_id}' is not allowed for this key.")
 
+
 # In-memory ticket storage: {ticket_str: (created_at_timestamp, user_id)}
 _TICKETS: Dict[str, Tuple[float, str]] = {}
 TICKET_EXPIRY_SECONDS = 60
@@ -75,11 +77,13 @@ def verify_api_key(plain_key: str) -> Optional[str]:
     """Verify an API key and return owner/role if valid."""
     if not plain_key:
         return None
-    
+
     # Check configured admin key if set
-    if settings.ADMIN_API_KEY and hmac.compare_digest(plain_key, settings.ADMIN_API_KEY):
+    if settings.ADMIN_API_KEY and hmac.compare_digest(
+        plain_key, settings.ADMIN_API_KEY
+    ):
         return "admin"
-        
+
     key_hash = hash_api_key(plain_key)
     if key_hash in _DEV_KEY_HASHES:
         return _DEV_KEY_HASHES[key_hash]
@@ -106,9 +110,17 @@ async def get_authenticated_key(
 ) -> ApiKeyRecord:
     """Resolve API key or panel session to an ApiKeyRecord."""
     key = None
-    auth_val = authorization if isinstance(authorization, str) else request.headers.get("authorization")
-    xi_val = xi_api_key if isinstance(xi_api_key, str) else request.headers.get("xi-api-key")
-    query_val = api_key if isinstance(api_key, str) else request.query_params.get("api_key")
+    auth_val = (
+        authorization
+        if isinstance(authorization, str)
+        else request.headers.get("authorization")
+    )
+    xi_val = (
+        xi_api_key if isinstance(xi_api_key, str) else request.headers.get("xi-api-key")
+    )
+    query_val = (
+        api_key if isinstance(api_key, str) else request.query_params.get("api_key")
+    )
 
     if auth_val:
         parts = auth_val.split(" ", 1)
@@ -127,6 +139,7 @@ async def get_authenticated_key(
     # 1. If an explicit API key was supplied, validate it
     if key:
         from app.services.key_manager import KeyManager
+
         record = await KeyManager.authenticate(key, client_ip=client_ip)
         if record:
             request.state.api_key = record
@@ -140,7 +153,17 @@ async def get_authenticated_key(
                 id=f"key-mem-{owner}",
                 name=owner,
                 role=role,
-                scopes=["llm", "stt", "tts", "admin", "voice", "voice_stream", "stt_stream"] if role == "admin" else ["llm", "stt", "tts"],
+                scopes=[
+                    "llm",
+                    "stt",
+                    "tts",
+                    "admin",
+                    "voice",
+                    "voice_stream",
+                    "stt_stream",
+                ]
+                if role == "admin"
+                else ["llm", "stt", "tts"],
                 rate_limit=1000,
                 max_concurrent=50,
                 created_at=0.0,
@@ -155,13 +178,22 @@ async def get_authenticated_key(
     session_id = request.cookies.get("admin_session")
     if session_id:
         from app.services.admin_auth import AdminAuthService
+
         session_info = await AdminAuthService.validate_session(session_id)
         if session_info:
             record = ApiKeyRecord(
                 id="panel-super-admin",
                 name=session_info["email"],
                 role="admin",
-                scopes=["admin", "llm", "stt", "tts", "voice", "voice_stream", "stt_stream"],
+                scopes=[
+                    "admin",
+                    "llm",
+                    "stt",
+                    "tts",
+                    "voice",
+                    "voice_stream",
+                    "stt_stream",
+                ],
                 rate_limit=10000,
                 max_concurrent=100,
                 created_at=0.0,
@@ -171,7 +203,9 @@ async def get_authenticated_key(
             return record
         raise UnauthorizedError("Invalid or expired session.")
 
-    raise UnauthorizedError("Missing API key. Provide Bearer, xi-api-key header, or api_key query param.")
+    raise UnauthorizedError(
+        "Missing API key. Provide Bearer, xi-api-key header, or api_key query param."
+    )
 
 
 async def require_api_key(
@@ -200,20 +234,23 @@ async def require_admin_key(
 
 def require_scope(required_scope: str):
     """FastAPI dependency factory enforcing a specific scope for caller keys."""
+
     async def _scope_checker(
         request: Request,
         authorization: Optional[str] = Header(None),
         xi_api_key: Optional[str] = Header(None, alias="xi-api-key"),
         api_key: Optional[str] = Query(None),
     ) -> ApiKeyRecord:
-        record = await get_authenticated_key(request, authorization, xi_api_key, api_key)
+        record = await get_authenticated_key(
+            request, authorization, xi_api_key, api_key
+        )
         if record.role == "admin":
             return record
         if required_scope not in record.scopes:
             raise ForbiddenError(f"Missing required scope: '{required_scope}'")
         return record
-    return _scope_checker
 
+    return _scope_checker
 
 
 def create_websocket_ticket(user: str = "default") -> str:

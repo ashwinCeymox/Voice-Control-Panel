@@ -108,5 +108,5 @@ Emits 'vad.speech_start'     Binary WebSocket Frames ──► Gateway
 The control panel is compiled for subpath mounting:
 1. `vite.config.ts` sets `base: '/voicecontrolpanel/'`.
 2. Static assets are bundled via `npm --prefix frontend run build`.
-3. In [`deploy/caddy/Caddyfile`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/deploy/caddy/Caddyfile), Caddy serves static assets at `/voicecontrolpanel/*` from `/opt/voice-agent/frontend/dist/`.
+3. In [`deploy/caddy/Caddyfile`](../../deploy/caddy/Caddyfile), Caddy serves static assets at `/voicecontrolpanel/*` from `/opt/voice-agent/frontend/dist/`.
 4. Caddy protects the `/voicecontrolpanel/` route using HTTP `basic_auth` to prevent unauthorized public access.

@@ -1,6 +1,7 @@
 """
 Prometheus metrics export endpoint.
 """
+
 from fastapi import APIRouter, Response
 from app.services.metrics import metrics_collector
 

@@ -1,0 +1,28 @@
+[Unit]
+Description=Streaming STT (Sherpa-ONNX Zipformer)
+After=network.target
+
+[Service]
+Type=simple
+User=voiceagent
+Group=voiceagent
+WorkingDirectory=/opt/voice-agent
+EnvironmentFile=/opt/voice-agent/.env
+Environment=CUDA_VISIBLE_DEVICES=0
+# Runtime settings (STREAMING_STT_PROVIDER=cpu/cuda, STREAMING_STT_PRECISION=fp32/fp16) are loaded from .env
+ExecStart=/opt/voice-agent/.venv/bin/python services/streaming_stt/server.py --host 127.0.0.1 --port 8088 --chunk-ms 560
+Restart=always
+RestartSec=5
+
+# Sandboxing
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/opt/voice-agent/logs /opt/voice-agent/models/streaming-stt
+
+[Install]
+WantedBy=multi-user.target

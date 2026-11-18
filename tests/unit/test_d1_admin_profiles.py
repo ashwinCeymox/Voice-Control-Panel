@@ -2,7 +2,7 @@
 Unit tests for Task D1-BACKEND: Profiles CRUD, Key extensions (profile_id, status,
 pause/resume, rotation, model & IP allowlists), Dashboard Settings, and Admin Audit Log.
 """
-import time
+
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
@@ -116,7 +116,9 @@ async def test_disabled_profile_blocks_key():
     client = TestClient(app)
     headers = {"Authorization": f"Bearer {admin_key['key']}"}
 
-    prof_resp = client.post("/v1/admin/profiles", json={"name": "crm-sync"}, headers=headers)
+    prof_resp = client.post(
+        "/v1/admin/profiles", json={"name": "crm-sync"}, headers=headers
+    )
     prof_id = prof_resp.json()["id"]
 
     key_resp = client.post(
@@ -135,7 +137,9 @@ async def test_disabled_profile_blocks_key():
     assert chat_resp.status_code in (200, 502, 503)  # Reached application logic
 
     # 2. Disable profile
-    client.patch(f"/v1/admin/profiles/{prof_id}", json={"disabled": True}, headers=headers)
+    client.patch(
+        f"/v1/admin/profiles/{prof_id}", json={"disabled": True}, headers=headers
+    )
 
     # 3. Key is now rejected with 401
     blocked_resp = client.post(

@@ -2,9 +2,8 @@
 Unit tests for Phase P2: Keys, Roles, Scopes, Usage Tracking, and Concurrency Limits.
 Follows TDD strictly.
 """
-import asyncio
+
 import time
-from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 from app.main import app
@@ -177,7 +176,11 @@ async def test_usage_tracking_records_activity():
 @pytest.mark.asyncio
 async def test_concurrency_limits_and_queuing():
     """Verify backend semaphore and per-key limits return 429/503 when overloaded."""
-    from app.core.limits import BackendLimiter, ConcurrencyLimitExceededError, BackendOverloadedError
+    from app.core.limits import (
+        BackendLimiter,
+        ConcurrencyLimitExceededError,
+        BackendOverloadedError,
+    )
 
     limiter = BackendLimiter(backend_cap=2, per_key_cap=1, queue_timeout=0.2)
 

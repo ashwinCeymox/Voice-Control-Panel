@@ -1,4 +1,5 @@
 """Integration tests verifying strict session isolation across concurrent turns."""
+
 import asyncio
 import json
 from unittest.mock import AsyncMock, patch
@@ -14,7 +15,6 @@ from app.schemas.chat import (
     ChatCompletionResponse,
 )
 from app.services.voice_orchestrator import orchestrator
-from app.storage.database import get_db
 from app.storage.repositories import SessionRepository
 
 
@@ -23,11 +23,16 @@ def test_concurrent_websocket_sessions_turn_isolation(test_client, receive_event
 
     Ensure messages, turn history, and transcripts never leak across sessions.
     """
+
     def mock_transcribe(audio_bytes, *args, **kwargs):
         if b"session_a" in audio_bytes:
-            return TranscriptResponse(text="Session A: Inquiry regarding invoice #1001", language="en")
+            return TranscriptResponse(
+                text="Session A: Inquiry regarding invoice #1001", language="en"
+            )
         else:
-            return TranscriptResponse(text="Session B: Reservation request for flight #2002", language="en")
+            return TranscriptResponse(
+                text="Session B: Reservation request for flight #2002", language="en"
+            )
 
     async def mock_llm_stream(messages, *args, **kwargs):
         last_msg = messages[-1]["content"] if messages else ""
@@ -37,16 +42,24 @@ def test_concurrent_websocket_sessions_turn_isolation(test_client, receive_event
         async for _ in text_gen:
             yield b"\x00\x00" * 600
 
-    with patch.object(orchestrator.stt, "transcribe", side_effect=mock_transcribe), \
-         patch.object(orchestrator.llm, "stream_tokens", side_effect=mock_llm_stream), \
-         patch.object(orchestrator.tts, "stream_synthesis_ws", side_effect=mock_tts_stream):
-
+    with (
+        patch.object(orchestrator.stt, "transcribe", side_effect=mock_transcribe),
+        patch.object(orchestrator.llm, "stream_tokens", side_effect=mock_llm_stream),
+        patch.object(
+            orchestrator.tts, "stream_synthesis_ws", side_effect=mock_tts_stream
+        ),
+    ):
         ticket_a = create_websocket_ticket("alice")
         ticket_b = create_websocket_ticket("bob")
 
-        with test_client.websocket_connect(f"/v1/voice/stream?ticket={ticket_a}") as ws_a, \
-             test_client.websocket_connect(f"/v1/voice/stream?ticket={ticket_b}") as ws_b:
-
+        with (
+            test_client.websocket_connect(
+                f"/v1/voice/stream?ticket={ticket_a}"
+            ) as ws_a,
+            test_client.websocket_connect(
+                f"/v1/voice/stream?ticket={ticket_b}"
+            ) as ws_b,
+        ):
             # 1. Capture session IDs
             session_a = receive_event(ws_a)["session_id"]
             session_b = receive_event(ws_b)["session_id"]
@@ -54,11 +67,15 @@ def test_concurrent_websocket_sessions_turn_isolation(test_client, receive_event
             assert session_a != session_b
 
             # 2. Transmit turns concurrently
-            ws_a.send_json({"type": "session.start", "input_audio": {"container": "wav"}})
+            ws_a.send_json(
+                {"type": "session.start", "input_audio": {"container": "wav"}}
+            )
             ws_a.send_bytes(b"RIFF_session_a_audio_data")
             ws_a.send_json({"type": "audio.commit"})
 
-            ws_b.send_json({"type": "session.start", "input_audio": {"container": "wav"}})
+            ws_b.send_json(
+                {"type": "session.start", "input_audio": {"container": "wav"}}
+            )
             ws_b.send_bytes(b"RIFF_session_b_audio_data")
             ws_b.send_json({"type": "audio.commit"})
 
@@ -86,8 +103,12 @@ def test_concurrent_websocket_sessions_turn_isolation(test_client, receive_event
             ws_b.send_json({"type": "session.end"})
 
             # 5. Assert event stream isolation
-            transcript_a = next(e["text"] for e in events_a if e["type"] == "transcript.completed")
-            transcript_b = next(e["text"] for e in events_b if e["type"] == "transcript.completed")
+            transcript_a = next(
+                e["text"] for e in events_a if e["type"] == "transcript.completed"
+            )
+            transcript_b = next(
+                e["text"] for e in events_b if e["type"] == "transcript.completed"
+            )
 
             assert "Session A" in transcript_a
             assert "invoice #1001" in transcript_a
@@ -136,27 +157,39 @@ def test_multi_turn_llm_history_isolation(test_client, receive_event, wait_for_e
         async for _ in text_gen:
             yield b"\x00\x00" * 100
 
-    with patch.object(orchestrator.stt, "transcribe", side_effect=mock_transcribe), \
-         patch.object(orchestrator.llm, "stream_tokens", side_effect=mock_llm_stream), \
-         patch.object(orchestrator.tts, "stream_synthesis_ws", side_effect=mock_tts_stream):
-
+    with (
+        patch.object(orchestrator.stt, "transcribe", side_effect=mock_transcribe),
+        patch.object(orchestrator.llm, "stream_tokens", side_effect=mock_llm_stream),
+        patch.object(
+            orchestrator.tts, "stream_synthesis_ws", side_effect=mock_tts_stream
+        ),
+    ):
         ticket_a = create_websocket_ticket("alice")
         ticket_b = create_websocket_ticket("bob")
 
-        with test_client.websocket_connect(f"/v1/voice/stream?ticket={ticket_a}") as ws_a, \
-             test_client.websocket_connect(f"/v1/voice/stream?ticket={ticket_b}") as ws_b:
-
+        with (
+            test_client.websocket_connect(
+                f"/v1/voice/stream?ticket={ticket_a}"
+            ) as ws_a,
+            test_client.websocket_connect(
+                f"/v1/voice/stream?ticket={ticket_b}"
+            ) as ws_b,
+        ):
             receive_event(ws_a)
             receive_event(ws_b)
 
             # Session A Turn 1: Establish Apple
-            ws_a.send_json({"type": "session.start", "input_audio": {"container": "wav"}})
+            ws_a.send_json(
+                {"type": "session.start", "input_audio": {"container": "wav"}}
+            )
             ws_a.send_bytes(b"RIFF_apple")
             ws_a.send_json({"type": "audio.commit"})
             wait_for_event(ws_a, "turn.completed")
 
             # Session B Turn 1: Establish Banana
-            ws_b.send_json({"type": "session.start", "input_audio": {"container": "wav"}})
+            ws_b.send_json(
+                {"type": "session.start", "input_audio": {"container": "wav"}}
+            )
             ws_b.send_bytes(b"RIFF_banana")
             ws_b.send_json({"type": "audio.commit"})
             wait_for_event(ws_b, "turn.completed")
@@ -178,8 +211,12 @@ def test_multi_turn_llm_history_isolation(test_client, receive_event, wait_for_e
             # captured_llm_messages: [A_turn1, B_turn1, A_turn2, B_turn2]
             assert len(captured_llm_messages) == 4
 
-            session_a_turn2_context = " ".join(m["content"] for m in captured_llm_messages[2])
-            session_b_turn2_context = " ".join(m["content"] for m in captured_llm_messages[3])
+            session_a_turn2_context = " ".join(
+                m["content"] for m in captured_llm_messages[2]
+            )
+            session_b_turn2_context = " ".join(
+                m["content"] for m in captured_llm_messages[3]
+            )
 
             assert "Apple" in session_a_turn2_context
             assert "Banana" not in session_a_turn2_context
@@ -205,15 +242,24 @@ async def test_synchronous_voice_turn_session_isolation():
         choices=[
             ChatCompletionChoice(
                 index=0,
-                message=ChatCompletionChoiceMessage(role="assistant", content="Assistant reply"),
+                message=ChatCompletionChoiceMessage(
+                    role="assistant", content="Assistant reply"
+                ),
             )
         ],
     )
 
-    with patch.object(orchestrator.stt, "transcribe", side_effect=mock_transcribe_fn), \
-         patch.object(orchestrator.llm, "complete", AsyncMock(return_value=mock_llm_resp)), \
-         patch.object(orchestrator.tts, "synthesize_http", AsyncMock(return_value=b"\x00\x00" * 480)):
-
+    with (
+        patch.object(orchestrator.stt, "transcribe", side_effect=mock_transcribe_fn),
+        patch.object(
+            orchestrator.llm, "complete", AsyncMock(return_value=mock_llm_resp)
+        ),
+        patch.object(
+            orchestrator.tts,
+            "synthesize_http",
+            AsyncMock(return_value=b"\x00\x00" * 480),
+        ),
+    ):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             headers = {"Authorization": "Bearer dev-voice-key-12345"}
 
@@ -248,8 +294,11 @@ async def test_synchronous_voice_turn_session_isolation():
             assert msgs_2[0].content == "Utterance from User 2"
 
 
-def test_concurrent_session_cancellation_isolation(test_client, receive_event, wait_for_event):
+def test_concurrent_session_cancellation_isolation(
+    test_client, receive_event, wait_for_event
+):
     """Cancelling a turn in Session 1 does NOT cancel or disrupt concurrent Session 2."""
+
     async def slow_llm_stream(messages, *args, **kwargs):
         for token in ["Session", " response", " streaming", " with", " delays..."]:
             await asyncio.sleep(0.04)
@@ -264,25 +313,38 @@ def test_concurrent_session_cancellation_isolation(test_client, receive_event, w
         return_value=TranscriptResponse(text="Concurrent turn test", language="en")
     )
 
-    with patch.object(orchestrator.stt, "transcribe", mock_stt), \
-         patch.object(orchestrator.llm, "stream_tokens", side_effect=slow_llm_stream), \
-         patch.object(orchestrator.tts, "stream_synthesis_ws", side_effect=mock_tts_stream):
-
+    with (
+        patch.object(orchestrator.stt, "transcribe", mock_stt),
+        patch.object(orchestrator.llm, "stream_tokens", side_effect=slow_llm_stream),
+        patch.object(
+            orchestrator.tts, "stream_synthesis_ws", side_effect=mock_tts_stream
+        ),
+    ):
         ticket_1 = create_websocket_ticket("alice")
         ticket_2 = create_websocket_ticket("bob")
 
-        with test_client.websocket_connect(f"/v1/voice/stream?ticket={ticket_1}") as ws_1, \
-             test_client.websocket_connect(f"/v1/voice/stream?ticket={ticket_2}") as ws_2:
-
+        with (
+            test_client.websocket_connect(
+                f"/v1/voice/stream?ticket={ticket_1}"
+            ) as ws_1,
+            test_client.websocket_connect(
+                f"/v1/voice/stream?ticket={ticket_2}"
+            ) as ws_2,
+        ):
             sess_1 = receive_event(ws_1)["session_id"]
             sess_2 = receive_event(ws_2)["session_id"]
+            assert sess_1 != sess_2
 
             # Launch turns on both sessions
-            ws_1.send_json({"type": "session.start", "input_audio": {"container": "wav"}})
+            ws_1.send_json(
+                {"type": "session.start", "input_audio": {"container": "wav"}}
+            )
             ws_1.send_bytes(b"RIFF_sess1")
             ws_1.send_json({"type": "audio.commit"})
 
-            ws_2.send_json({"type": "session.start", "input_audio": {"container": "wav"}})
+            ws_2.send_json(
+                {"type": "session.start", "input_audio": {"container": "wav"}}
+            )
             ws_2.send_bytes(b"RIFF_sess2")
             ws_2.send_json({"type": "audio.commit"})
 

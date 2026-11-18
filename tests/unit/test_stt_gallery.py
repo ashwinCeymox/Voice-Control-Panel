@@ -1,4 +1,5 @@
 """Unit tests for the expanded LocalAI STT model catalog and model resolution."""
+
 import pytest
 from app.api.gallery import GALLERY_CATALOG, get_installed_models_data
 from app.api.agents import validate_agent_models

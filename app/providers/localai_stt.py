@@ -1,4 +1,6 @@
 """LocalAI Speech-to-Text (STT) provider client."""
+
+import asyncio
 import logging
 from typing import Optional
 import httpx
@@ -25,7 +27,9 @@ class LocalAISTTClient(STTProvider):
                     headers["Authorization"] = f"Bearer {settings.LOCALAI_API_KEY}"
                 resp = await client.get(f"{self.base_url}/v1/models", headers=headers)
                 if resp.status_code == 200:
-                    models = [m.get("id") for m in resp.json().get("data", []) if m.get("id")]
+                    models = [
+                        m.get("id") for m in resp.json().get("data", []) if m.get("id")
+                    ]
                     # 1. Exact match
                     if target in models:
                         return target
@@ -39,9 +43,21 @@ class LocalAISTTClient(STTProvider):
                         if m.lower().split(":")[0] == target_base:
                             return m
                     # 4. Handle generic aliases ("whisper", "whisper-1", "default")
-                    if target.lower() in ("whisper", "whisper-1", "whisper-default", "default", ""):
+                    if target.lower() in (
+                        "whisper",
+                        "whisper-1",
+                        "whisper-default",
+                        "default",
+                        "",
+                    ):
                         # Prefer high-accuracy vetted models if available
-                        for preferred in ("whisper-small", "whisper-large-turbo", "whisper-base-en", "whisper-base", "whisper-tiny"):
+                        for preferred in (
+                            "whisper-small",
+                            "whisper-large-turbo",
+                            "whisper-base-en",
+                            "whisper-base",
+                            "whisper-tiny",
+                        ):
                             if preferred in models:
                                 return preferred
                     # 5. Clean alphanumeric exact match
@@ -60,10 +76,21 @@ class LocalAISTTClient(STTProvider):
                         return stt_models[0]
         except Exception:
             pass
+        # Dynamic healing via models manifest
+        try:
+            from app.services.model_manifest import model_manifest
+
+            resolved = model_manifest.resolve_model_id("stt", target, kind="batch")
+            if resolved:
+                return resolved
+        except Exception:
+            pass
         return target
 
-    async def get_available_fallback_models(self, exclude: Optional[str] = None) -> list[str]:
-        """Return list of alternative installed whisper STT models in LocalAI."""
+    async def get_available_fallback_models(
+        self, exclude: Optional[str] = None
+    ) -> list[str]:
+        """Return list of alternative installed whisper STT models in LocalAI or dynamic manifest."""
         try:
             async with httpx.AsyncClient(timeout=3.0) as client:
                 headers = {}
@@ -71,22 +98,44 @@ class LocalAISTTClient(STTProvider):
                     headers["Authorization"] = f"Bearer {settings.LOCALAI_API_KEY}"
                 resp = await client.get(f"{self.base_url}/v1/models", headers=headers)
                 if resp.status_code == 200:
-                    models = [m.get("id") for m in resp.json().get("data", []) if m.get("id")]
+                    models = [
+                        m.get("id") for m in resp.json().get("data", []) if m.get("id")
+                    ]
                     whisper_models = [
-                        m for m in models
-                        if "whisper" in m.lower() and (not exclude or m.lower() != exclude.lower())
+                        m
+                        for m in models
+                        if "whisper" in m.lower()
+                        and (not exclude or m.lower() != exclude.lower())
                     ]
                     # Priority order: fast reliable base/tiny models first
-                    priority = ["whisper-base", "whisper-tiny", "whisper-small", "whisper-base-en"]
+                    priority = [
+                        "whisper-base",
+                        "whisper-tiny",
+                        "whisper-small",
+                        "whisper-base-en",
+                    ]
                     whisper_models.sort(
                         key=lambda x: priority.index(x) if x in priority else 99
                     )
-                    return whisper_models
+                    if whisper_models:
+                        return whisper_models
         except Exception as e:
             logger.warning("Failed to query fallback models from LocalAI: %s", e)
-        # Static fallbacks if query fails
-        static_fallbacks = ["whisper-base", "whisper-tiny", "whisper-small"]
-        return [m for m in static_fallbacks if not exclude or m.lower() != exclude.lower()]
+        # Dynamic fallbacks from manifest rather than static hardcoded list
+        try:
+            from app.services.model_manifest import model_manifest
+
+            installed_stt = model_manifest.get_models_by_category("stt", kind="batch")
+            fallbacks = [
+                m["id"]
+                for m in installed_stt
+                if not exclude or m["id"].lower() != exclude.lower()
+            ]
+            if fallbacks:
+                return fallbacks
+        except Exception:
+            pass
+        return []
 
     async def transcribe(
         self,
@@ -109,8 +158,8 @@ class LocalAISTTClient(STTProvider):
             "temperature": "0",
             "condition_on_previous_text": "false",
         }
-        if language and language != "auto":
-            data["language"] = language
+        target_lang = language if (language and language != "auto") else "en"
+        data["language"] = target_lang
 
         headers = {}
         if settings.LOCALAI_API_KEY:
@@ -138,64 +187,110 @@ class LocalAISTTClient(STTProvider):
                     logger.error("LocalAI STT error %d: %s", resp.status_code, err_body)
                     # If error is due to an incomplete frame, EOF, or unparseable audio, treat as silence
                     decode_error_markers = [
-                        "end of file", "invalid data found", "could not find codec",
-                        "truncating packet", "ebml header parsing failed", "exit status 183",
-                        "error opening input", "unsupported audio format"
+                        "end of file",
+                        "invalid data found",
+                        "could not find codec",
+                        "truncating packet",
+                        "ebml header parsing failed",
+                        "exit status 183",
+                        "error opening input",
+                        "unsupported audio format",
                     ]
                     if any(frag in err_body.lower() for frag in decode_error_markers):
-                        logger.info("LocalAI STT reported unparseable/truncated frame, treating as silence")
-                        return TranscriptResponse(text="", language=language or "en", duration=0.0, model=target_model, fallback_used=False)
+                        logger.info(
+                            "LocalAI STT reported unparseable/truncated frame, treating as silence"
+                        )
+                        return TranscriptResponse(
+                            text="",
+                            language=language or "en",
+                            duration=0.0,
+                            model=target_model,
+                            fallback_used=False,
+                        )
 
                     # Handle model loading failure, context cancellation, or cooldown with automatic fallback
-                    is_loading_or_cooldown = (
-                        resp.status_code in (500, 502, 503) or
-                        any(frag in err_body.lower() for frag in [
-                            "cooldown", "failed to load model", "context canceled", "backend process exited"
-                        ])
+                    is_loading_or_cooldown = resp.status_code in (500, 502, 503) or any(
+                        frag in err_body.lower()
+                        for frag in [
+                            "cooldown",
+                            "failed to load model",
+                            "context canceled",
+                            "backend process exited",
+                        ]
                     )
 
                     if is_loading_or_cooldown:
                         # 1. Brief retry of target model if it was momentarily spinning up
                         try:
                             await asyncio.sleep(1.5)
-                            retry_resp = await client.post(url, files={"file": (filename, audio_bytes, content_type)}, data=data, headers=headers)
+                            retry_resp = await client.post(
+                                url,
+                                files={"file": (filename, audio_bytes, content_type)},
+                                data=data,
+                                headers=headers,
+                            )
                             if retry_resp.status_code == 200:
                                 retry_payload = retry_resp.json()
-                                logger.info("LocalAI STT target model '%s' succeeded on transient warmup retry", target_model)
+                                logger.info(
+                                    "LocalAI STT target model '%s' succeeded on transient warmup retry",
+                                    target_model,
+                                )
                                 return TranscriptResponse(
                                     text=retry_payload.get("text", "").strip(),
-                                    language=retry_payload.get("language", language or "en"),
+                                    language=retry_payload.get(
+                                        "language", language or "en"
+                                    ),
                                     duration=retry_payload.get("duration"),
                                     model=target_model,
                                     fallback_used=False,
                                 )
                         except Exception as retry_err:
-                            logger.warning("Target model warmup retry encountered error: %s", retry_err)
+                            logger.warning(
+                                "Target model warmup retry encountered error: %s",
+                                retry_err,
+                            )
 
                         # 2. Try fallback models only if explicitly enabled in settings (H7)
                         if settings.STT_ALLOW_FALLBACK:
-                            fallbacks = await self.get_available_fallback_models(exclude=target_model)
+                            fallbacks = await self.get_available_fallback_models(
+                                exclude=target_model
+                            )
                             for fallback in fallbacks:
                                 logger.warning(
                                     "LocalAI STT model '%s' unavailable (%s). Retrying transcription with fallback model '%s'...",
-                                    target_model, err_body.strip(), fallback
+                                    target_model,
+                                    err_body.strip(),
+                                    fallback,
                                 )
-                                fb_files = {"file": (filename, audio_bytes, content_type)}
+                                fb_files = {
+                                    "file": (filename, audio_bytes, content_type)
+                                }
                                 fb_data = dict(data)
                                 fb_data["model"] = fallback
-                                fb_resp = await client.post(url, files=fb_files, data=fb_data, headers=headers)
+                                fb_resp = await client.post(
+                                    url, files=fb_files, data=fb_data, headers=headers
+                                )
                                 if fb_resp.status_code == 200:
                                     fb_payload = fb_resp.json()
-                                    logger.info("LocalAI STT fallback model '%s' transcribed successfully!", fallback)
+                                    logger.info(
+                                        "LocalAI STT fallback model '%s' transcribed successfully!",
+                                        fallback,
+                                    )
                                     return TranscriptResponse(
                                         text=fb_payload.get("text", "").strip(),
-                                        language=fb_payload.get("language", language or "en"),
+                                        language=fb_payload.get(
+                                            "language", language or "en"
+                                        ),
                                         duration=fb_payload.get("duration"),
                                         model=fallback,
                                         fallback_used=True,
                                     )
                                 else:
-                                    logger.warning("Fallback model '%s' also failed: %s", fallback, fb_resp.text.strip())
+                                    logger.warning(
+                                        "Fallback model '%s' also failed: %s",
+                                        fallback,
+                                        fb_resp.text.strip(),
+                                    )
 
                     raise ProviderUnavailableError("LocalAI STT", details=err_body)
         except httpx.TimeoutException:

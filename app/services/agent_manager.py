@@ -1,7 +1,7 @@
 """Agent lifecycle, SQLite storage, and active agent management."""
+
 import json
 import uuid
-import time
 import asyncio
 from typing import Dict, List, Optional, Any
 import aiosqlite
@@ -14,7 +14,12 @@ DEFAULT_AGENT = {
     "description": "Standard concise conversational voice assistant optimized for 8GB Mac.",
     "system_prompt": "You are a concise, helpful voice AI assistant. Keep responses natural, direct, and under two sentences.",
     "llm": {"model": "llama-3.2-1b-instruct", "temperature": 0.7, "max_tokens": 512},
-    "stt": {"model": "whisper-base", "kind": "batch", "fallback_model": None, "language": "auto"},
+    "stt": {
+        "model": "whisper-base",
+        "kind": "batch",
+        "fallback_model": None,
+        "language": "auto",
+    },
     "tts": {"engine": "kokoro", "voice_id": "af_heart", "speed": 1.0},
     "vad": {
         "engine": "silero",
@@ -96,22 +101,37 @@ _LOAD_LOCK = asyncio.Lock()
 
 
 def _normalize_stt(stt_raw: Dict[str, Any]) -> Dict[str, Any]:
+    from app.services.model_manifest import model_manifest
+
+    kind = stt_raw.get("kind", "batch") if isinstance(stt_raw, dict) else "batch"
+    default_stt = model_manifest.get_default_model("stt", kind=kind) or "whisper-base"
     merged = {
-        "model": "whisper-base",
+        "model": default_stt,
         "kind": "batch",
         "fallback_model": None,
         "language": "auto",
-        **stt_raw,
+        **(stt_raw or {}),
     }
-    if "kind" not in stt_raw:
+    if "kind" not in (stt_raw or {}):
         merged["kind"] = "batch"
-    if "fallback_model" not in stt_raw:
+    if "fallback_model" not in (stt_raw or {}):
         merged["fallback_model"] = None
+    if not merged.get("model"):
+        merged["model"] = default_stt
+    else:
+        # Heal any model that is no longer installed or unavailable on this platform
+        resolved = model_manifest.resolve_model_id(
+            "stt", merged.get("model"), kind=merged.get("kind"), available_only=True
+        )
+        if resolved:
+            merged["model"] = resolved
     return merged
 
 
 def _normalize_vad(vad_raw: Dict[str, Any], stt_kind: str = "batch") -> Dict[str, Any]:
-    base = SILERO_STREAMING_DEFAULTS if stt_kind == "streaming" else DEFAULT_AGENT["vad"]
+    base = (
+        SILERO_STREAMING_DEFAULTS if stt_kind == "streaming" else DEFAULT_AGENT["vad"]
+    )
     merged = {**base, **vad_raw}
     if "min_silence_ms" in vad_raw and "redemption_ms" not in vad_raw:
         merged["redemption_ms"] = vad_raw["min_silence_ms"]
@@ -155,22 +175,27 @@ class AgentManager:
             agents = []
             for r in rows:
                 stt_norm = _normalize_stt(json.loads(r["stt_json"]))
-                agents.append({
-                    "id": r["id"],
-                    "name": r["name"],
-                    "description": r["description"],
-                    "system_prompt": r["system_prompt"],
-                    "llm": json.loads(r["llm_json"]),
-                    "stt": stt_norm,
-                    "tts": json.loads(r["tts_json"]),
-                    "vad": _normalize_vad(json.loads(r["vad_json"]), stt_kind=stt_norm.get("kind", "batch")),
-                    "audio": json.loads(r["audio_json"]),
-                    "is_active": bool(r["is_active"]),
-                    "created_at": r["created_at"],
-                    "updated_at": r["updated_at"],
-                    "last_used_at": r["last_used_at"],
-                    "schema_version": 2,
-                })
+                agents.append(
+                    {
+                        "id": r["id"],
+                        "name": r["name"],
+                        "description": r["description"],
+                        "system_prompt": r["system_prompt"],
+                        "llm": json.loads(r["llm_json"]),
+                        "stt": stt_norm,
+                        "tts": json.loads(r["tts_json"]),
+                        "vad": _normalize_vad(
+                            json.loads(r["vad_json"]),
+                            stt_kind=stt_norm.get("kind", "batch"),
+                        ),
+                        "audio": json.loads(r["audio_json"]),
+                        "is_active": bool(r["is_active"]),
+                        "created_at": r["created_at"],
+                        "updated_at": r["updated_at"],
+                        "last_used_at": r["last_used_at"],
+                        "schema_version": 2,
+                    }
+                )
             return agents
 
     @staticmethod
@@ -191,7 +216,9 @@ class AgentManager:
                 "llm": json.loads(r["llm_json"]),
                 "stt": stt_norm,
                 "tts": json.loads(r["tts_json"]),
-                "vad": _normalize_vad(json.loads(r["vad_json"]), stt_kind=stt_norm.get("kind", "batch")),
+                "vad": _normalize_vad(
+                    json.loads(r["vad_json"]), stt_kind=stt_norm.get("kind", "batch")
+                ),
                 "audio": json.loads(r["audio_json"]),
                 "is_active": bool(r["is_active"]),
                 "created_at": r["created_at"],
@@ -204,7 +231,11 @@ class AgentManager:
     async def create_agent(data: Dict[str, Any]) -> Dict[str, Any]:
         agent_id = data.get("id") or str(uuid.uuid4())
         stt_kind = data.get("stt", {}).get("kind", "batch")
-        default_vad = SILERO_STREAMING_DEFAULTS if stt_kind == "streaming" else {"mode": "energy", "threshold": 0.045, "min_silence_ms": 650}
+        default_vad = (
+            SILERO_STREAMING_DEFAULTS
+            if stt_kind == "streaming"
+            else {"mode": "energy", "threshold": 0.045, "min_silence_ms": 650}
+        )
         vad_data = data.get("vad") or default_vad
         async with get_db() as db:
             await db.execute(
@@ -221,14 +252,20 @@ class AgentManager:
                     json.dumps(data["stt"]),
                     json.dumps(data["tts"]),
                     json.dumps(vad_data),
-                    json.dumps(data.get("audio", {"echo_mode": "laptop_speakers", "barge_in": True})),
+                    json.dumps(
+                        data.get(
+                            "audio", {"echo_mode": "laptop_speakers", "barge_in": True}
+                        )
+                    ),
                 ),
             )
             await db.commit()
         return await AgentManager.get_agent(agent_id)
 
     @staticmethod
-    async def update_agent(agent_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def update_agent(
+        agent_id: str, data: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
         async with get_db() as db:
             await db.execute(
                 """
@@ -292,7 +329,10 @@ class AgentManager:
 
                 async with get_db() as db:
                     await db.execute("UPDATE agents SET is_active = 0")
-                    await db.execute("UPDATE agents SET is_active = 1, last_used_at = CURRENT_TIMESTAMP WHERE id = ?", (agent_id,))
+                    await db.execute(
+                        "UPDATE agents SET is_active = 1, last_used_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (agent_id,),
+                    )
                     await db.commit()
 
                 _ACTIVE_AGENT_ID = agent_id

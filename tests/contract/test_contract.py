@@ -1,4 +1,5 @@
 """Contract verification tests against docs/contracts/openapi.yaml."""
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from app.main import app
@@ -35,7 +36,9 @@ async def test_api_contract_tts_models():
 async def test_api_contract_voices():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/v1/voices", headers={"xi-api-key": "dev-voice-key-12345"})
+        resp = await client.get(
+            "/v1/voices", headers={"xi-api-key": "dev-voice-key-12345"}
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert "voices" in data
@@ -117,33 +120,45 @@ async def test_api_contract_agents_lifecycle():
             "name": "Contract Test Agent",
             "description": "Used for OpenAPI contract test",
             "system_prompt": "You are a test agent.",
-            "llm": {"model": "llama-3.2-1b-instruct", "temperature": 0.5, "max_tokens": 256},
+            "llm": {
+                "model": "llama-3.2-1b-instruct",
+                "temperature": 0.5,
+                "max_tokens": 256,
+            },
             "stt": {"model": "whisper-base", "language": "en"},
             "tts": {"engine": "kokoro", "voice_id": "af_heart", "speed": 1.1},
             "vad": {"mode": "energy", "threshold": 0.045, "min_silence_ms": 650},
             "audio": {"echo_mode": "laptop_speakers", "barge_in": True},
         }
-        create_resp = await client.post("/v1/agents", headers=AUTH_HEADER, json=create_payload)
+        create_resp = await client.post(
+            "/v1/agents", headers=AUTH_HEADER, json=create_payload
+        )
         assert create_resp.status_code == 201
         created = create_resp.json()
         agent_id = created["id"]
         assert created["name"] == "Contract Test Agent"
 
         # 4. Duplicate agent
-        dup_resp = await client.post(f"/v1/agents/{agent_id}/duplicate", headers=AUTH_HEADER)
+        dup_resp = await client.post(
+            f"/v1/agents/{agent_id}/duplicate", headers=AUTH_HEADER
+        )
         assert dup_resp.status_code == 201
         dup_agent = dup_resp.json()
         assert "(Copy)" in dup_agent["name"]
 
         # 5. Load agent
-        load_resp = await client.post(f"/v1/agents/{agent_id}/load", headers=AUTH_HEADER)
+        load_resp = await client.post(
+            f"/v1/agents/{agent_id}/load", headers=AUTH_HEADER
+        )
         assert load_resp.status_code == 200
         assert load_resp.json()["status"] == "ready"
 
         # 6. Delete both test agents
         del_resp1 = await client.delete(f"/v1/agents/{agent_id}", headers=AUTH_HEADER)
         assert del_resp1.status_code == 200
-        del_resp2 = await client.delete(f"/v1/agents/{dup_agent['id']}", headers=AUTH_HEADER)
+        del_resp2 = await client.delete(
+            f"/v1/agents/{dup_agent['id']}", headers=AUTH_HEADER
+        )
         assert del_resp2.status_code == 200
 
 
@@ -172,6 +187,14 @@ async def test_api_contract_installed_models_and_install_lifecycle():
         job_id = inst_resp.json()["job_id"]
 
         # Check job status
-        status_resp = await client.get(f"/v1/models/install/{job_id}", headers=AUTH_HEADER)
+        status_resp = await client.get(
+            f"/v1/models/install/{job_id}", headers=AUTH_HEADER
+        )
         assert status_resp.status_code == 200
-        assert status_resp.json()["status"] in ["queued", "downloading", "verifying", "registering", "completed"]
+        assert status_resp.json()["status"] in [
+            "queued",
+            "downloading",
+            "verifying",
+            "registering",
+            "completed",
+        ]

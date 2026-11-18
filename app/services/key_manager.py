@@ -1,16 +1,21 @@
 """
 API Key management, authentication, profiles, role and scope authorization, and usage logging.
 """
+
 import hmac
 import ipaddress
 import json
 import time
 import uuid
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel
 from app.core.config import settings
-from app.core.errors import AppError, UnauthorizedError, ForbiddenError
-from app.core.security import hash_api_key, generate_api_key, ApiKeyRecord, check_model_allowed
+from app.core.errors import AppError
+from app.core.security import (
+    hash_api_key,
+    generate_api_key,
+    ApiKeyRecord,
+    check_model_allowed,
+)
 from app.storage.database import get_db
 
 
@@ -81,9 +86,23 @@ class KeyManager:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    key_id, name, key_hash, role, scopes_str, rate_limit, max_concurrent,
-                    max_daily_tokens, max_daily_audio_seconds, expires_at, now,
-                    profile_id, prefix, status, models_str, ips_str, rotated_from
+                    key_id,
+                    name,
+                    key_hash,
+                    role,
+                    scopes_str,
+                    rate_limit,
+                    max_concurrent,
+                    max_daily_tokens,
+                    max_daily_audio_seconds,
+                    expires_at,
+                    now,
+                    profile_id,
+                    prefix,
+                    status,
+                    models_str,
+                    ips_str,
+                    rotated_from,
                 ),
             )
             await db.commit()
@@ -134,29 +153,39 @@ class KeyManager:
         results = []
         for r in rows:
             scopes = [s.strip() for s in (r[3] or "").split(",") if s.strip()]
-            models = [m.strip() for m in (r[14] or "").split(",") if m.strip()] if r[14] else []
-            ips = [i.strip() for i in (r[15] or "").split(",") if i.strip()] if r[15] else []
-            results.append({
-                "id": r[0],
-                "name": r[1],
-                "role": r[2],
-                "scopes": scopes,
-                "rate_limit": r[4],
-                "max_concurrent": r[5],
-                "max_daily_tokens": r[6],
-                "max_daily_audio_seconds": r[7],
-                "expires_at": r[8],
-                "revoked_at": r[9],
-                "created_at": r[10],
-                "profile_id": r[11],
-                "prefix": r[12],
-                "status": r[13] or "active",
-                "model_allowlist": models,
-                "ip_allowlist": ips,
-                "rotated_from": r[16],
-                "rotation_expires_at": r[17],
-                "last_used_at": r[18],
-            })
+            models = (
+                [m.strip() for m in (r[14] or "").split(",") if m.strip()]
+                if r[14]
+                else []
+            )
+            ips = (
+                [i.strip() for i in (r[15] or "").split(",") if i.strip()]
+                if r[15]
+                else []
+            )
+            results.append(
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "role": r[2],
+                    "scopes": scopes,
+                    "rate_limit": r[4],
+                    "max_concurrent": r[5],
+                    "max_daily_tokens": r[6],
+                    "max_daily_audio_seconds": r[7],
+                    "expires_at": r[8],
+                    "revoked_at": r[9],
+                    "created_at": r[10],
+                    "profile_id": r[11],
+                    "prefix": r[12],
+                    "status": r[13] or "active",
+                    "model_allowlist": models,
+                    "ip_allowlist": ips,
+                    "rotated_from": r[16],
+                    "rotation_expires_at": r[17],
+                    "last_used_at": r[18],
+                }
+            )
         return results
 
     @staticmethod
@@ -179,8 +208,12 @@ class KeyManager:
             return None
 
         scopes = [s.strip() for s in (r[3] or "").split(",") if s.strip()]
-        models = [m.strip() for m in (r[14] or "").split(",") if m.strip()] if r[14] else []
-        ips = [i.strip() for i in (r[15] or "").split(",") if i.strip()] if r[15] else []
+        models = (
+            [m.strip() for m in (r[14] or "").split(",") if m.strip()] if r[14] else []
+        )
+        ips = (
+            [i.strip() for i in (r[15] or "").split(",") if i.strip()] if r[15] else []
+        )
         return {
             "id": r[0],
             "name": r[1],
@@ -204,7 +237,9 @@ class KeyManager:
         }
 
     @staticmethod
-    async def patch_key(key_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def patch_key(
+        key_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
         """Update configurable fields of an API key (status, limits, allowlists, etc.)."""
         allowed_fields = {
             "name": str,
@@ -254,7 +289,9 @@ class KeyManager:
         """Rotate a key: generate a new active key and set rotation expiration on old key."""
         old_key = await KeyManager.get_key(key_id)
         if not old_key:
-            raise AppError(status_code=404, code="KEY_NOT_FOUND", message=f"Key {key_id} not found")
+            raise AppError(
+                status_code=404, code="KEY_NOT_FOUND", message=f"Key {key_id} not found"
+            )
 
         now = time.time()
         rotation_expires_at = now + (grace_period_days * 86400.0)
@@ -296,13 +333,17 @@ class KeyManager:
             return cursor.rowcount > 0
 
     @staticmethod
-    async def authenticate(plain_key: str, client_ip: Optional[str] = None) -> Optional[ApiKeyRecord]:
+    async def authenticate(
+        plain_key: str, client_ip: Optional[str] = None
+    ) -> Optional[ApiKeyRecord]:
         """Authenticate plain key against DB and static admin fallback. Returns ApiKeyRecord or None."""
         if not plain_key:
             return None
 
         # Check configured admin key if set
-        if settings.ADMIN_API_KEY and hmac.compare_digest(plain_key, settings.ADMIN_API_KEY):
+        if settings.ADMIN_API_KEY and hmac.compare_digest(
+            plain_key, settings.ADMIN_API_KEY
+        ):
             return ApiKeyRecord(
                 id="key-admin-env",
                 name="Environment Admin Key",
@@ -333,10 +374,25 @@ class KeyManager:
             return None
 
         (
-            key_id, name, role, scopes_str, rate_limit, max_concurrent,
-            max_daily_tokens, max_daily_audio_seconds, expires_at, revoked_at,
-            created_at, profile_id, prefix, status, model_allowlist_str,
-            ip_allowlist_str, rotated_from, rotation_expires_at, last_used_at
+            key_id,
+            name,
+            role,
+            scopes_str,
+            rate_limit,
+            max_concurrent,
+            max_daily_tokens,
+            max_daily_audio_seconds,
+            expires_at,
+            revoked_at,
+            created_at,
+            profile_id,
+            prefix,
+            status,
+            model_allowlist_str,
+            ip_allowlist_str,
+            rotated_from,
+            rotation_expires_at,
+            last_used_at,
         ) = row
 
         # 1. Check explicit revocation
@@ -367,20 +423,30 @@ class KeyManager:
                 return None
 
         # 6. Check IP allowlist
-        ip_allowlist = [i.strip() for i in (ip_allowlist_str or "").split(",") if i.strip()] if ip_allowlist_str else None
+        ip_allowlist = (
+            [i.strip() for i in (ip_allowlist_str or "").split(",") if i.strip()]
+            if ip_allowlist_str
+            else None
+        )
         if not _is_ip_allowed(client_ip, ip_allowlist):
             return None
 
         # Update last_used_at
         try:
             async with get_db() as db:
-                await db.execute("UPDATE api_keys SET last_used_at = ? WHERE id = ?", (now, key_id))
+                await db.execute(
+                    "UPDATE api_keys SET last_used_at = ? WHERE id = ?", (now, key_id)
+                )
                 await db.commit()
         except Exception:
             pass
 
         scopes = [s.strip() for s in scopes_str.split(",") if s.strip()]
-        model_allowlist = [m.strip() for m in (model_allowlist_str or "").split(",") if m.strip()] if model_allowlist_str else None
+        model_allowlist = (
+            [m.strip() for m in (model_allowlist_str or "").split(",") if m.strip()]
+            if model_allowlist_str
+            else None
+        )
 
         return ApiKeyRecord(
             id=key_id,
@@ -444,7 +510,9 @@ class KeyManager:
         }
 
     @staticmethod
-    async def get_profile(profile_id: str, include_keys: bool = True) -> Optional[Dict[str, Any]]:
+    async def get_profile(
+        profile_id: str, include_keys: bool = True
+    ) -> Optional[Dict[str, Any]]:
         """Get profile by ID, optionally including associated keys."""
         async with get_db() as db:
             async with db.execute(
@@ -483,16 +551,18 @@ class KeyManager:
 
         results = []
         for r in rows:
-            results.append({
-                "id": r[0],
-                "name": r[1],
-                "description": r[2],
-                "contact": r[3],
-                "notes": r[4],
-                "disabled_at": r[5],
-                "created_at": r[6],
-                "updated_at": r[7],
-            })
+            results.append(
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "description": r[2],
+                    "contact": r[3],
+                    "notes": r[4],
+                    "disabled_at": r[5],
+                    "created_at": r[6],
+                    "updated_at": r[7],
+                }
+            )
         return results
 
     @staticmethod
@@ -517,7 +587,9 @@ class KeyManager:
 
         new_disabled_at = existing["disabled_at"]
         if disabled is True:
-            new_disabled_at = now if existing["disabled_at"] is None else existing["disabled_at"]
+            new_disabled_at = (
+                now if existing["disabled_at"] is None else existing["disabled_at"]
+            )
         elif disabled is False:
             new_disabled_at = None
 
@@ -528,7 +600,15 @@ class KeyManager:
                 SET name = ?, description = ?, contact = ?, notes = ?, disabled_at = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (new_name, new_desc, new_contact, new_notes, new_disabled_at, now, profile_id),
+                (
+                    new_name,
+                    new_desc,
+                    new_contact,
+                    new_notes,
+                    new_disabled_at,
+                    now,
+                    profile_id,
+                ),
             )
             await db.commit()
 
@@ -538,7 +618,9 @@ class KeyManager:
     async def delete_profile(profile_id: str) -> bool:
         """Delete profile and dissociate or delete its keys."""
         async with get_db() as db:
-            cursor = await db.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
+            cursor = await db.execute(
+                "DELETE FROM profiles WHERE id = ?", (profile_id,)
+            )
             await db.commit()
             return cursor.rowcount > 0
 
@@ -582,9 +664,21 @@ class KeyManager:
         current = await KeyManager.get_dashboard_settings()
         now = time.time()
         new_base_url = base_url if base_url is not None else current["base_url"]
-        new_rl = default_rate_limit if default_rate_limit is not None else current["default_rate_limit"]
-        new_mc = default_max_concurrent if default_max_concurrent is not None else current["default_max_concurrent"]
-        new_ret = usage_retention_days if usage_retention_days is not None else current["usage_retention_days"]
+        new_rl = (
+            default_rate_limit
+            if default_rate_limit is not None
+            else current["default_rate_limit"]
+        )
+        new_mc = (
+            default_max_concurrent
+            if default_max_concurrent is not None
+            else current["default_max_concurrent"]
+        )
+        new_ret = (
+            usage_retention_days
+            if usage_retention_days is not None
+            else current["usage_retention_days"]
+        )
 
         async with get_db() as db:
             await db.execute(
@@ -654,15 +748,17 @@ class KeyManager:
                     details_obj = json.loads(r[6])
                 except Exception:
                     details_obj = r[6]
-            results.append({
-                "id": r[0],
-                "timestamp": r[1],
-                "admin_id": r[2],
-                "action": r[3],
-                "target_type": r[4],
-                "target_id": r[5],
-                "details": details_obj,
-            })
+            results.append(
+                {
+                    "id": r[0],
+                    "timestamp": r[1],
+                    "admin_id": r[2],
+                    "action": r[3],
+                    "target_type": r[4],
+                    "target_id": r[5],
+                    "details": details_obj,
+                }
+            )
         return results
 
     # ---------------------------------------------------------
@@ -785,6 +881,7 @@ class KeyManager:
 
         try:
             from app.services.usage_service import record_usage_event
+
             in_u = tokens_or_seconds if "chat" not in endpoint else 0.0
             out_u = tokens_or_seconds
             await record_usage_event(

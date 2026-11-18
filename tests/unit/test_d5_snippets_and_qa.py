@@ -5,10 +5,10 @@ QA & Security Verification Suite for Developer Dashboard (Task D5):
 3. Key rotation transition & grace period expiration tests.
 4. Privacy compliance audit: zero prompts, transcripts, or audio in SQLite/exports.
 """
-import io
-import json
+
 from pathlib import Path
 import time
+from unittest.mock import patch
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
@@ -47,7 +47,9 @@ def test_snippet_templates_exist_and_render_placeholders():
 @pytest.mark.asyncio
 async def test_snippet_llm_chat_against_gateway():
     """Simulate execution of rendered LLM chat snippet against FastAPI test client."""
-    caller_key = await KeyManager.create_key("llm-snippet-runner", role="caller", scopes=["llm"])
+    caller_key = await KeyManager.create_key(
+        "llm-snippet-runner", role="caller", scopes=["llm"]
+    )
     client = TestClient(app)
 
     # Read snippet template and interpolate live placeholders
@@ -60,37 +62,54 @@ async def test_snippet_llm_chat_against_gateway():
     assert caller_key["key"] in rendered
 
     # Execute request corresponding to snippet
-    resp = client.post(
-        "/v1/chat/completions",
-        headers={"Authorization": f"Bearer {caller_key['key']}"},
-        json={
-            "model": "llama-3.2-1b-instruct",
-            "messages": [{"role": "user", "content": "Hello! Snippet test."}],
-            "stream": True,
-        },
-    )
-    assert resp.status_code == 200
-    assert "text/event-stream" in resp.headers["content-type"]
+    async def mock_llm_stream(*args, **kwargs):
+        yield "Hello "
+        yield "world!"
+
+    with patch(
+        "app.providers.localai_llm.LocalAILLMClient.stream_tokens",
+        side_effect=mock_llm_stream,
+    ):
+        resp = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {caller_key['key']}"},
+            json={
+                "model": "llama-3.2-1b-instruct",
+                "messages": [{"role": "user", "content": "Hello! Snippet test."}],
+                "stream": True,
+            },
+        )
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers["content-type"]
 
 
 @pytest.mark.asyncio
 async def test_snippet_tts_stream_against_gateway():
     """Simulate execution of rendered TTS snippet against FastAPI test client."""
-    caller_key = await KeyManager.create_key("tts-snippet-runner", role="caller", scopes=["tts"])
+    caller_key = await KeyManager.create_key(
+        "tts-snippet-runner", role="caller", scopes=["tts"]
+    )
     client = TestClient(app)
 
-    resp = client.post(
-        "/v1/text-to-speech/af_bella/stream",
-        headers={"Authorization": f"Bearer {caller_key['key']}"},
-        json={
-            "text": "Hello world from snippet test.",
-            "model_id": "kokoro",
-            "voice_settings": {"speed": 1.0},
-        },
-    )
-    assert resp.status_code == 200
-    assert "audio/pcm" in resp.headers["content-type"]
-    assert len(resp.content) > 0
+    async def mock_tts(*args, **kwargs):
+        return b"\x00\x00" * 2400
+
+    with patch(
+        "app.providers.localtts_client.LocalTTSClient.synthesize_http",
+        side_effect=mock_tts,
+    ):
+        resp = client.post(
+            "/v1/text-to-speech/af_bella/stream",
+            headers={"Authorization": f"Bearer {caller_key['key']}"},
+            json={
+                "text": "Hello world from snippet test.",
+                "model_id": "kokoro",
+                "voice_settings": {"speed": 1.0},
+            },
+        )
+        assert resp.status_code == 200
+        assert "audio/pcm" in resp.headers["content-type"]
+        assert len(resp.content) > 0
 
 
 @pytest.mark.asyncio
@@ -172,7 +191,9 @@ async def test_key_rotation_expiration_transition():
 @pytest.mark.asyncio
 async def test_privacy_audit_zero_content_stored_in_database():
     """Privacy audit: verify zero prompt text, transcripts, or audio exist in database or logs."""
-    caller_key = await KeyManager.create_key("privacy-tester", role="caller", scopes=["llm", "stt"])
+    caller_key = await KeyManager.create_key(
+        "privacy-tester", role="caller", scopes=["llm", "stt"]
+    )
     client = TestClient(app)
 
     secret_canary = "SUPER_SECRET_PATIENT_TOKEN_998877"
@@ -197,7 +218,9 @@ async def test_privacy_audit_zero_content_stored_in_database():
                 for row in rows:
                     for val in row:
                         if isinstance(val, str):
-                            assert secret_canary not in val, f"Canary leaked into table {table} column value: {val}"
+                            assert secret_canary not in val, (
+                                f"Canary leaked into table {table} column value: {val}"
+                            )
 
     # 3. Audit CSV export content for canary
     admin_key = await KeyManager.create_key("admin", role="admin", scopes=["admin"])

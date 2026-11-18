@@ -1,6 +1,7 @@
 """
 Admin API router for Application Profiles management.
 """
+
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -14,7 +15,9 @@ class CreateProfileRequest(BaseModel):
     name: str = Field(..., description="Unique application or consuming project name")
     description: Optional[str] = Field(None, description="Detailed profile description")
     contact: Optional[str] = Field(None, description="Owner contact email or team")
-    notes: Optional[str] = Field(None, description="Internal operational or billing notes")
+    notes: Optional[str] = Field(
+        None, description="Internal operational or billing notes"
+    )
 
 
 class UpdateProfileRequest(BaseModel):
@@ -63,7 +66,9 @@ async def get_profile(
     """Get single profile and its associated API keys (without secrets)."""
     profile = await KeyManager.get_profile(profile_id, include_keys=True)
     if not profile:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found"
+        )
     return profile
 
 
@@ -83,7 +88,9 @@ async def update_profile(
         disabled=req.disabled,
     )
     if not profile:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found"
+        )
 
     await KeyManager.record_audit(
         admin_id=admin.id,
@@ -103,7 +110,9 @@ async def delete_profile(
     """Delete an application profile."""
     success = await KeyManager.delete_profile(profile_id)
     if not success:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found"
+        )
 
     await KeyManager.record_audit(
         admin_id=admin.id,

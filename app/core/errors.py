@@ -1,7 +1,11 @@
 """Application exceptions and error formatting."""
+
+import logging
 from typing import Any, Optional
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
+
+logger = logging.getLogger("voice_agent.errors")
 
 
 class AppError(HTTPException):
@@ -66,9 +70,49 @@ class ModelNotFoundError(AppError):
         )
 
 
-import logging
+class StreamingUnavailableError(ProviderUnavailableError):
+    def __init__(
+        self,
+        message: str = "Streaming service is not running or unreachable",
+        details: Optional[Any] = None,
+    ):
+        super().__init__(provider="Streaming STT", details=details)
+        self.status_code = 503
+        self.code = "STREAMING_STT_UNAVAILABLE"
+        self.message = message
+        self.detail = message
 
-logger = logging.getLogger("voice_agent.errors")
+
+class StreamingModelNotLoadedError(AppError):
+    def __init__(
+        self, model_id: str, details: Optional[Any] = None, status_code: int = 404
+    ):
+        super().__init__(
+            status_code=status_code,
+            code="STT_MODEL_NOT_LOADED",
+            message=f"Model '{model_id}' is not loaded on the streaming service",
+            details=details,
+        )
+
+
+class StreamingBadAudioError(AppError):
+    def __init__(self, message: str = "Invalid audio format for streaming STT"):
+        super().__init__(
+            status_code=400,
+            code="STT_BAD_AUDIO",
+            message=message,
+        )
+
+
+class ModelInUseError(AppError):
+    def __init__(self, model_id: str, agent_names: list):
+        agents_str = ", ".join(f"'{a}'" for a in agent_names)
+        super().__init__(
+            status_code=409,
+            code="MODEL_IN_USE",
+            message=f"Cannot delete model '{model_id}': currently in use by agent(s): {agents_str}",
+            details={"model_id": model_id, "agents": agent_names},
+        )
 
 
 async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:

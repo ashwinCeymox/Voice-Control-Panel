@@ -1,4 +1,5 @@
 """Generate deterministic audio fixture for testing without external tools."""
+
 import math
 import struct
 import wave

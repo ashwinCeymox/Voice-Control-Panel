@@ -1,11 +1,14 @@
 """Schemas for TTS, Voice Turn, and Provider/Model discovery."""
+
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from app.schemas.audio import AudioFormat
 
 
 class VoiceSettings(BaseModel):
-    speed: float = Field(default=1.0, ge=0.25, le=4.0, description="Playback speed multiplier")
+    speed: float = Field(
+        default=1.0, ge=0.25, le=4.0, description="Playback speed multiplier"
+    )
 
 
 class Voice(BaseModel):
@@ -22,14 +25,24 @@ class VoiceListResponse(BaseModel):
 class ModelInfo(BaseModel):
     id: str
     name: Optional[str] = None
+    display_name: Optional[str] = None
     object: str = "model"
     owned_by: str = "local"
     type: Optional[str] = None  # "llm", "stt", "tts"
+    task: Optional[str] = None
+    kind: Optional[str] = None
+    engine: Optional[str] = None
+    runtime: Optional[str] = None
+    available: Optional[bool] = True
+    unavailable_reason: Optional[str] = None
+    installed: Optional[bool] = True
+    size_mb: Optional[int] = 0
 
 
 class ModelListResponse(BaseModel):
     object: str = "list"
     data: List[ModelInfo]
+    models: Optional[List[Dict[str, Any]]] = None
 
 
 class TTSModelListResponse(BaseModel):
@@ -38,7 +51,9 @@ class TTSModelListResponse(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str = Field(..., min_length=1, description="Text to synthesize into speech")
-    model_id: Optional[str] = Field(default=None, description="TTS engine model ID (kokoro, pocket, etc.)")
+    model_id: Optional[str] = Field(
+        default=None, description="TTS engine model ID (kokoro, pocket, etc.)"
+    )
     voice_settings: Optional[VoiceSettings] = Field(default_factory=VoiceSettings)
 
 

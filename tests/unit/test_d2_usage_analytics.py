@@ -2,6 +2,7 @@
 Unit tests for Task D2-USAGE: Usage events pipeline, analytics summary, timeseries,
 request log with CSV export, and models status endpoint.
 """
+
 import csv
 import io
 import time
@@ -23,7 +24,9 @@ async def setup_db():
 async def test_usage_summary_and_grouping():
     """Admin can query usage summary with totals, latency percentiles, and group breakdowns."""
     admin_key = await KeyManager.create_key("admin", role="admin", scopes=["admin"])
-    caller_key = await KeyManager.create_key("caller-app", role="caller", scopes=["llm", "stt"])
+    caller_key = await KeyManager.create_key(
+        "caller-app", role="caller", scopes=["llm", "stt"]
+    )
     client = TestClient(app)
     admin_headers = {"Authorization": f"Bearer {admin_key['key']}"}
 
@@ -79,7 +82,9 @@ async def test_usage_summary_and_grouping():
     assert data["stt_audio_seconds_in"] >= 5.2
 
     # 2. Summary grouped by model
-    resp_model = client.get("/v1/admin/usage/summary?group_by=model", headers=admin_headers)
+    resp_model = client.get(
+        "/v1/admin/usage/summary?group_by=model", headers=admin_headers
+    )
     assert resp_model.status_code == 200
     group_data = resp_model.json()
     assert "groups" in group_data
@@ -94,6 +99,7 @@ async def test_usage_timeseries():
     admin_headers = {"Authorization": f"Bearer {admin_key['key']}"}
 
     from app.services.usage_service import record_usage_event
+
     now = time.time()
     await record_usage_event(
         key_id="test-key-ts",
@@ -106,7 +112,9 @@ async def test_usage_timeseries():
         timestamp=now,
     )
 
-    resp = client.get("/v1/admin/usage/timeseries?interval=hour&since=24h", headers=admin_headers)
+    resp = client.get(
+        "/v1/admin/usage/timeseries?interval=hour&since=24h", headers=admin_headers
+    )
     assert resp.status_code == 200
     ts_data = resp.json()
     assert "series" in ts_data
@@ -132,6 +140,7 @@ async def test_usage_requests_log_and_csv_export():
     admin_headers = {"Authorization": f"Bearer {admin_key['key']}"}
 
     from app.services.usage_service import record_usage_event
+
     now = time.time()
     await record_usage_event(
         key_id=caller_key["id"],
@@ -171,7 +180,7 @@ async def test_usage_requests_log_and_csv_export():
     assert csv_resp.status_code == 200
     assert "text/csv" in csv_resp.headers["content-type"]
     assert "attachment" in csv_resp.headers["content-disposition"]
-    
+
     # Verify CSV structure
     csv_file = io.StringIO(csv_resp.text)
     reader = csv.DictReader(csv_file)
@@ -205,7 +214,9 @@ async def test_models_status_endpoint():
 @pytest.mark.asyncio
 async def test_caller_key_forbidden_on_usage_endpoints():
     """Caller keys without admin scope must be rejected with 403 on all usage endpoints."""
-    caller_key = await KeyManager.create_key("caller-user", role="caller", scopes=["llm", "stt"])
+    caller_key = await KeyManager.create_key(
+        "caller-user", role="caller", scopes=["llm", "stt"]
+    )
     client = TestClient(app)
     caller_headers = {"Authorization": f"Bearer {caller_key['key']}"}
 

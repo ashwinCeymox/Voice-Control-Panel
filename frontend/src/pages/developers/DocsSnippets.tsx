@@ -9,6 +9,7 @@ interface InstalledModel {
   id: string;
   name: string;
   category: string;
+  kind?: string | null;
 }
 
 interface VoiceItem {
@@ -19,7 +20,10 @@ interface VoiceItem {
 export const DocsSnippets: React.FC = () => {
   const [endpoint, setEndpoint] = useState<EndpointId>('llm_chat');
   const [lang, setLang] = useState<LangId>('python');
-  const [baseUrl, setBaseUrl] = useState<string>('http://127.0.0.1:8000');
+  const defaultUrl = typeof window !== 'undefined' && window.location.hostname && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+    ? window.location.origin
+    : 'http://127.0.0.1:8000';
+  const [baseUrl, setBaseUrl] = useState<string>(defaultUrl);
   const [apiKey, setApiKey] = useState<string>('va_live_your_api_key_here');
 
   const [models, setModels] = useState<InstalledModel[]>([]);
@@ -38,18 +42,47 @@ export const DocsSnippets: React.FC = () => {
         if (data.base_url) setBaseUrl(data.base_url);
       })
       .catch(() => {});
+  }, []);
 
-    // Load models
-    fetchAdminJson<any>('/v1/models/installed')
+  // Load endpoint-specific models from the unified model registry
+  useEffect(() => {
+    let query = '';
+    if (endpoint === 'llm_chat' || endpoint === 'voice_stream') {
+      query = '?task=llm&available=true';
+    } else if (endpoint === 'stt_batch') {
+      query = '?task=stt&kind=batch&available=true';
+    } else if (endpoint === 'stt_stream') {
+      query = '?task=stt&kind=streaming&available=true';
+    } else if (endpoint === 'tts_stream') {
+      query = '?task=tts&available=true';
+    }
+
+    fetchAdminJson<any>(`/v1/models${query}`)
       .then((data) => {
-        const mods = data.models || [];
+        const rawList = data.models || (Array.isArray(data) ? data : []);
+        const mods = rawList.map((m: any) => ({
+          id: m.id,
+          name: m.display_name || m.name || m.id,
+          category: m.task || m.category || '',
+          kind: m.kind,
+        }));
         setModels(mods);
-        if (mods.length > 0) setSelectedModel(mods[0].id);
+        if (mods.length > 0) {
+          if (!mods.some((m: any) => m.id === selectedModel)) {
+            setSelectedModel(mods[0].id);
+          }
+        } else {
+          setSelectedModel('');
+        }
       })
       .catch(() => {});
+  }, [endpoint]);
 
-    // Load voices
-    fetch('/v1/voices', { headers: getAdminHeaders() })
+  // Load voices for chosen TTS engine (cascading engine -> voices)
+  useEffect(() => {
+    if (endpoint !== 'tts_stream') return;
+    const engineQuery = selectedModel ? `?engine=${encodeURIComponent(selectedModel)}` : '';
+    fetch(`/v1/voices${engineQuery}`, { headers: getAdminHeaders() })
       .then((r) => r.json())
       .then((data) => {
         const vList = (data.voices || []).map((v: any) => ({
@@ -57,24 +90,16 @@ export const DocsSnippets: React.FC = () => {
           name: v.name || v.voice_id || v.id,
         }));
         setVoices(vList);
-        if (vList.length > 0) setSelectedVoice(vList[0].id);
+        if (vList.length > 0) {
+          if (!vList.some((v: any) => v.id === selectedVoice)) {
+            setSelectedVoice(vList[0].id);
+          }
+        } else {
+          setSelectedVoice('');
+        }
       })
       .catch(() => {});
-  }, []);
-
-  // Update selected model when endpoint switches
-  useEffect(() => {
-    if (endpoint === 'llm_chat') {
-      const llm = models.find((m) => m.category === 'llm');
-      if (llm) setSelectedModel(llm.id);
-    } else if (endpoint === 'stt_batch' || endpoint === 'stt_stream') {
-      const stt = models.find((m) => m.category === 'stt');
-      if (stt) setSelectedModel(stt.id);
-    } else if (endpoint === 'tts_stream') {
-      const tts = models.find((m) => m.category === 'tts');
-      if (tts) setSelectedModel(tts.id);
-    }
-  }, [endpoint, models]);
+  }, [endpoint, selectedModel]);
 
   // Generate code snippet text
   const renderSnippet = (): string => {
@@ -333,8 +358,12 @@ ws.onmessage = (event) => {
             stream: false,
           }),
         });
-        const data = await res.json();
-        setTestOutput(JSON.stringify(data, null, 2));
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setTestOutput(`Error (HTTP ${res.status}): ${data.detail || data.error?.message || JSON.stringify(data)}`);
+        } else {
+          setTestOutput(JSON.stringify(data, null, 2));
+        }
       } else if (endpoint === 'tts_stream') {
         const res = await fetch(`/v1/text-to-speech/${selectedVoice}/stream`, {
           method: 'POST',
@@ -344,7 +373,11 @@ ws.onmessage = (event) => {
             model_id: selectedModel,
           }),
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+          setTestOutput(`Error (HTTP ${res.status}): ${errData.detail || JSON.stringify(errData)}`);
+          return;
+        }
         const buf = await res.arrayBuffer();
         setTestOutput(`Success! Received ${buf.byteLength} bytes of 24 kHz 16-bit PCM mono audio.`);
       } else if (endpoint === 'stt_batch') {
@@ -425,11 +458,15 @@ ws.onmessage = (event) => {
               onChange={(e) => setSelectedModel(e.target.value)}
               className="bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 outline-none font-mono"
             >
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name} ({m.category})
-                </option>
-              ))}
+              {models.length === 0 ? (
+                <option value="">No models available for this task</option>
+              ) : (
+                models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name} {m.kind ? `(${m.kind})` : ''}
+                  </option>
+                ))
+              )}
             </select>
           </div>
 

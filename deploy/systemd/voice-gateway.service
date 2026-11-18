@@ -1,0 +1,30 @@
+[Unit]
+Description=Voice AI Platform Gateway (FastAPI)
+After=network.target voice-localai.service voice-tts.service voice-stt.service
+Wants=voice-localai.service voice-tts.service voice-stt.service
+
+[Service]
+Type=simple
+User=voiceagent
+Group=voiceagent
+WorkingDirectory=/opt/voice-agent
+EnvironmentFile=/opt/voice-agent/.env
+# --workers 1 until tickets and rate limiters move to Redis. No --reload in production.
+ExecStart=/opt/voice-agent/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=always
+RestartSec=5
+
+# Sandboxing
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+# SQLite writes journal/WAL files next to the DB, so the DIRECTORY must be writable
+ReadWritePaths=/opt/voice-agent/data /opt/voice-agent/logs /opt/voice-agent/models
+
+[Install]
+WantedBy=multi-user.target

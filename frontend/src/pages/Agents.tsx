@@ -65,7 +65,7 @@ export const AgentsPage: React.FC = () => {
   // Installed models & voices
   const [installedModels, setInstalledModels] = useState<{
     llm: Array<{ id: string; name: string }>;
-    stt: Array<{ id: string; name: string; kind?: string; provider?: string }>;
+    stt: Array<{ id: string; name: string; kind?: string; provider?: string; available?: boolean; unavailable_reason?: string }>;
     tts: Array<{ id: string; name: string }>;
   }>({
     llm: [],
@@ -97,9 +97,51 @@ export const AgentsPage: React.FC = () => {
     }
   }, [chatMessages]);
 
+  const healAgentModels = (
+    agent: Agent,
+    currentInstalled: {
+      llm: Array<{ id: string; name: string }>;
+      stt: Array<{ id: string; name: string; kind?: string; available?: boolean }>;
+      tts: Array<{ id: string; name: string }>;
+    }
+  ): Agent => {
+    const clone = JSON.parse(JSON.stringify(agent));
+    if (currentInstalled.stt.length > 0) {
+      const isStreaming = clone.stt?.kind === 'streaming';
+      const availableModels = currentInstalled.stt.filter((m) =>
+        (isStreaming ? m.kind === 'streaming' : m.kind !== 'streaming') && m.available !== false
+      );
+      const isInstalled = availableModels.some((m) => m.id === clone.stt?.model);
+      if (!isInstalled && availableModels.length > 0) {
+        clone.stt.model = availableModels[0].id;
+      }
+      const batchModels = currentInstalled.stt.filter((m) => m.kind !== 'streaming' && m.available !== false);
+      if (isStreaming && clone.stt?.fallback_model) {
+        const isFbInstalled = batchModels.some((m) => m.id === clone.stt.fallback_model);
+        if (!isFbInstalled && batchModels.length > 0) {
+          clone.stt.fallback_model = batchModels[0].id;
+        }
+      }
+    }
+    if (currentInstalled.llm.length > 0 && clone.llm?.model) {
+      const isLlmInstalled = currentInstalled.llm.some((m) => m.id === clone.llm.model);
+      if (!isLlmInstalled) {
+        clone.llm.model = currentInstalled.llm[0].id;
+      }
+    }
+    if (currentInstalled.tts.length > 0 && clone.tts?.engine) {
+      const isTtsInstalled = currentInstalled.tts.some((m) => m.id === clone.tts.engine);
+      if (!isTtsInstalled) {
+        clone.tts.engine = currentInstalled.tts[0].id;
+      }
+    }
+    return clone;
+  };
+
   const fetchInitialData = async () => {
     try {
       setLoading(true);
+      let initialSelected: Agent | null = null;
       // Fetch agents
       const res = await fetch(`${API_BASE}/v1/agents`, { headers: AUTH_HEADERS });
       if (res.ok) {
@@ -114,9 +156,9 @@ export const AgentsPage: React.FC = () => {
           const actId = actData.active_agent_id || (list[0] ? list[0].id : '');
           setActiveAgentId(actId);
           const found = list.find((a) => a.id === actId) || list[0] || null;
-          setSelectedAgent(found ? JSON.parse(JSON.stringify(found)) : null);
+          initialSelected = found ? JSON.parse(JSON.stringify(found)) : null;
         } else if (list.length > 0) {
-          setSelectedAgent(JSON.parse(JSON.stringify(list[0])));
+          initialSelected = JSON.parse(JSON.stringify(list[0]));
         }
       }
 
@@ -126,11 +168,28 @@ export const AgentsPage: React.FC = () => {
         if (modRes.ok) {
           const modData = await modRes.json();
           const llms = Array.isArray(modData.llm) ? modData.llm.map((m: any) => ({ id: m.id, name: m.name || m.id, kind: m.kind, provider: m.provider })) : [];
-          const stts = Array.isArray(modData.stt) ? modData.stt.map((m: any) => ({ id: m.id, name: m.name || m.id, kind: m.kind, provider: m.provider })) : [];
+          const stts = Array.isArray(modData.stt)
+            ? modData.stt.map((m: any) => ({
+                id: m.id,
+                name: m.name || m.id,
+                kind: m.kind,
+                provider: m.provider,
+                available: m.available !== false,
+                unavailable_reason: m.unavailable_reason,
+              }))
+            : [];
           const ttss = Array.isArray(modData.tts) ? modData.tts.map((m: any) => ({ id: m.id, name: m.name || m.id, kind: m.kind, provider: m.provider })) : [];
-          setInstalledModels({ llm: llms, stt: stts, tts: ttss });
+          const installedObj = { llm: llms, stt: stts, tts: ttss };
+          setInstalledModels(installedObj);
+          if (initialSelected) {
+            setSelectedAgent(healAgentModels(initialSelected, installedObj));
+          }
+        } else if (initialSelected) {
+          setSelectedAgent(initialSelected);
         }
-      } catch {}
+      } catch {
+        if (initialSelected) setSelectedAgent(initialSelected);
+      }
 
       // Fetch voices
       try {
@@ -148,7 +207,7 @@ export const AgentsPage: React.FC = () => {
   };
 
   const handleSelectAgent = (agent: Agent) => {
-    setSelectedAgent(JSON.parse(JSON.stringify(agent)));
+    setSelectedAgent(healAgentModels(agent, installedModels));
     setChatMessages([]);
     setErrorMsg(null);
     setSuccessMsg(null);
@@ -256,6 +315,44 @@ export const AgentsPage: React.FC = () => {
       setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err: any) {
       setErrorMsg(err.message);
+    }
+  };
+
+  const handleToggleModelKind = async (modelId: string, currentKind?: string) => {
+    const newKind = currentKind === 'streaming' ? 'batch' : 'streaming';
+    try {
+      setInstalledModels((prev) => ({
+        ...prev,
+        stt: prev.stt.map((m) => (m.id === modelId ? { ...m, kind: newKind } : m)),
+      }));
+
+      const res = await fetch(`${API_BASE}/v1/models/${encodeURIComponent(modelId)}/classification`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
+        body: JSON.stringify({
+          task: 'stt',
+          kind: newKind,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to update classification on server');
+      }
+
+      if (selectedAgent && selectedAgent.stt.model === modelId) {
+        setSelectedAgent({
+          ...selectedAgent,
+          stt: {
+            ...selectedAgent.stt,
+            kind: newKind,
+          },
+        });
+      }
+      setSuccessMsg(`Model "${modelId}" reclassified as ${newKind.toUpperCase()}`);
+      setTimeout(() => setSuccessMsg(null), 3000);
+    } catch (e: any) {
+      setErrorMsg(e?.message || 'Failed to update model classification');
+      setTimeout(() => setErrorMsg(null), 4000);
     }
   };
 
@@ -661,7 +758,7 @@ export const AgentsPage: React.FC = () => {
                         type="button"
                         onClick={() => {
                           const batchModels = installedModels.stt.filter((m) => m.kind !== 'streaming');
-                          const firstBatch = batchModels[0]?.id || 'whisper-base';
+                          const firstBatch = batchModels[0]?.id || installedModels.stt[0]?.id || '';
                           setSelectedAgent({
                             ...selectedAgent,
                             stt: { ...selectedAgent.stt, kind: 'batch', model: firstBatch },
@@ -678,8 +775,10 @@ export const AgentsPage: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => {
-                          const streamModels = installedModels.stt.filter((m) => m.kind === 'streaming');
-                          const firstStream = streamModels[0]?.id || 'sherpa-onnx-streaming-zipformer-en-20M';
+                          const streamModels = installedModels.stt.filter((m) => m.kind === 'streaming' && m.available !== false);
+                          const firstStream = streamModels[0]?.id || installedModels.stt.find((m) => m.kind === 'streaming' && m.available !== false)?.id || '';
+                          const batchModels = installedModels.stt.filter((m) => m.kind !== 'streaming' && m.available !== false);
+                          const defaultFallback = batchModels[0]?.id || installedModels.stt.find((m) => m.available !== false)?.id || '';
                           const curRedemption = selectedAgent.vad?.redemption_ms ?? selectedAgent.vad?.min_silence_ms ?? 800;
                           const shouldAutoTuneVad = curRedemption >= 700;
                           setSelectedAgent({
@@ -688,7 +787,7 @@ export const AgentsPage: React.FC = () => {
                               ...selectedAgent.stt,
                               kind: 'streaming',
                               model: firstStream,
-                              fallback_model: selectedAgent.stt.fallback_model || 'whisper-base',
+                              fallback_model: selectedAgent.stt.fallback_model || defaultFallback,
                             },
                             vad: shouldAutoTuneVad
                               ? {
@@ -723,28 +822,71 @@ export const AgentsPage: React.FC = () => {
                     </label>
                     <select
                       value={selectedAgent.stt.model}
-                      onChange={(e) =>
-                        setSelectedAgent({
-                          ...selectedAgent,
-                          stt: { ...selectedAgent.stt, model: e.target.value },
-                        })
-                      }
+                      onChange={(e) => {
+                        const targetId = e.target.value;
+                        const targetModel = installedModels.stt.find((m) => m.id === targetId);
+                        if (targetModel && targetModel.kind && targetModel.kind !== selectedAgent.stt.kind) {
+                          setSelectedAgent({
+                            ...selectedAgent,
+                            stt: {
+                              ...selectedAgent.stt,
+                              model: targetId,
+                              kind: targetModel.kind as 'streaming' | 'batch',
+                            },
+                          });
+                        } else {
+                          setSelectedAgent({
+                            ...selectedAgent,
+                            stt: { ...selectedAgent.stt, model: targetId },
+                          });
+                        }
+                      }}
                       className="w-full bg-slate-950 border border-slate-800 rounded-md p-2 text-xs text-slate-200 focus:outline-none"
                     >
-                      {installedModels.stt
-                        .filter((m) => (selectedAgent.stt.kind === 'streaming' ? m.kind === 'streaming' : m.kind !== 'streaming'))
-                        .length === 0 ? (
-                        <option value="" disabled>No {selectedAgent.stt.kind || 'batch'} model installed</option>
+                      {installedModels.stt.length === 0 ? (
+                        <option value="" disabled>No STT model installed</option>
                       ) : (
-                        installedModels.stt
-                          .filter((m) => (selectedAgent.stt.kind === 'streaming' ? m.kind === 'streaming' : m.kind !== 'streaming'))
-                          .map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.name !== m.id ? `${m.name} (${m.id})` : m.id}
-                            </option>
-                          ))
+                        <>
+                          <optgroup label={selectedAgent.stt.kind === 'streaming' ? 'Streaming Models' : 'Batch Models'}>
+                            {installedModels.stt
+                              .filter((m) => (selectedAgent.stt.kind === 'streaming' ? m.kind === 'streaming' : m.kind !== 'streaming'))
+                              .map((m) => (
+                                <option key={m.id} value={m.id} disabled={m.available === false}>
+                                  {m.name !== m.id ? `${m.name} (${m.id})` : m.id}
+                                  {m.available === false ? ` [Unavailable: ${m.unavailable_reason || 'runtime missing'}]` : ''}
+                                </option>
+                              ))}
+                          </optgroup>
+                          {installedModels.stt.some((m) => (selectedAgent.stt.kind === 'streaming' ? m.kind !== 'streaming' : m.kind === 'streaming')) && (
+                            <optgroup label={selectedAgent.stt.kind === 'streaming' ? 'Switch to Batch Models' : 'Switch to Streaming Models'}>
+                              {installedModels.stt
+                                .filter((m) => (selectedAgent.stt.kind === 'streaming' ? m.kind !== 'streaming' : m.kind === 'streaming'))
+                                .map((m) => (
+                                  <option key={m.id} value={m.id} disabled={m.available === false}>
+                                    {m.name !== m.id ? `${m.name} (${m.id})` : m.id}
+                                    {m.available === false ? ` [Unavailable: ${m.unavailable_reason || 'runtime missing'}]` : ''}
+                                  </option>
+                                ))}
+                            </optgroup>
+                          )}
+                        </>
                       )}
                     </select>
+
+                    {selectedAgent.stt.model && (
+                      <div className="flex items-center justify-between mt-1.5 text-[11px] text-slate-400 bg-slate-950/70 border border-slate-800/80 rounded px-2.5 py-1.5">
+                        <span>
+                          Classification: <strong className="text-slate-200 font-mono uppercase">{selectedAgent.stt.kind || 'batch'}</strong>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleModelKind(selectedAgent.stt.model, selectedAgent.stt.kind)}
+                          className="text-sky-400 hover:text-sky-300 font-medium hover:underline text-[11px]"
+                        >
+                          Switch to {selectedAgent.stt.kind === 'streaming' ? 'Batch' : 'Streaming'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                   {selectedAgent.stt.kind === 'streaming' && (
                     <div>
@@ -752,7 +894,10 @@ export const AgentsPage: React.FC = () => {
                         Fallback Model (automatic failover if streaming unavailable)
                       </label>
                       <select
-                        value={selectedAgent.stt.fallback_model || 'whisper-base'}
+                        value={
+                          selectedAgent.stt.fallback_model ||
+                          (installedModels.stt.filter((m) => m.kind !== 'streaming' && m.available !== false)[0]?.id ?? '')
+                        }
                         onChange={(e) =>
                           setSelectedAgent({
                             ...selectedAgent,
@@ -762,7 +907,7 @@ export const AgentsPage: React.FC = () => {
                         className="w-full bg-slate-950 border border-slate-800 rounded-md p-2 text-xs text-slate-200 focus:outline-none"
                       >
                         {installedModels.stt
-                          .filter((m) => m.kind !== 'streaming')
+                          .filter((m) => m.kind !== 'streaming' && m.available !== false)
                           .map((m) => (
                             <option key={m.id} value={m.id}>
                               {m.name !== m.id ? `${m.name} (${m.id})` : m.id}

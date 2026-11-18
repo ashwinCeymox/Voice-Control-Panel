@@ -7,17 +7,16 @@ Handles:
 - Session management (8h idle, 7d absolute) in SQLite
 - Password change enforcement
 """
+
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, InvalidHashError, VerificationError
-from fastapi import Request
 
 from app.core.config import settings
-from app.core.errors import UnauthorizedError, ForbiddenError, BadRequestError
-from app.core.security import resolve_client_ip
+from app.core.errors import UnauthorizedError, BadRequestError
 from app.storage.database import get_db
 
 logger = logging.getLogger("voice_agent.admin_auth")
@@ -42,31 +41,23 @@ IDLE_SESSION_TIMEOUT_HOURS = 8
 ABSOLUTE_SESSION_TIMEOUT_DAYS = 7
 
 
-def resolve_client_ip(request: Request) -> str:
-    """Extract real client IP taking into account TRUSTED_PROXY_IPS."""
-    direct_peer = request.client.host if request.client else "127.0.0.1"
-    trusted_proxies = settings.trusted_proxies
-    if direct_peer in trusted_proxies:
-        forwarded_for = request.headers.get("x-forwarded-for")
-        if forwarded_for:
-            # Client IP is the first entry in X-Forwarded-For
-            return forwarded_for.split(",")[0].strip()
-    return direct_peer
-
-
 class AdminAuthService:
     @classmethod
     def _is_ip_throttled(cls, client_ip: str, now_ts: float) -> bool:
         failures = _IP_FAILURES.get(client_ip, [])
         # Retain failures within the 15-minute window
-        valid_failures = [t for t in failures if (now_ts - t) < IP_LOCKOUT_WINDOW_SECONDS]
+        valid_failures = [
+            t for t in failures if (now_ts - t) < IP_LOCKOUT_WINDOW_SECONDS
+        ]
         _IP_FAILURES[client_ip] = valid_failures
         return len(valid_failures) >= MAX_FAILED_ATTEMPTS
 
     @classmethod
     def _record_ip_failure(cls, client_ip: str, now_ts: float) -> None:
         failures = _IP_FAILURES.get(client_ip, [])
-        valid_failures = [t for t in failures if (now_ts - t) < IP_LOCKOUT_WINDOW_SECONDS]
+        valid_failures = [
+            t for t in failures if (now_ts - t) < IP_LOCKOUT_WINDOW_SECONDS
+        ]
         valid_failures.append(now_ts)
         _IP_FAILURES[client_ip] = valid_failures
 
@@ -84,7 +75,9 @@ class AdminAuthService:
             )
 
         async with get_db() as db:
-            async with db.execute("SELECT id, email FROM admin_user WHERE id = 1") as cursor:
+            async with db.execute(
+                "SELECT id, email FROM admin_user WHERE id = 1"
+            ) as cursor:
                 row = await cursor.fetchone()
                 if row:
                     logger.debug("Admin user already initialized (%s)", row["email"])
@@ -112,7 +105,9 @@ class AdminAuthService:
                 (settings.ADMIN_EMAIL, pass_hash, now_iso),
             )
             await db.commit()
-        logger.info("Admin user seeded successfully with email: %s", settings.ADMIN_EMAIL)
+        logger.info(
+            "Admin user seeded successfully with email: %s", settings.ADMIN_EMAIL
+        )
 
     @classmethod
     async def get_admin_user(cls) -> Optional[dict]:
@@ -157,7 +152,10 @@ class AdminAuthService:
                 locked_until = datetime.fromisoformat(locked_until_str)
                 if now < locked_until:
                     # Still locked
-                    logger.warning("Login attempt blocked: admin account locked until %s", locked_until_str)
+                    logger.warning(
+                        "Login attempt blocked: admin account locked until %s",
+                        locked_until_str,
+                    )
                     cls._record_ip_failure(client_ip, now_ts)
                     raise UnauthorizedError(generic_error)
             except (ValueError, TypeError):
@@ -180,7 +178,9 @@ class AdminAuthService:
             new_lockout = None
             if new_failed >= MAX_FAILED_ATTEMPTS:
                 new_lockout = (now + timedelta(minutes=15)).isoformat()
-                logger.warning("Admin account locked out after %d failed attempts", new_failed)
+                logger.warning(
+                    "Admin account locked out after %d failed attempts", new_failed
+                )
 
             async with get_db() as db:
                 await db.execute(
@@ -200,7 +200,9 @@ class AdminAuthService:
             # Create session
             session_id = secrets.token_urlsafe(32)
             created_at = now.isoformat()
-            expires_at = (now + timedelta(days=ABSOLUTE_SESSION_TIMEOUT_DAYS)).isoformat()
+            expires_at = (
+                now + timedelta(days=ABSOLUTE_SESSION_TIMEOUT_DAYS)
+            ).isoformat()
             last_seen_at = now.isoformat()
             await db.execute(
                 """
@@ -234,19 +236,25 @@ class AdminAuthService:
                     expires_at = datetime.fromisoformat(row["expires_at"])
                     last_seen_at = datetime.fromisoformat(row["last_seen_at"])
                 except Exception:
-                    await db.execute("DELETE FROM admin_session WHERE id = ?", (session_id,))
+                    await db.execute(
+                        "DELETE FROM admin_session WHERE id = ?", (session_id,)
+                    )
                     await db.commit()
                     return None
 
                 # 7 days absolute expiry
                 if now > expires_at:
-                    await db.execute("DELETE FROM admin_session WHERE id = ?", (session_id,))
+                    await db.execute(
+                        "DELETE FROM admin_session WHERE id = ?", (session_id,)
+                    )
                     await db.commit()
                     return None
 
                 # 8 hours idle timeout
                 if now > (last_seen_at + timedelta(hours=IDLE_SESSION_TIMEOUT_HOURS)):
-                    await db.execute("DELETE FROM admin_session WHERE id = ?", (session_id,))
+                    await db.execute(
+                        "DELETE FROM admin_session WHERE id = ?", (session_id,)
+                    )
                     await db.commit()
                     return None
 
@@ -279,7 +287,9 @@ class AdminAuthService:
             await db.commit()
 
     @classmethod
-    async def change_password(cls, old_password: str, new_password: str, user_agent: Optional[str] = None) -> str:
+    async def change_password(
+        cls, old_password: str, new_password: str, user_agent: Optional[str] = None
+    ) -> str:
         """Verify old password, enforce new password rules, invalidate other sessions, and return new session."""
         admin = await cls.get_admin_user()
         if not admin:
@@ -320,7 +330,9 @@ class AdminAuthService:
             # Issue fresh session
             new_session_id = secrets.token_urlsafe(32)
             created_at = now_iso
-            expires_at = (now + timedelta(days=ABSOLUTE_SESSION_TIMEOUT_DAYS)).isoformat()
+            expires_at = (
+                now + timedelta(days=ABSOLUTE_SESSION_TIMEOUT_DAYS)
+            ).isoformat()
             await db.execute(
                 """
                 INSERT INTO admin_session (id, created_at, expires_at, last_seen_at, user_agent)
@@ -330,5 +342,7 @@ class AdminAuthService:
             )
             await db.commit()
 
-        logger.info("Admin password changed successfully and all previous sessions invalidated.")
+        logger.info(
+            "Admin password changed successfully and all previous sessions invalidated."
+        )
         return new_session_id

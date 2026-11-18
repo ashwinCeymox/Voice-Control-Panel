@@ -1,7 +1,7 @@
 """Shared fixtures and setup for integration tests."""
+
 import asyncio
 import json
-from pathlib import Path
 from typing import Any, Callable, Dict
 import pytest
 from fastapi.testclient import TestClient
@@ -30,20 +30,24 @@ def test_client():
 @pytest.fixture
 def receive_event() -> Callable[[Any], Dict[str, Any]]:
     """Receive the next JSON text event, ignoring binary audio frames."""
+
     def _recv(ws) -> Dict[str, Any]:
         while True:
             msg = ws.receive()
             if "text" in msg:
                 return json.loads(msg["text"])
+
     return _recv
 
 
 @pytest.fixture
 def wait_for_event(receive_event) -> Callable[[Any, str], Dict[str, Any]]:
     """Wait and consume messages until an event of event_type is received."""
+
     def _wait(ws, event_type: str) -> Dict[str, Any]:
         while True:
             evt = receive_event(ws)
             if evt.get("type") == event_type:
                 return evt
+
     return _wait

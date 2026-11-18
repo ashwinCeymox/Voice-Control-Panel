@@ -1,6 +1,7 @@
 """
 Admin API router for API key management, permissions, usage reporting, settings, and audit logs.
 """
+
 import os
 from pathlib import Path
 import time
@@ -8,7 +9,6 @@ from typing import Any, Dict, List, Optional
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from app.core.config import settings
 from app.core.security import require_admin_key
 from app.services.key_manager import KeyManager, ApiKeyRecord
 from app.storage.database import get_db
@@ -19,11 +19,18 @@ router = APIRouter(prefix="/v1/admin", tags=["Admin Key Management"])
 class CreateKeyRequest(BaseModel):
     name: str = Field(..., description="Descriptive identifier for caller/application")
     role: str = Field("caller", pattern="^(caller|admin)$")
-    scopes: Optional[List[str]] = Field(None, description="Allowed scopes: llm, stt, tts, stt_stream, voice, voice_stream")
+    scopes: Optional[List[str]] = Field(
+        None,
+        description="Allowed scopes: llm, stt, tts, stt_stream, voice, voice_stream",
+    )
     rate_limit: int = Field(60, ge=1, le=10000)
     max_concurrent: int = Field(5, ge=1, le=100)
-    max_daily_tokens: Optional[int] = Field(None, ge=1, description="Daily token quota cap")
-    max_daily_audio_seconds: Optional[float] = Field(None, ge=1.0, description="Daily audio duration quota cap in seconds")
+    max_daily_tokens: Optional[int] = Field(
+        None, ge=1, description="Daily token quota cap"
+    )
+    max_daily_audio_seconds: Optional[float] = Field(
+        None, ge=1.0, description="Daily audio duration quota cap in seconds"
+    )
     expires_in_days: Optional[float] = None
     profile_id: Optional[str] = None
     model_allowlist: Optional[List[str]] = None
@@ -44,7 +51,9 @@ class PatchKeyRequest(BaseModel):
 
 
 class RotateKeyRequest(BaseModel):
-    grace_period_days: float = Field(1.0, ge=0.0, le=30.0, description="Days old key remains valid before expiring")
+    grace_period_days: float = Field(
+        1.0, ge=0.0, le=30.0, description="Days old key remains valid before expiring"
+    )
 
 
 class UpdateDashboardSettingsRequest(BaseModel):
@@ -83,7 +92,11 @@ async def create_key(
         action="key.create",
         target_type="key",
         target_id=result["id"],
-        details={"name": req.name, "prefix": result["prefix"], "profile_id": req.profile_id},
+        details={
+            "name": req.name,
+            "prefix": result["prefix"],
+            "profile_id": req.profile_id,
+        },
     )
     return result
 
@@ -147,13 +160,18 @@ async def rotate_key(
     admin: ApiKeyRecord = Depends(require_admin_key),
 ) -> Dict[str, Any]:
     """Rotate an API key: generates a new key with grace period for the old key."""
-    new_key = await KeyManager.rotate_key(key_id, grace_period_days=req.grace_period_days)
+    new_key = await KeyManager.rotate_key(
+        key_id, grace_period_days=req.grace_period_days
+    )
     await KeyManager.record_audit(
         admin_id=admin.id,
         action="key.rotate",
         target_type="key",
         target_id=key_id,
-        details={"new_key_id": new_key["id"], "grace_period_days": req.grace_period_days},
+        details={
+            "new_key_id": new_key["id"],
+            "grace_period_days": req.grace_period_days,
+        },
     )
     return new_key
 
@@ -284,12 +302,18 @@ async def list_database_backups(
         return []
 
     results = []
-    for item in sorted(backup_dir.glob("app-backup-*.db"), key=lambda p: p.stat().st_mtime, reverse=True):
+    for item in sorted(
+        backup_dir.glob("app-backup-*.db"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    ):
         st = item.stat()
-        results.append({
-            "filename": item.name,
-            "path": str(item.resolve()),
-            "size_bytes": st.st_size,
-            "created_at": st.st_mtime,
-        })
+        results.append(
+            {
+                "filename": item.name,
+                "path": str(item.resolve()),
+                "size_bytes": st.st_size,
+                "created_at": st.st_mtime,
+            }
+        )
     return results

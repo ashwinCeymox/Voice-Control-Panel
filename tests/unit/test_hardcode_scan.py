@@ -3,6 +3,7 @@
 Verifies that no static hardcoded placeholder model lists or fake fallback models
 remain in frontend selectors or backend installed models handlers.
 """
+
 import re
 from pathlib import Path
 

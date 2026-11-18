@@ -5,13 +5,13 @@
 **Platform:** Apple M2 (8.0 GB Unified Memory), macOS 26.6.2 (Darwin 24.6.0 arm64)  
 **Host State:** Swap used: ~8,300 MB, memory pressure moderate-high.  
 **Raw Timing Files:**
-- [`tests/fixtures/benchmarks/stt_raw.csv`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/tests/fixtures/benchmarks/stt_raw.csv) (30 raw request records)
-- [`tests/fixtures/benchmarks/stt_concurrency_raw.csv`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/tests/fixtures/benchmarks/stt_concurrency_raw.csv) (18 concurrent request records)
-- [`tests/fixtures/benchmarks/llm_raw.csv`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/tests/fixtures/benchmarks/llm_raw.csv) (10 raw streaming request records)
-- [`tests/fixtures/benchmarks/llm_concurrency_raw.csv`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/tests/fixtures/benchmarks/llm_concurrency_raw.csv) (18 concurrent request records)
-- [`tests/fixtures/benchmarks/tts_raw.csv`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/tests/fixtures/benchmarks/tts_raw.csv) (10 raw synthesis records)
-- [`tests/fixtures/benchmarks/tts_concurrency_raw.csv`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/tests/fixtures/benchmarks/tts_concurrency_raw.csv) (8 concurrent synthesis records)
-- [`tests/fixtures/benchmarks/c04_turn_breakdown.csv`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/tests/fixtures/benchmarks/c04_turn_breakdown.csv) (10 full-turn end-to-end breakdown records)
+- [`tests/fixtures/benchmarks/stt_raw.csv`](../tests/fixtures/benchmarks/stt_raw.csv) (30 raw request records)
+- [`tests/fixtures/benchmarks/stt_concurrency_raw.csv`](../tests/fixtures/benchmarks/stt_concurrency_raw.csv) (18 concurrent request records)
+- [`tests/fixtures/benchmarks/llm_raw.csv`](../tests/fixtures/benchmarks/llm_raw.csv) (10 raw streaming request records)
+- [`tests/fixtures/benchmarks/llm_concurrency_raw.csv`](../tests/fixtures/benchmarks/llm_concurrency_raw.csv) (18 concurrent request records)
+- [`tests/fixtures/benchmarks/tts_raw.csv`](../tests/fixtures/benchmarks/tts_raw.csv) (10 raw synthesis records)
+- [`tests/fixtures/benchmarks/tts_concurrency_raw.csv`](../tests/fixtures/benchmarks/tts_concurrency_raw.csv) (8 concurrent synthesis records)
+- [`tests/fixtures/benchmarks/c04_turn_breakdown.csv`](../tests/fixtures/benchmarks/c04_turn_breakdown.csv) (10 full-turn end-to-end breakdown records)
 
 ---
 

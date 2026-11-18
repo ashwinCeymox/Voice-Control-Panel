@@ -1,0 +1,35 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Explicit text files
+*.py text
+*.ts text
+*.tsx text
+*.js text
+*.json text
+*.md text
+*.sh text
+*.yaml text
+*.yml text
+*.css text
+*.html text
+*.sql text
+*.example text
+
+# Binary files
+*.wav binary
+*.pcm binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.wasm binary
+*.onnx binary
+*.gguf binary
+*.bin binary
+*.pt binary
+*.safetensors binary
+*.tar.gz binary
+*.zip binary
+*.db binary
+*.docx binary

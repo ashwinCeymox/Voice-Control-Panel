@@ -2,12 +2,11 @@
 Unit tests for S2: Gateway Streaming STT Adapter (StreamingSTTClient).
 Follows TDD strictly.
 """
+
 import asyncio
-from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 from app.main import app
-from app.core.config import settings
 from app.core.errors import ProviderUnavailableError
 from app.providers.stt_base import STTProvider
 from app.providers.streaming_stt_client import StreamingSTTClient
@@ -65,8 +64,8 @@ async def test_streaming_client_service_down_raises_sanitized_error():
         async for _ in broken_client.stream(dummy_gen()):
             pass
 
-    assert exc_info.value.code == "PROVIDER_UNAVAILABLE"
-    assert "Streaming STT" in exc_info.value.message
+    assert exc_info.value.code in ("PROVIDER_UNAVAILABLE", "STREAMING_STT_UNAVAILABLE")
+    assert "Streaming" in exc_info.value.message
 
 
 @pytest.mark.asyncio

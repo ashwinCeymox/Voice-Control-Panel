@@ -1,4 +1,5 @@
 """Schemas module export."""
+
 from app.schemas.audio import AudioFormat, InputAudioConfig, TranscriptResponse
 from app.schemas.chat import (
     ChatMessage,

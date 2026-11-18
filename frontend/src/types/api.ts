@@ -18,6 +18,10 @@ export interface TranscriptResponse {
   text: string;
   language?: string;
   duration?: number;
+  model?: string;
+  model_used?: string;
+  runtime?: string;
+  fallback?: boolean;
 }
 
 export interface ChatMessage {
@@ -232,6 +236,7 @@ export interface GalleryModel {
   description: string;
   provider: string;        // e.g. "localai" | "local-tts"
   category: 'llm' | 'stt' | 'tts';
+  kind?: 'batch' | 'streaming';
   size_mb: number;
   ram_required_mb: number;
   license: string;

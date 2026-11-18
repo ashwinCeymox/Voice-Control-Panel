@@ -260,9 +260,9 @@ Confidence:  high
 ID:          B-14
 Status:      ANSWERED
 Answer:      Hardcoded filesystem paths:
-             - `LOCALAI_MODELS_PATH`: `/Users/hashhwin047icloud.com/Downloads/test-pro/arch/LocalAI/models` (`app/core/config.py` line 14). Breaks in container unless overridden by environment variable.
+             - `LOCALAI_MODELS_PATH`: `/home/voiceagent/Downloads/test-pro/arch/LocalAI/models` (`app/core/config.py` line 14). Breaks in container unless overridden by environment variable.
              - `APP_DATABASE_PATH`: `voice_platform.db` (`app/core/config.py` line 10). Relative path; breaks if working directory shifts.
-             - `start.sh` fallback: `/Users/hashhwin047icloud.com/Downloads/test-pro/arch` (line 29). Breaks on any other machine.
+             - `start.sh` fallback: `/home/voiceagent/Downloads/test-pro/arch` (line 29). Breaks on any other machine.
              - `logs/` and `.pids/`: relative directories inside repository.
 Evidence:    `app/core/config.py` lines 10 & 14; `start.sh` lines 29, 41, 42.
 Confidence:  high
@@ -292,7 +292,7 @@ Answer:      Apple-only dependencies and Linux equivalents:
              1. `arch/LocalAI/local-ai`: Darwin arm64 Mach-O binary linked to Apple Metal. Linux equivalent: Official LocalAI Linux container (`localai/localai:latest` or `latest-gpu-nvidia-cuda-12`).
              2. `arch/local-tts`: MLX framework (`mlx`, `mlx-community/Kokoro-82M`). MLX is Apple Silicon exclusive. Linux equivalent: `kokoro-onnx` (ONNX Runtime CPU/CUDA) or PyTorch Kokoro (`pip install kokoro`).
              3. Silero VAD (frontend): `onnxruntime-web` wasm. Universal; runs platform-independent in any standard browser.
-Evidence:    `file /Users/hashhwin047icloud.com/Downloads/test-pro/arch/LocalAI/local-ai`; `pip show mlx` in `arch/local-tts/.venv`.
+Evidence:    `file /home/voiceagent/Downloads/test-pro/arch/LocalAI/local-ai`; `pip show mlx` in `arch/local-tts/.venv`.
 Confidence:  high
 ```
 
@@ -335,7 +335,7 @@ Status:      ANSWERED
 Answer:      Installed software versions:
              - LocalAI: `v4.12.1` (binary execution: `local-ai --version`).
              - local-tts: version `0.1.0` (`pip show local-tts`), Git commit `3602bfe` (`git rev-parse --short HEAD`).
-Evidence:    CLI command output from `/Users/hashhwin047icloud.com/Downloads/test-pro/arch/LocalAI/local-ai --version` and git log in `arch/local-tts`.
+Evidence:    CLI command output from `/home/voiceagent/Downloads/test-pro/arch/LocalAI/local-ai --version` and git log in `arch/local-tts`.
 Confidence:  high
 ```
 
@@ -713,7 +713,7 @@ Confidence:  high
 ID:          E-05
 Status:      ANSWERED
 Answer:      Required path configuration changes:
-             - In `app/core/config.py`: Change default `LOCALAI_MODELS_PATH` from hardcoded `/Users/hashhwin047icloud.com/...` to `/models` (configurable via env var).
+             - In `app/core/config.py`: Change default `LOCALAI_MODELS_PATH` from hardcoded `/home/voiceagent/...` to `/models` (configurable via env var).
              - Change default `APP_DATABASE_PATH` to `/data/voice_platform.db`.
              - Ensure logging outputs directly to container `stdout`/`stderr` rather than creating local `./logs/` directories.
 Evidence:    `app/core/config.py` lines 10 & 14.
@@ -796,7 +796,7 @@ Ordered by likelihood to break the service:
 2. **Missing SQLite WAL Mode (Database Locking Under Concurrency):**  
    `voice_platform.db` does not enable WAL mode (`PRAGMA journal_mode = WAL;`). Under multi-user cloud concurrency, concurrent session creation, turn persistence, and history writes will lock SQLite and raise `database is locked` 500 errors.
 3. **Hardcoded Machine Filesystem Paths:**  
-   `LOCALAI_MODELS_PATH` hardcodes `/Users/hashhwin047icloud.com/Downloads/test-pro/arch/LocalAI/models`, and `start.sh` hardcodes macOS directory layouts. Inside standard Linux Docker containers, the gateway will fail to locate models or start engines unless environment variables are supplied.
+   `LOCALAI_MODELS_PATH` hardcodes `/home/voiceagent/Downloads/test-pro/arch/LocalAI/models`, and `start.sh` hardcodes macOS directory layouts. Inside standard Linux Docker containers, the gateway will fail to locate models or start engines unless environment variables are supplied.
 4. **Unbounded Concurrency & Absence of Rate Limiting / Request Queue:**  
    `VoiceOrchestrator` has no global concurrency cap, no queue, and no rate limiting. A small spike in traffic (e.g., 10-15 simultaneous voice turns) will overwhelm STT and LLM inference engines, causing latency to degrade past 10 seconds or crashing inference backends with OOM.
 5. **In-Memory WebSocket Ticket Storage (Multi-Replica Incompatibility):**  

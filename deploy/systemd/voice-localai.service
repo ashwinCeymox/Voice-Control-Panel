@@ -1,0 +1,27 @@
+[Unit]
+Description=LocalAI Inference Engine (CUDA VRAM Direct)
+After=network.target
+
+[Service]
+Type=simple
+User=voiceagent
+Group=voiceagent
+WorkingDirectory=/opt/voice-agent
+EnvironmentFile=/opt/voice-agent/.env
+Environment=CUDA_VISIBLE_DEVICES=0
+ExecStart=/opt/voice-agent/bin/local-ai run --address 127.0.0.1:8080 --models-path /opt/voice-agent/models
+Restart=always
+RestartSec=5
+
+# Sandboxing
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/opt/voice-agent/models /opt/voice-agent/logs
+
+[Install]
+WantedBy=multi-user.target

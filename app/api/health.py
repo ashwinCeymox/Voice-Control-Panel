@@ -1,4 +1,5 @@
 """Health checks, provider status, and WebSocket ticket generation."""
+
 import httpx
 from fastapi import APIRouter, Depends
 from app.core.config import settings
@@ -50,17 +51,16 @@ async def health_ready():
         "providers": {
             "localai": {
                 "reachable": localai_ok,
-                "url": settings.LOCALAI_BASE_URL,
             },
             "localtts": {
                 "reachable": localtts_ok,
-                "url": settings.LOCAL_TTS_HTTP_BASE_URL,
             },
             "streaming_stt": {
                 "reachable": streaming_stt_ok,
                 "status": "ready" if streaming_stt_ok else "offline",
-                "url": settings.STREAMING_STT_URL,
-                "model": streaming_info.get("model", settings.STREAMING_STT_DEFAULT_MODEL),
+                "model": streaming_info.get(
+                    "model", settings.STREAMING_STT_DEFAULT_MODEL
+                ),
             },
         },
         "streaming_stt": {
@@ -76,13 +76,11 @@ async def get_providers(user: str = Depends(require_api_key)):
     return {
         "localai": {
             "configured": True,
-            "url": settings.LOCALAI_BASE_URL,
             "default_llm_model": settings.LOCALAI_LLM_MODEL,
             "default_stt_model": settings.LOCALAI_STT_MODEL,
         },
         "localtts": {
             "configured": True,
-            "url": settings.LOCAL_TTS_HTTP_BASE_URL,
             "default_model": settings.LOCAL_TTS_MODEL,
             "default_voice_id": settings.LOCAL_TTS_VOICE_ID,
         },

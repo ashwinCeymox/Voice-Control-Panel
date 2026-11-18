@@ -3,7 +3,7 @@ Unit tests for Task M2-METRICS: Prometheus /metrics endpoint.
 Tests metric collection, counter increments, gauge changes, latency histogram buckets,
 and standard Prometheus text rendering without external dependencies.
 """
-import pytest
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -33,8 +33,14 @@ def test_metrics_records_request_counter():
     metrics_collector.inc_request("/v1/chat/completions", 429)
 
     body = metrics_collector.render_prometheus()
-    assert 'voice_agent_requests_total{endpoint="/v1/chat/completions",status="200"}' in body
-    assert 'voice_agent_requests_total{endpoint="/v1/chat/completions",status="429"}' in body
+    assert (
+        'voice_agent_requests_total{endpoint="/v1/chat/completions",status="200"}'
+        in body
+    )
+    assert (
+        'voice_agent_requests_total{endpoint="/v1/chat/completions",status="429"}'
+        in body
+    )
 
 
 def test_metrics_active_streams_gauge():

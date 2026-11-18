@@ -1,4 +1,5 @@
 """SQLite async database connection and schema initialization using aiosqlite."""
+
 from contextlib import asynccontextmanager
 from pathlib import Path
 import aiosqlite
@@ -222,10 +223,12 @@ async def init_db():
         await db.execute("PRAGMA busy_timeout = 5000;")
         await db.execute("PRAGMA foreign_keys = ON;")
         await db.executescript(SCHEMA_SQL)
-        
+
         # Safe column migration on sessions
         try:
-            await db.execute("ALTER TABLE sessions ADD COLUMN is_ephemeral INTEGER DEFAULT 0")
+            await db.execute(
+                "ALTER TABLE sessions ADD COLUMN is_ephemeral INTEGER DEFAULT 0"
+            )
         except Exception:
             pass
 
@@ -287,6 +290,7 @@ async def init_db():
     # Seed initial super-admin account if admin_user is empty
     try:
         from app.services.admin_auth import AdminAuthService
+
         await AdminAuthService.seed_admin_user()
     except Exception as e:
         logger.debug("Admin seed in init_db: %s", e)

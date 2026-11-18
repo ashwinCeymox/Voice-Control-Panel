@@ -1,4 +1,5 @@
 """Sentence and phrase boundary chunker for low-latency streaming TTS."""
+
 import re
 from typing import AsyncGenerator, List, Optional
 from app.core.config import settings
@@ -6,8 +7,24 @@ from app.core.config import settings
 # Boundary delimiters: sentence-ending punctuation or pause clauses
 PUNCTUATION_SPLIT = re.compile(r"([.!?;:\n]+)")
 ABBREVIATIONS = {
-    "mr.", "ms.", "mrs.", "dr.", "prof.", "e.g.", "i.e.", "etc.", "vs.",
-    "jan.", "feb.", "mar.", "apr.", "aug.", "sept.", "oct.", "nov.", "dec."
+    "mr.",
+    "ms.",
+    "mrs.",
+    "dr.",
+    "prof.",
+    "e.g.",
+    "i.e.",
+    "etc.",
+    "vs.",
+    "jan.",
+    "feb.",
+    "mar.",
+    "apr.",
+    "aug.",
+    "sept.",
+    "oct.",
+    "nov.",
+    "dec.",
 }
 
 
@@ -53,8 +70,8 @@ class TextChunker:
                         self._buffer = self._buffer[space_idx:].lstrip()
                         chunks.append(chunk)
                     else:
-                        chunk = self._buffer[:self.max_chars].strip()
-                        self._buffer = self._buffer[self.max_chars:].lstrip()
+                        chunk = self._buffer[: self.max_chars].strip()
+                        self._buffer = self._buffer[self.max_chars :].lstrip()
                         chunks.append(chunk)
                 break
 
@@ -67,7 +84,9 @@ class TextChunker:
         return remainder if remainder else None
 
 
-async def chunk_stream(token_stream: AsyncGenerator[str, None]) -> AsyncGenerator[str, None]:
+async def chunk_stream(
+    token_stream: AsyncGenerator[str, None],
+) -> AsyncGenerator[str, None]:
     """Helper generator wrapping an async token stream into phrase chunks."""
     chunker = TextChunker()
     async for token in token_stream:

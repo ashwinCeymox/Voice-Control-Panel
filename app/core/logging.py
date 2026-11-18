@@ -1,4 +1,5 @@
 """Structured logging and secret redaction."""
+
 import logging
 import re
 import sys
@@ -6,8 +7,14 @@ import sys
 # Redact patterns like sk-..., Bearer ..., xi-api-key, tickets, secrets
 SENSITIVE_PATTERNS = [
     re.compile(r"(Bearer\s+)[a-zA-Z0-9_\-\.]{8,}", re.IGNORECASE),
-    re.compile(r"((?:xi-api-key|api[_-]?key|ticket|token|secret|password)\s*[:=]\s*)[a-zA-Z0-9_\-\.]{8,}", re.IGNORECASE),
-    re.compile(r'("?(?:ticket|api_key|apiKey|token|secret|password)"?\s*:\s*")[^"]+(")', re.IGNORECASE),
+    re.compile(
+        r"((?:xi-api-key|api[_-]?key|ticket|token|secret|password)\s*[:=]\s*)[a-zA-Z0-9_\-\.]{8,}",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r'("?(?:ticket|api_key|apiKey|token|secret|password)"?\s*:\s*")[^"]+(")',
+        re.IGNORECASE,
+    ),
 ]
 
 

@@ -1,6 +1,6 @@
 import httpx
 
-BASE_URL = "{{BASE_URL}}"   # for example http://192.168.1.20:8000
+BASE_URL = "{{BASE_URL}}"  # for example http://192.168.1.20:8000
 API_KEY = "{{API_KEY}}"
 headers = {"Authorization": f"Bearer {API_KEY}"}
 

@@ -2,6 +2,7 @@
 Zero-dependency Prometheus metrics collector.
 Tracks request counts, active streaming gauges, token/audio counters, and turn latency histograms.
 """
+
 from collections import defaultdict
 import threading
 from typing import Dict, Tuple
@@ -18,9 +19,18 @@ class MetricsCollector:
         self._active_streams: Dict[str, int] = defaultdict(int)
         self._tokens: Dict[str, float] = defaultdict(float)
         self._audio_seconds: Dict[str, float] = defaultdict(float)
+        self._stt_fallbacks: Dict[str, int] = defaultdict(int)
         self._turn_latency_buckets: Dict[float, int] = {b: 0 for b in LATENCY_BUCKETS}
         self._turn_latency_sum: float = 0.0
         self._turn_latency_count: int = 0
+
+    def inc_stt_fallback(self, reason: str = "general") -> None:
+        with self._lock:
+            self._stt_fallbacks[reason] += 1
+
+    def get_stt_fallbacks(self) -> Dict[str, int]:
+        with self._lock:
+            return dict(self._stt_fallbacks)
 
     def inc_request(self, endpoint: str, status: int) -> None:
         with self._lock:
@@ -56,25 +66,34 @@ class MetricsCollector:
         lines = []
 
         # 1. Requests Counter
-        lines.append("# HELP voice_agent_requests_total Total number of HTTP/WS requests processed.")
+        lines.append(
+            "# HELP voice_agent_requests_total Total number of HTTP/WS requests processed."
+        )
         lines.append("# TYPE voice_agent_requests_total counter")
         with self._lock:
             reqs = list(self._requests.items())
             streams = list(self._active_streams.items())
             tokens = list(self._tokens.items())
             audio = list(self._audio_seconds.items())
+            fallbacks = list(self._stt_fallbacks.items())
             hist_buckets = list(self._turn_latency_buckets.items())
             l_sum = self._turn_latency_sum
             l_count = self._turn_latency_count
 
         if reqs:
             for (ep, st), val in sorted(reqs):
-                lines.append(f'voice_agent_requests_total{{endpoint="{ep}",status="{st}"}} {val}')
+                lines.append(
+                    f'voice_agent_requests_total{{endpoint="{ep}",status="{st}"}} {val}'
+                )
         else:
-            lines.append('voice_agent_requests_total{endpoint="/v1/health",status="200"} 0')
+            lines.append(
+                'voice_agent_requests_total{endpoint="/v1/health",status="200"} 0'
+            )
 
         # 2. Active Streams Gauge
-        lines.append("# HELP voice_agent_active_streams Current number of active streaming connections.")
+        lines.append(
+            "# HELP voice_agent_active_streams Current number of active streaming connections."
+        )
         lines.append("# TYPE voice_agent_active_streams gauge")
         if streams:
             for s_type, val in sorted(streams):
@@ -93,20 +112,43 @@ class MetricsCollector:
             lines.append('voice_agent_tokens_total{endpoint="/v1/chat/completions"} 0')
 
         # 4. Audio Seconds Total Counter
-        lines.append("# HELP voice_agent_audio_seconds_total Total audio duration in seconds processed.")
+        lines.append(
+            "# HELP voice_agent_audio_seconds_total Total audio duration in seconds processed."
+        )
         lines.append("# TYPE voice_agent_audio_seconds_total counter")
         if audio:
             for ep, val in sorted(audio):
-                lines.append(f'voice_agent_audio_seconds_total{{endpoint="{ep}"}} {val:.2f}')
+                lines.append(
+                    f'voice_agent_audio_seconds_total{{endpoint="{ep}"}} {val:.2f}'
+                )
         else:
-            lines.append('voice_agent_audio_seconds_total{endpoint="/v1/audio/transcriptions"} 0.00')
+            lines.append(
+                'voice_agent_audio_seconds_total{endpoint="/v1/audio/transcriptions"} 0.00'
+            )
+
+        # 4b. STT Fallbacks Total Counter
+        lines.append(
+            "# HELP voice_agent_stt_fallbacks_total Total number of STT fallbacks triggered by reason."
+        )
+        lines.append("# TYPE voice_agent_stt_fallbacks_total counter")
+        if fallbacks:
+            for reason, val in sorted(fallbacks):
+                lines.append(
+                    f'voice_agent_stt_fallbacks_total{{reason="{reason}"}} {val}'
+                )
+        else:
+            lines.append('voice_agent_stt_fallbacks_total{reason="none"} 0')
 
         # 5. Turn Latency Histogram
-        lines.append("# HELP voice_agent_turn_latency_seconds Voice pipeline turn latency in seconds.")
+        lines.append(
+            "# HELP voice_agent_turn_latency_seconds Voice pipeline turn latency in seconds."
+        )
         lines.append("# TYPE voice_agent_turn_latency_seconds histogram")
         for b_val, b_cnt in hist_buckets:
             le_str = "+Inf" if b_val == float("inf") else str(b_val)
-            lines.append(f'voice_agent_turn_latency_seconds_bucket{{le="{le_str}"}} {b_cnt}')
+            lines.append(
+                f'voice_agent_turn_latency_seconds_bucket{{le="{le_str}"}} {b_cnt}'
+            )
         lines.append(f"voice_agent_turn_latency_seconds_sum {l_sum:.4f}")
         lines.append(f"voice_agent_turn_latency_seconds_count {l_count}")
 

@@ -68,10 +68,11 @@ export const VadTest: React.FC = () => {
 
       addEvent('speech_start', `Initializing Silero VAD (${modelType}) from /vad/...`);
 
+      const vadBase = `${import.meta.env.BASE_URL}vad/`.replace(/\/+/g, '/');
       const vad = await MicVAD.new({
         model: modelType,
-        baseAssetPath: '/vad/',
-        onnxWASMBasePath: '/vad/',
+        baseAssetPath: vadBase,
+        onnxWASMBasePath: vadBase,
         positiveSpeechThreshold: posThreshold,
         negativeSpeechThreshold: negThreshold,
         redemptionMs: redemptionMs,

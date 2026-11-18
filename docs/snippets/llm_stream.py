@@ -1,7 +1,7 @@
 import json
 import httpx
 
-BASE_URL = "{{BASE_URL}}"   # for example http://192.168.1.20:8000
+BASE_URL = "{{BASE_URL}}"  # for example http://192.168.1.20:8000
 API_KEY = "{{API_KEY}}"
 
 payload = {
@@ -11,8 +11,13 @@ payload = {
 }
 headers = {"Authorization": f"Bearer {API_KEY}"}
 
-with httpx.stream("POST", f"{BASE_URL}/v1/chat/completions",
-                  json=payload, headers=headers, timeout=120) as r:
+with httpx.stream(
+    "POST",
+    f"{BASE_URL}/v1/chat/completions",
+    json=payload,
+    headers=headers,
+    timeout=120,
+) as r:
     r.raise_for_status()
     for line in r.iter_lines():
         if line.startswith("data: ") and line != "data: [DONE]":

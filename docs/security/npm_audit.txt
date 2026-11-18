@@ -1,0 +1,5 @@
+# npm audit report
+Generated: 2026-11-18
+
+$ cd frontend && npm audit --omit=dev
+found 0 vulnerabilities

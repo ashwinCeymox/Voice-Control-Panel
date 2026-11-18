@@ -1,4 +1,5 @@
 """Integration and interruption/cancellation stress tests for real-time voice streaming."""
+
 import asyncio
 import json
 from unittest.mock import AsyncMock, patch
@@ -60,8 +61,19 @@ def test_turn_cancellation_mid_stream_during_llm(test_client, receive_event):
       b) Upstream generation tasks are cancelled without leaking background asyncio tasks.
       c) Submitting a subsequent turn on the same session functions cleanly without state corruption.
     """
+
     async def mock_llm_stream(messages, *args, **kwargs):
-        for token in ["Hello", " world,", " this", " is", " a", " lengthy", " story", " generating", " slowly..."]:
+        for token in [
+            "Hello",
+            " world,",
+            " this",
+            " is",
+            " a",
+            " lengthy",
+            " story",
+            " generating",
+            " slowly...",
+        ]:
             await asyncio.sleep(0.04)
             yield token
 
@@ -74,10 +86,13 @@ def test_turn_cancellation_mid_stream_during_llm(test_client, receive_event):
         return_value=TranscriptResponse(text="Tell me a long story", language="en")
     )
 
-    with patch.object(orchestrator.stt, "transcribe", mock_stt), \
-         patch.object(orchestrator.llm, "stream_tokens", side_effect=mock_llm_stream), \
-         patch.object(orchestrator.tts, "stream_synthesis_ws", side_effect=mock_tts_stream):
-
+    with (
+        patch.object(orchestrator.stt, "transcribe", mock_stt),
+        patch.object(orchestrator.llm, "stream_tokens", side_effect=mock_llm_stream),
+        patch.object(
+            orchestrator.tts, "stream_synthesis_ws", side_effect=mock_tts_stream
+        ),
+    ):
         ticket = create_websocket_ticket("developer")
         with test_client.websocket_connect(f"/v1/voice/stream?ticket={ticket}") as ws:
             init_event = receive_event(ws)
@@ -85,10 +100,16 @@ def test_turn_cancellation_mid_stream_during_llm(test_client, receive_event):
             session_id = init_event["session_id"]
 
             # 1. Turn 1: Send session.start and audio frames
-            ws.send_json({
-                "type": "session.start",
-                "input_audio": {"format": "pcm", "container": "wav", "sample_rate": 16000},
-            })
+            ws.send_json(
+                {
+                    "type": "session.start",
+                    "input_audio": {
+                        "format": "pcm",
+                        "container": "wav",
+                        "sample_rate": 16000,
+                    },
+                }
+            )
             ws.send_bytes(b"RIFF" + b"\x00" * 800)
             ws.send_json({"type": "audio.commit"})
 
@@ -122,7 +143,9 @@ def test_turn_cancellation_mid_stream_during_llm(test_client, receive_event):
             assert active_task_turn1.done()
 
             # 3. Subsequent Turn on the SAME session: verify clean execution without corruption
-            mock_stt.return_value = TranscriptResponse(text="What is the weather?", language="en")
+            mock_stt.return_value = TranscriptResponse(
+                text="What is the weather?", language="en"
+            )
             ws.send_bytes(b"RIFF" + b"\x01" * 800)
             ws.send_json({"type": "audio.commit"})
 
@@ -152,7 +175,9 @@ def test_turn_cancellation_mid_stream_during_llm(test_client, receive_event):
             messages = asyncio.run(SessionRepository.get_recent_messages(session_id))
             assert len(messages) >= 2
             # Last turn's assistant message was stored cleanly
-            assert any("weather" in m.content.lower() for m in messages if m.role == "user")
+            assert any(
+                "weather" in m.content.lower() for m in messages if m.role == "user"
+            )
             assert any(m.role == "assistant" for m in messages)
 
             ws.send_json({"type": "session.end"})
@@ -160,6 +185,7 @@ def test_turn_cancellation_mid_stream_during_llm(test_client, receive_event):
 
 def test_turn_cancellation_mid_stream_during_tts_playback(test_client, receive_event):
     """Test cancellation triggered during TTS audio chunk delivery."""
+
     async def mock_llm_stream(messages, *args, **kwargs):
         # Quick token delivery to start TTS synthesis immediately
         yield "The weather is lovely and sunny today. Enjoy your day outside!"
@@ -175,10 +201,13 @@ def test_turn_cancellation_mid_stream_during_tts_playback(test_client, receive_e
         return_value=TranscriptResponse(text="Current forecast", language="en")
     )
 
-    with patch.object(orchestrator.stt, "transcribe", mock_stt), \
-         patch.object(orchestrator.llm, "stream_tokens", side_effect=mock_llm_stream), \
-         patch.object(orchestrator.tts, "stream_synthesis_ws", side_effect=mock_tts_stream):
-
+    with (
+        patch.object(orchestrator.stt, "transcribe", mock_stt),
+        patch.object(orchestrator.llm, "stream_tokens", side_effect=mock_llm_stream),
+        patch.object(
+            orchestrator.tts, "stream_synthesis_ws", side_effect=mock_tts_stream
+        ),
+    ):
         ticket = create_websocket_ticket("developer")
         with test_client.websocket_connect(f"/v1/voice/stream?ticket={ticket}") as ws:
             init_event = receive_event(ws)
@@ -213,6 +242,7 @@ def test_turn_cancellation_mid_stream_during_tts_playback(test_client, receive_e
 
 def test_rapid_cancellation_stress(test_client, receive_event):
     """Stress test rapid interrupt/commit toggling (user mashing interrupt)."""
+
     async def slow_stt(*args, **kwargs):
         await asyncio.sleep(0.05)
         return TranscriptResponse(text="Interrupted utterance", language="en")

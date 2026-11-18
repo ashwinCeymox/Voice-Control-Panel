@@ -2,17 +2,13 @@
 Unit tests for S3: Protocol & Public Streaming STT Endpoint (WS /v1/audio/transcriptions/stream).
 Follows TDD strictly.
 """
-import asyncio
-import json
-import time
-from unittest.mock import AsyncMock, patch
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 from app.main import app
-from app.core.config import settings
 from app.core.security import create_websocket_ticket
-from app.storage.database import get_db
 
 
 @pytest.fixture
@@ -21,35 +17,40 @@ def sync_client():
 
 
 def test_ws_stream_missing_auth(sync_client):
-    """Connecting without ticket or auth header must receive error and be disconnected."""
-    with sync_client.websocket_connect("/v1/audio/transcriptions/stream") as ws:
-        msg = ws.receive_json()
-        assert msg["type"] == "error"
-        assert "unauthorized" in msg["message"].lower()
+    """Connecting without ticket or auth header must be rejected with 4401 before accept."""
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with sync_client.websocket_connect("/v1/audio/transcriptions/stream"):
+            pass
+    assert exc.value.code in (4401, 1008, 403)
 
 
 def test_ws_stream_invalid_scope(sync_client):
-    """Caller key without stt_stream scope must be rejected."""
-    # Create ticket for a user with only 'llm' scope or test with ticket
-    # Ticket for default user without stt_stream scope
+    """Caller key without stt_stream scope must be rejected with 4403."""
     ticket = create_websocket_ticket("unauthorized-user")
-    with sync_client.websocket_connect(f"/v1/audio/transcriptions/stream?ticket={ticket}") as ws:
-        msg = ws.receive_json()
-        assert msg["type"] == "error"
-        assert "scope" in msg["message"].lower() or "forbidden" in msg["message"].lower()
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with sync_client.websocket_connect(
+            f"/v1/audio/transcriptions/stream?ticket={ticket}"
+        ):
+            pass
+    assert exc.value.code in (4403, 1008, 403)
 
 
 def test_ws_stream_success_with_admin_ticket(sync_client):
     """Admin ticket or valid key streams audio and receives partial and final events."""
     ticket = create_websocket_ticket("admin")
 
-    with sync_client.websocket_connect(f"/v1/audio/transcriptions/stream?ticket={ticket}") as ws:
+    with sync_client.websocket_connect(
+        f"/v1/audio/transcriptions/stream?ticket={ticket}"
+    ) as ws:
         # Handshake
-        ws.send_json({
-            "type": "stream.start",
-            "sample_rate": 16000,
-            "format": "pcm_s16le",
-        })
+        ws.send_json(
+            {
+                "type": "stream.start",
+                "model": "sherpa-onnx-streaming-zipformer-en-20M",
+                "sample_rate": 16000,
+                "format": "pcm_s16le",
+            }
+        )
 
         # Send 2 binary audio frames (silence)
         dummy_frame = b"\x00\x00" * 1600  # 100ms at 16kHz
@@ -67,7 +68,10 @@ def test_ws_stream_success_with_admin_ticket(sync_client):
             if msg.get("type") in ("transcript.completed", "transcript.final", "error"):
                 break
 
-        assert "transcript.completed" in received_types or "transcript.final" in received_types
+        assert (
+            "transcript.completed" in received_types
+            or "transcript.final" in received_types
+        )
 
 
 @pytest.mark.asyncio

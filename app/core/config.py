@@ -1,4 +1,5 @@
 """Application configuration and settings."""
+
 import os
 from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -9,7 +10,9 @@ class Settings(BaseSettings):
     APP_HOST: str = "127.0.0.1"
     APP_PORT: int = 8000
     APP_DATABASE_PATH: str = os.environ.get("APP_DATABASE_PATH", "voice_platform.db")
-    MODELS_MANIFEST_PATH: str = os.environ.get("MODELS_MANIFEST_PATH", "data/installed_models_manifest.json")
+    MODELS_MANIFEST_PATH: str = os.environ.get(
+        "MODELS_MANIFEST_PATH", "data/installed_models_manifest.json"
+    )
 
     # LocalAI
     LOCALAI_BASE_URL: str = "http://127.0.0.1:8080"
@@ -32,8 +35,12 @@ class Settings(BaseSettings):
     LOCAL_TTS_SPEED: float = 1.0
 
     # Streaming STT (sherpa-onnx / Moonshine)
-    STREAMING_STT_URL: str = os.environ.get("STREAMING_STT_URL", "http://127.0.0.1:8088")
-    STREAMING_STT_WS_URL: str = os.environ.get("STREAMING_STT_WS_URL", "ws://127.0.0.1:8088/ws")
+    STREAMING_STT_URL: str = os.environ.get(
+        "STREAMING_STT_URL", "http://127.0.0.1:8088"
+    )
+    STREAMING_STT_WS_URL: str = os.environ.get(
+        "STREAMING_STT_WS_URL", "ws://127.0.0.1:8088/ws"
+    )
     STT_STREAM_ENABLED: bool = True
     STREAMING_STT_TIMEOUT_SECONDS: float = 15.0
     MAX_ACTIVE_STT_STREAMS: int = 5
@@ -46,12 +53,16 @@ class Settings(BaseSettings):
     # Security & Administration
     ENVIRONMENT: str = os.environ.get("ENVIRONMENT", "development")
     ADMIN_EMAIL: str = os.environ.get("ADMIN_EMAIL", "admin@voicepanel.io")
-    ADMIN_INITIAL_PASSWORD: Optional[str] = os.environ.get("ADMIN_INITIAL_PASSWORD", "adminVOICE3.md")
+    ADMIN_INITIAL_PASSWORD: Optional[str] = os.environ.get(
+        "ADMIN_INITIAL_PASSWORD", "adminVOICE3.md"
+    )
     GATEWAY_HOST: str = os.environ.get("GATEWAY_HOST", "127.0.0.1")
     GATEWAY_PORT: int = int(os.environ.get("GATEWAY_PORT", "8000"))
     COOKIE_SECURE: Optional[bool] = None
     TRUSTED_PROXY_IPS: str = os.environ.get("TRUSTED_PROXY_IPS", "")
-    ADMIN_API_KEY: Optional[str] = os.environ.get("ADMIN_API_KEY", "dev-voice-key-12345")
+    ADMIN_API_KEY: Optional[str] = os.environ.get(
+        "ADMIN_API_KEY", "dev-voice-key-12345"
+    )
     API_KEY_HASH_SECRET: str = "dev-secret-key-change-me-in-production-use-high-entropy"
     CORS_ALLOWED_ORIGINS: List[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     ENABLE_DOCS: bool = False
@@ -90,18 +101,28 @@ class Settings(BaseSettings):
             return []
         if isinstance(self.TRUSTED_PROXY_IPS, list):
             return self.TRUSTED_PROXY_IPS
-        return [ip.strip() for ip in str(self.TRUSTED_PROXY_IPS).split(",") if ip.strip()]
+        return [
+            ip.strip() for ip in str(self.TRUSTED_PROXY_IPS).split(",") if ip.strip()
+        ]
 
     @property
     def allowed_llm_models(self) -> List[str]:
         if self.LOCALAI_ALLOWED_LLM_MODELS:
-            return [m.strip() for m in self.LOCALAI_ALLOWED_LLM_MODELS.split(",") if m.strip()]
+            return [
+                m.strip()
+                for m in self.LOCALAI_ALLOWED_LLM_MODELS.split(",")
+                if m.strip()
+            ]
         return []
 
     @property
     def allowed_stt_models(self) -> List[str]:
         if self.LOCALAI_ALLOWED_STT_MODELS:
-            return [m.strip() for m in self.LOCALAI_ALLOWED_STT_MODELS.split(",") if m.strip()]
+            return [
+                m.strip()
+                for m in self.LOCALAI_ALLOWED_STT_MODELS.split(",")
+                if m.strip()
+            ]
         return []
 
 

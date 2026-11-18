@@ -1,0 +1,130 @@
+# Development cleanup policy
+# Configuration for local development machine
+
+[general]
+name = "development"
+min_age_hours = 2.0
+trash_retention_days = 7
+backup_retention_count = 3
+backup_retention_days = 14
+max_plan_files = 500
+max_plan_bytes = 2147483648  # 2 GB
+
+[roots]
+allowed = ["."]
+
+[protected]
+exact = [
+    "voice_platform.db",
+    "voice_platform.db-wal",
+    "voice_platform.db-shm",
+    "data/voice_platform.db",
+    "data/voice_platform.db-wal",
+    "data/voice_platform.db-shm",
+    "AGENTS.md",
+    "AGENT.md",
+    "pyproject.toml",
+    "package.json",
+    "uv.lock",
+    "cleanup.md"
+]
+prefixes = [
+    ".git/",
+    ".env",
+    "app/",
+    "frontend/src/",
+    "scripts/",
+    "services/",
+    "policies/",
+    "tests/fixtures/",
+    "docs/",
+    "models/streaming-stt/"
+]
+patterns = [
+    "*.pem",
+    "*.key",
+    "*.cert",
+    "*secret*",
+    "*credential*",
+    "tests/fixtures/**"
+]
+
+[rules.category_a]
+name = "Regenerable caches"
+action = "delete"
+patterns = [
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/*.pyo",
+    ".pytest_cache/**",
+    ".mypy_cache/**",
+    ".ruff_cache/**",
+    ".coverage",
+    "htmlcov/**",
+    "frontend/.vite/**",
+    "node_modules/.cache/**",
+    "cache/gallery/**"
+]
+
+[rules.category_b]
+name = "Agent and test scratch"
+action = "quarantine"
+min_age_hours = 2.0
+patterns = [
+    "tmp/agent/**",
+    "scratch/**",
+    "tests/output/**",
+    "benchmark/raw/**",
+    "nohup.out",
+    "*.tmp",
+    "*.bak",
+    "*.orig",
+    "*.rej",
+    "tts-test.py"
+]
+
+[rules.category_c]
+name = "Debug dumps and audio"
+action = "quarantine"
+min_age_hours = 2.0
+patterns = [
+    "data/debug/**",
+    "output.wav",
+    "*.pcm",
+    "data/tmp/**"
+]
+
+[rules.category_d]
+name = "Engine temp files and partial downloads"
+action = "quarantine"
+min_age_hours = 2.0
+patterns = [
+    "backends/*.partial",
+    "backends/*.tmp",
+    "backends/*.download",
+    "models/**/*.partial",
+    "models/**/*.tmp",
+    "models/**/*.download"
+]
+
+[rules.category_e]
+name = "Test databases and old backups"
+action = "quarantine"
+min_age_hours = 2.0
+patterns = [
+    "voice_agent.db",
+    "data/voice_agent.db",
+    "data/test-*.db",
+    "tmp/*.db",
+    "tests/tmp/*.db",
+    "data/backups/*.db"
+]
+
+[rules.category_f]
+name = "Rotated logs"
+action = "quarantine"
+min_age_hours = 336.0 # 14 days
+patterns = [
+    "logs/*.log.*",
+    "logs/*-*.log"
+]

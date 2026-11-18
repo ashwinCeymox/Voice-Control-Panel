@@ -1,4 +1,5 @@
 """WebSocket event schemas for client-server protocol (WS /v1/voice/stream)."""
+
 from typing import Optional, Literal, Dict, Any
 from pydantic import BaseModel, Field
 from app.schemas.audio import InputAudioConfig
@@ -7,6 +8,7 @@ from app.schemas.audio import InputAudioConfig
 # ============================================================================
 # Client -> Server Events
 # ============================================================================
+
 
 class SessionStartEvent(BaseModel):
     type: Literal["session.start"] = "session.start"
@@ -45,6 +47,7 @@ class SessionEndEvent(BaseModel):
 # ============================================================================
 # Server -> Client Events
 # ============================================================================
+
 
 class SessionCreatedEvent(BaseModel):
     type: Literal["session.created"] = "session.created"

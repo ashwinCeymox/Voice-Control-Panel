@@ -219,10 +219,11 @@ export class VadController {
   public async start(audioContext?: AudioContext, sourceNode?: MediaStreamAudioSourceNode | AudioNode): Promise<void> {
     if (this.config.engine === 'silero') {
       try {
+        const vadBase = `${import.meta.env.BASE_URL}vad/`.replace(/\/+/g, '/');
         const vad = await MicVAD.new({
           model: this.config.model,
-          baseAssetPath: '/vad/',
-          onnxWASMBasePath: '/vad/',
+          baseAssetPath: vadBase,
+          onnxWASMBasePath: vadBase,
           positiveSpeechThreshold: this.config.positiveSpeechThreshold,
           negativeSpeechThreshold: this.config.negativeSpeechThreshold,
           redemptionMs: this.config.redemptionMs,

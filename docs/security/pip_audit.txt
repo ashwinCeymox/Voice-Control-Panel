@@ -1,0 +1,5 @@
+# pip-audit report
+Generated: 2026-11-18
+
+$ .venv/bin/pip-audit
+No known vulnerabilities found

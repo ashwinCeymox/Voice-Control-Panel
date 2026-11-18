@@ -1,0 +1,27 @@
+[Unit]
+Description=Local TTS (Kokoro Engine)
+After=network.target
+
+[Service]
+Type=simple
+User=voiceagent
+Group=voiceagent
+WorkingDirectory=/opt/voice-agent
+EnvironmentFile=/opt/voice-agent/.env
+Environment=CUDA_VISIBLE_DEVICES=0
+ExecStart=/opt/voice-agent/local-tts/.venv/bin/local-tts server --host 127.0.0.1 --port 8880 --disable-qwen
+Restart=always
+RestartSec=5
+
+# Sandboxing
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/opt/voice-agent/logs
+
+[Install]
+WantedBy=multi-user.target

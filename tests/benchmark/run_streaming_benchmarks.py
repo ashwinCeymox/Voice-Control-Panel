@@ -4,16 +4,15 @@ Simulates real-time microphone/VAD streaming by dispatching WAV audio in 100ms P
 Measures Time to First Partial (TTFP), update interval, final delay after speech commit,
 confirmed prefix monotonicity (change rate), WER vs batch, and RTF across concurrency N=1, 3, 5.
 """
+
 import asyncio
 import csv
 import json
 import os
-import sys
 import time
 import wave
 from pathlib import Path
 from typing import Dict, List, Any
-import httpx
 import websockets
 
 AUDIO_DIR = Path("tests/fixtures/audio")
@@ -28,8 +27,6 @@ BENCHMARK_CLIPS = [
 def read_wav_pcm16(filepath: Path) -> tuple[bytes, int, float]:
     """Read WAV file and return (raw_pcm_bytes, sample_rate, duration_seconds)."""
     with wave.open(str(filepath), "rb") as wf:
-        n_channels = wf.getnchannels()
-        sampwidth = wf.getsampwidth()
         framerate = wf.getframerate()
         n_frames = wf.getnframes()
         raw_bytes = wf.readframes(n_frames)
@@ -70,11 +67,16 @@ async def stream_audio_clip(
     try:
         async with websockets.connect(ws_url) as ws:
             # 1. Send stream start handshake
-            await ws.send(json.dumps({
-                "type": "stream.start",
-                "sample_rate": sample_rate,
-                "format": "pcm_s16le",
-            }))
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "stream.start",
+                        "model": "sherpa-onnx-streaming-zipformer-en-20M",
+                        "sample_rate": sample_rate,
+                        "format": "pcm_s16le",
+                    }
+                )
+            )
 
             # Reader coroutine to consume partial and final events
             async def event_reader():
@@ -106,7 +108,9 @@ async def stream_audio_clip(
 
                     elif event_type in ("transcript.completed", "transcript.final"):
                         commit_time = timings.get("_commit_sent_time", recv_time)
-                        timings["final_delay_ms"] = round((recv_time - commit_time) * 1000.0, 2)
+                        timings["final_delay_ms"] = round(
+                            (recv_time - commit_time) * 1000.0, 2
+                        )
                         timings["final_transcript"] = data.get("text", "")
                         break
                     elif event_type == "error":
@@ -140,7 +144,9 @@ async def stream_audio_clip(
     timings.pop("_commit_sent_time", None)
 
     avg_interval = (
-        round(sum(timings["update_intervals_ms"]) / len(timings["update_intervals_ms"]), 2)
+        round(
+            sum(timings["update_intervals_ms"]) / len(timings["update_intervals_ms"]), 2
+        )
         if timings["update_intervals_ms"]
         else 0.0
     )
@@ -190,7 +196,9 @@ async def main():
 
         for N in [1, 3, 5]:
             print(f"Testing {clip_name} ({expected_dur}s) @ N={N} concurrency...")
-            batch_results = await run_concurrency_batch(ws_url, clip_path, concurrency=N)
+            batch_results = await run_concurrency_batch(
+                ws_url, clip_path, concurrency=N
+            )
 
             for res in batch_results:
                 row = {

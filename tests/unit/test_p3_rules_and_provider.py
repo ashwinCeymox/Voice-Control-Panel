@@ -2,6 +2,7 @@
 Unit tests for Phase P3: Request Model Rules (Allowlist) and STTProvider interface abstraction.
 Follows TDD strictly.
 """
+
 from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -9,7 +10,6 @@ from app.main import app
 from app.core.config import settings
 from app.providers.stt_base import STTProvider
 from app.providers.localai_stt import LocalAISTTClient
-from app.schemas.audio import TranscriptResponse
 
 
 def test_stt_provider_interface():
@@ -26,7 +26,11 @@ def test_stt_provider_interface():
 @pytest.mark.asyncio
 async def test_llm_model_allowlist_enforcement(monkeypatch):
     """Verify unallowed LLM models are rejected with HTTP 400."""
-    monkeypatch.setattr(settings, "LOCALAI_ALLOWED_LLM_MODELS", "llama-3.2-1b-instruct,llama-3.2-3b-instruct")
+    monkeypatch.setattr(
+        settings,
+        "LOCALAI_ALLOWED_LLM_MODELS",
+        "llama-3.2-1b-instruct,llama-3.2-3b-instruct",
+    )
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -46,7 +50,10 @@ async def test_llm_model_allowlist_enforcement(monkeypatch):
 
         # Request with allowed model
         from app.schemas.chat import ChatCompletionResponse
-        with patch("app.api.chat.llm_client.complete", new_callable=AsyncMock) as mock_complete:
+
+        with patch(
+            "app.api.chat.llm_client.complete", new_callable=AsyncMock
+        ) as mock_complete:
             mock_complete.return_value = ChatCompletionResponse(
                 id="test-chat",
                 created=12345,
@@ -67,7 +74,9 @@ async def test_llm_model_allowlist_enforcement(monkeypatch):
 @pytest.mark.asyncio
 async def test_stt_model_allowlist_enforcement(monkeypatch):
     """Verify unallowed STT models are rejected with HTTP 400."""
-    monkeypatch.setattr(settings, "LOCALAI_ALLOWED_STT_MODELS", "whisper-base,whisper-tiny")
+    monkeypatch.setattr(
+        settings, "LOCALAI_ALLOWED_STT_MODELS", "whisper-base,whisper-tiny"
+    )
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

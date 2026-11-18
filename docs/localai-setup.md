@@ -79,7 +79,7 @@ For an 8 GB Mac, 1B to 3B parameter models quantized to 4-bit (`Q4_K_M`) or 5-bi
 
 ## 4. Environment Variables & Configuration
 
-Add these settings to your backend `.env` file (see [.env.example](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/.env.example)):
+Add these settings to your backend `.env` file (see [.env.example](../.env.example)):
 
 ```env
 LOCALAI_BASE_URL=http://localhost:8080

@@ -1,10 +1,10 @@
 """Super admin authentication and session management router for the control panel."""
+
 import logging
-from typing import Optional
-from fastapi import APIRouter, Depends, Header, Request, Response, status
+from fastapi import APIRouter, Depends, Request, Response
 
 from app.core.config import settings
-from app.core.errors import UnauthorizedError, ForbiddenError, BadRequestError
+from app.core.errors import UnauthorizedError, ForbiddenError
 from app.core.security import resolve_client_ip
 from app.schemas.auth import (
     PanelLoginRequest,
@@ -41,6 +41,7 @@ async def get_current_panel_session(request: Request) -> dict:
     auth_header = request.headers.get("authorization")
     if auth_header:
         from app.core.security import get_authenticated_key
+
         try:
             record = await get_authenticated_key(request, authorization=auth_header)
             if record.role == "admin":
@@ -143,4 +144,6 @@ async def panel_change_password(
         path="/",
         max_age=7 * 86400,
     )
-    return PanelMessageResponse(message="Password changed successfully.", must_change_password=False)
+    return PanelMessageResponse(
+        message="Password changed successfully.", must_change_password=False
+    )

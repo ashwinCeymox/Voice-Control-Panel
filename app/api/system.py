@@ -1,9 +1,9 @@
 """Host system resources and memory fit scoring API."""
-import os
+
 import platform
 import subprocess
 import shutil
-from typing import Dict, Any
+from typing import Dict
 from fastapi import APIRouter, Depends
 from app.core.security import require_api_key
 
@@ -18,7 +18,9 @@ def get_mac_memory_info() -> Dict[str, float]:
 
     try:
         if platform.system() == "Darwin":
-            out = subprocess.check_output(["sysctl", "-n", "hw.memsize"]).decode().strip()
+            out = (
+                subprocess.check_output(["sysctl", "-n", "hw.memsize"]).decode().strip()
+            )
             total_mb = int(out) / (1024 * 1024)
 
             # Read vm_stat for free/inactive pages
@@ -59,10 +61,14 @@ def compute_fit_score(req_ram_mb: int, avail_ram_mb: float) -> int:
         score = 100 - (req_ram_mb / safe_budget_mb) * 15
     elif req_ram_mb <= safe_budget_mb * 0.85:
         # Moderate fit
-        score = 85 - ((req_ram_mb - safe_budget_mb * 0.55) / (safe_budget_mb * 0.30)) * 25
+        score = (
+            85 - ((req_ram_mb - safe_budget_mb * 0.55) / (safe_budget_mb * 0.30)) * 25
+        )
     elif req_ram_mb <= safe_budget_mb:
         # Tight fit
-        score = 60 - ((req_ram_mb - safe_budget_mb * 0.85) / (safe_budget_mb * 0.15)) * 30
+        score = (
+            60 - ((req_ram_mb - safe_budget_mb * 0.85) / (safe_budget_mb * 0.15)) * 30
+        )
     else:
         # Exceeds budget (risk of paging)
         overflow = req_ram_mb - safe_budget_mb

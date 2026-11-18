@@ -1,0 +1,120 @@
+{
+    # Slowloris protection
+    servers {
+        timeouts {
+            read_header 10s
+            idle 2m
+        }
+    }
+}
+
+# Any other hostname / raw IP hitting :80 gets nothing
+:80 {
+    respond 404
+}
+
+# Domain configuration (replace xyz.sdjfj.app with your actual domain)
+xyz.sdjfj.app {
+    encode zstd gzip
+
+    # ---------- Security headers (all responses) ----------
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        # The voice app needs the microphone; nothing else
+        Permissions-Policy "microphone=(self), camera=(), geolocation=(), payment=()"
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss://xyz.sdjfj.app; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        -Server
+    }
+
+    # ---------- Logging (keys in ?api_key= are scrubbed) ----------
+    log {
+        output file /var/log/caddy/xyz.access.log {
+            roll_size 50MiB
+            roll_keep 10
+        }
+        format filter {
+            wrap json
+            request>headers>Authorization delete
+            request>headers>Xi-Api-Key delete
+            request>headers>Cookie delete
+            request>uri query {
+                delete api_key
+            }
+        }
+    }
+
+    # ---------- Hard blocks ----------
+    @blocked path /metrics /metrics/* /docs /docs/* /redoc /redoc/* /openapi.json
+    handle @blocked {
+        respond 404
+    }
+
+    # WebSockets: browsers must come from OUR origin (stops cross-site WS hijacking).
+    # Non-browser clients (coworkers' scripts) send no Origin header and pass.
+    @badorigin {
+        path /v1/voice/stream /v1/audio/transcriptions/stream
+        header Origin *
+        not header Origin https://xyz.sdjfj.app
+    }
+    handle @badorigin {
+        respond 403
+    }
+
+    # ---------- Admin API: restrict by source IP (Optional / Recommended) ----------
+    # Uncomment and set your static IP / VPN exit IP. Keep Cloudflare "proxied" OFF
+    # (DNS-only), or remote_ip will be Cloudflare's, not yours.
+    #
+    # @admin_untrusted {
+    #     path /v1/admin/* /v1/agents /v1/agents/* /v1/models/install /v1/models/install/*
+    #     not remote_ip YOUR.STATIC.IP.HERE 2001:db8::/48
+    # }
+    # handle @admin_untrusted {
+    #     respond 403
+    # }
+
+    # ---------- API (REST + WebSocket) ----------
+    handle /v1/* {
+        request_body {
+            max_size 25MB            # app limit is 20 MB audio
+        }
+        reverse_proxy 127.0.0.1:8000 {
+            header_up X-Forwarded-For {remote_host}   # overwrite, never append client-supplied values
+            header_up X-Real-IP {remote_host}
+            header_up -X-Forwarded-Host
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 300s
+            }
+        }
+    }
+
+    handle /health/* {
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    # ---------- Control panel (subpath /voicecontrolpanel/) ----------
+    redir /voicecontrolpanel /voicecontrolpanel/ 308
+
+    handle_path /voicecontrolpanel/* {
+        basic_auth {
+            # username  bcrypt-hash-from-`caddy hash-password`
+            admin $2a$14$REPLACE_WITH_YOUR_HASH
+        }
+        root * /opt/voice-agent/frontend
+
+        @assets path /assets/*
+        header @assets Cache-Control "public, max-age=31536000, immutable"
+        header /index.html Cache-Control "no-store"
+
+        try_files {path} /index.html
+        file_server
+    }
+
+    # ---------- Everything else ----------
+    handle {
+        respond 404
+    }
+}

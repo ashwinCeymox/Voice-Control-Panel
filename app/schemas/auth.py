@@ -1,4 +1,5 @@
 """Pydantic schemas for super admin panel authentication."""
+
 from pydantic import BaseModel, Field
 
 

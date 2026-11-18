@@ -2,6 +2,7 @@
 Server-side Voice Activity Detection using Silero VAD v5 via sherpa-onnx.
 Enables headless audio streaming (e.g. telephony, SIP gateways) without client-side VAD.
 """
+
 from dataclasses import dataclass
 import io
 import logging
@@ -29,7 +30,9 @@ class SpeechEnd:
     sample_count: int
 
 
-def pcm_to_wav(pcm_bytes: bytes, sample_rate: int = 16000, num_channels: int = 1) -> bytes:
+def pcm_to_wav(
+    pcm_bytes: bytes, sample_rate: int = 16000, num_channels: int = 1
+) -> bytes:
     """Pack raw 16-bit mono PCM into standard RIFF WAV container."""
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
@@ -53,14 +56,18 @@ class ServerVAD:
         window_size: int = 512,
         num_threads: int = 1,
     ):
-        resolved_path = model_path or os.getenv("SERVER_VAD_MODEL_PATH", DEFAULT_SILERO_PATH)
+        resolved_path = model_path or os.getenv(
+            "SERVER_VAD_MODEL_PATH", DEFAULT_SILERO_PATH
+        )
         if not Path(resolved_path).is_file():
             # Try workspace root relative
             alt_path = Path(__file__).resolve().parent.parent.parent / resolved_path
             if alt_path.is_file():
                 resolved_path = str(alt_path)
             else:
-                raise FileNotFoundError(f"Silero VAD ONNX model not found at '{resolved_path}'")
+                raise FileNotFoundError(
+                    f"Silero VAD ONNX model not found at '{resolved_path}'"
+                )
 
         self.sample_rate = sample_rate
         self.window_size = window_size
@@ -82,8 +89,15 @@ class ServerVAD:
             num_threads=num_threads,
             provider="cpu",
         )
-        self._vad = sherpa_onnx.VoiceActivityDetector(config=vad_cfg, buffer_size_in_seconds=60)
-        logger.debug("ServerVAD initialized with model: %s (sr=%d, th=%.2f)", resolved_path, sample_rate, threshold)
+        self._vad = sherpa_onnx.VoiceActivityDetector(
+            config=vad_cfg, buffer_size_in_seconds=60
+        )
+        logger.debug(
+            "ServerVAD initialized with model: %s (sr=%d, th=%.2f)",
+            resolved_path,
+            sample_rate,
+            threshold,
+        )
 
     def is_speech_detected(self) -> bool:
         """Check if speech is currently active."""
@@ -101,7 +115,9 @@ class ServerVAD:
             chunk_bytes = self._buffer[: self._window_bytes]
             del self._buffer[: self._window_bytes]
 
-            samples = np.frombuffer(chunk_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+            samples = (
+                np.frombuffer(chunk_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+            )
             self._vad.accept_waveform(samples)
 
             if self._vad.is_speech_detected():
@@ -112,7 +128,11 @@ class ServerVAD:
             if not self._vad.empty():
                 seg = self._vad.front
                 seg_samples = np.array(seg.samples, dtype=np.float32)
-                pcm_out = (np.clip(seg_samples, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+                pcm_out = (
+                    (np.clip(seg_samples, -1.0, 1.0) * 32767.0)
+                    .astype(np.int16)
+                    .tobytes()
+                )
                 dur = len(seg.samples) / self.sample_rate
                 events.append(
                     SpeechEnd(
@@ -132,7 +152,9 @@ class ServerVAD:
             pad_needed = self._window_bytes - len(self._buffer)
             if pad_needed > 0:
                 self._buffer.extend(b"\x00" * pad_needed)
-            samples = np.frombuffer(self._buffer, dtype=np.int16).astype(np.float32) / 32768.0
+            samples = (
+                np.frombuffer(self._buffer, dtype=np.int16).astype(np.float32) / 32768.0
+            )
             self._vad.accept_waveform(samples)
             self._buffer.clear()
 
@@ -140,7 +162,9 @@ class ServerVAD:
         if not self._vad.empty():
             seg = self._vad.front
             seg_samples = np.array(seg.samples, dtype=np.float32)
-            pcm_out = (np.clip(seg_samples, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+            pcm_out = (
+                (np.clip(seg_samples, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+            )
             dur = len(seg.samples) / self.sample_rate
             ended = SpeechEnd(
                 pcm_bytes=pcm_out,

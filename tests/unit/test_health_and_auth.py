@@ -1,7 +1,8 @@
 """Unit tests for health endpoints and authentication security."""
+
 import pytest
 from httpx import ASGITransport, AsyncClient
-from app.core.security import hash_api_key, validate_and_consume_ticket
+from app.core.security import validate_and_consume_ticket
 from app.main import app
 
 

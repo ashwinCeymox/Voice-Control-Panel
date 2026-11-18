@@ -5,6 +5,7 @@ Tests:
 2. Secret redaction in logging formatter (Bearer, xi-api-key, ticket, passwords).
 3. Concurrency safety and memory exception boundaries in AgentManager.load_agent.
 """
+
 import asyncio
 import logging
 import pytest
@@ -22,22 +23,26 @@ AUTH_HEADERS = {"Authorization": "Bearer dev-voice-key-12345"}
 # 1. Path Traversal & Model ID Validation
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("invalid_id", [
-    "../etc/passwd",
-    "..\\windows\\system32",
-    "/root/.ssh/id_rsa",
-    "model/subpath",
-    "model\\subpath",
-    ".hidden_file",
-    "..",
-    ".",
-    "",
-    "   ",
-    "a" * 150,  # exceeds 128 chars
-    "model;rm -rf /",
-    "model&calc.exe",
-])
+@pytest.mark.parametrize(
+    "invalid_id",
+    [
+        "../etc/passwd",
+        "..\\windows\\system32",
+        "/root/.ssh/id_rsa",
+        "model/subpath",
+        "model\\subpath",
+        ".hidden_file",
+        "..",
+        ".",
+        "",
+        "   ",
+        "a" * 150,  # exceeds 128 chars
+        "model;rm -rf /",
+        "model&calc.exe",
+    ],
+)
 async def test_gallery_install_rejects_path_traversal_and_malformed_ids(invalid_id):
     """POST /v1/models/install must reject path traversal and invalid IDs with 400."""
     transport = ASGITransport(app=app)
@@ -47,7 +52,9 @@ async def test_gallery_install_rejects_path_traversal_and_malformed_ids(invalid_
             headers=AUTH_HEADERS,
             json={"model_id": invalid_id},
         )
-        assert r.status_code == 400, f"Expected 400 for '{invalid_id}', got {r.status_code}: {r.text}"
+        assert r.status_code == 400, (
+            f"Expected 400 for '{invalid_id}', got {r.status_code}: {r.text}"
+        )
 
 
 @pytest.mark.asyncio
@@ -64,14 +71,17 @@ async def test_gallery_install_rejects_non_string_model_id():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("invalid_id", [
-    "%2e%2e",
-    ".hidden",
-    "-flag",
-    "invalid;cmd",
-    "model*wildcard",
-    "a" * 150,
-])
+@pytest.mark.parametrize(
+    "invalid_id",
+    [
+        "%2e%2e",
+        ".hidden",
+        "-flag",
+        "invalid;cmd",
+        "model*wildcard",
+        "a" * 150,
+    ],
+)
 async def test_gallery_uninstall_rejects_path_traversal(invalid_id):
     """DELETE /v1/models/{id} must reject path traversal and invalid IDs with 400."""
     transport = ASGITransport(app=app)
@@ -87,9 +97,18 @@ async def test_gallery_uninstall_rejects_path_traversal(invalid_id):
 # 2. Secret Redaction in Logging
 # ---------------------------------------------------------------------------
 
+
 def test_redacting_formatter_redacts_bearer_tokens():
     formatter = RedactingFormatter(fmt="%(message)s")
-    record = logging.LogRecord("test", logging.INFO, "", 0, "User logged in with Bearer va-secret-token-12345", (), None)
+    record = logging.LogRecord(
+        "test",
+        logging.INFO,
+        "",
+        0,
+        "User logged in with Bearer va-secret-token-12345",
+        (),
+        None,
+    )
     output = formatter.format(record)
     assert "va-secret-token-12345" not in output
     assert "Bearer [REDACTED]" in output
@@ -97,7 +116,15 @@ def test_redacting_formatter_redacts_bearer_tokens():
 
 def test_redacting_formatter_redacts_xi_api_key():
     formatter = RedactingFormatter(fmt="%(message)s")
-    record = logging.LogRecord("test", logging.INFO, "", 0, "Request header xi-api-key: secret-key-value-999", (), None)
+    record = logging.LogRecord(
+        "test",
+        logging.INFO,
+        "",
+        0,
+        "Request header xi-api-key: secret-key-value-999",
+        (),
+        None,
+    )
     output = formatter.format(record)
     assert "secret-key-value-999" not in output
     assert "[REDACTED]" in output
@@ -106,13 +133,29 @@ def test_redacting_formatter_redacts_xi_api_key():
 def test_redacting_formatter_redacts_ticket_in_urls_and_json():
     formatter = RedactingFormatter(fmt="%(message)s")
     # Query parameter format
-    rec1 = logging.LogRecord("test", logging.INFO, "", 0, "Connecting to /v1/voice/stream?ticket=my_secret_ticket_12345", (), None)
+    rec1 = logging.LogRecord(
+        "test",
+        logging.INFO,
+        "",
+        0,
+        "Connecting to /v1/voice/stream?ticket=my_secret_ticket_12345",
+        (),
+        None,
+    )
     out1 = formatter.format(rec1)
     assert "my_secret_ticket_12345" not in out1
     assert "ticket=[REDACTED]" in out1
 
     # JSON format
-    rec2 = logging.LogRecord("test", logging.INFO, "", 0, 'Response: {"ticket": "secret_ticket_abc_987"}', (), None)
+    rec2 = logging.LogRecord(
+        "test",
+        logging.INFO,
+        "",
+        0,
+        'Response: {"ticket": "secret_ticket_abc_987"}',
+        (),
+        None,
+    )
     out2 = formatter.format(rec2)
     assert "secret_ticket_abc_987" not in out2
     assert '"ticket": "[REDACTED]"' in out2
@@ -120,7 +163,15 @@ def test_redacting_formatter_redacts_ticket_in_urls_and_json():
 
 def test_redacting_formatter_redacts_api_key_and_passwords():
     formatter = RedactingFormatter(fmt="%(message)s")
-    rec = logging.LogRecord("test", logging.INFO, "", 0, 'Config: api_key=super_secret_key_123 password=my_password_xyz', (), None)
+    rec = logging.LogRecord(
+        "test",
+        logging.INFO,
+        "",
+        0,
+        "Config: api_key=super_secret_key_123 password=my_password_xyz",
+        (),
+        None,
+    )
     out = formatter.format(rec)
     assert "super_secret_key_123" not in out
     assert "my_password_xyz" not in out
@@ -130,26 +181,31 @@ def test_redacting_formatter_redacts_api_key_and_passwords():
 # 3. Agent Load Concurrency & Memory Safety
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_concurrent_agent_load_does_not_corrupt_state():
     """Concurrent load_agent calls must serialize cleanly via _LOAD_LOCK."""
     await AgentManager.ensure_default_agent()
 
     # Create two temporary agents
-    agent1 = await AgentManager.create_agent({
-        "name": "Concurrency Test 1",
-        "system_prompt": "Prompt 1",
-        "llm": {"model": "phi-2", "temperature": 0.7, "max_tokens": 512},
-        "stt": {"model": "whisper-1", "language": "auto"},
-        "tts": {"engine": "kokoro", "voice_id": "af_heart", "speed": 1.0},
-    })
-    agent2 = await AgentManager.create_agent({
-        "name": "Concurrency Test 2",
-        "system_prompt": "Prompt 2",
-        "llm": {"model": "phi-2", "temperature": 0.7, "max_tokens": 512},
-        "stt": {"model": "whisper-1", "language": "auto"},
-        "tts": {"engine": "kokoro", "voice_id": "af_heart", "speed": 1.0},
-    })
+    agent1 = await AgentManager.create_agent(
+        {
+            "name": "Concurrency Test 1",
+            "system_prompt": "Prompt 1",
+            "llm": {"model": "phi-2", "temperature": 0.7, "max_tokens": 512},
+            "stt": {"model": "whisper-1", "language": "auto"},
+            "tts": {"engine": "kokoro", "voice_id": "af_heart", "speed": 1.0},
+        }
+    )
+    agent2 = await AgentManager.create_agent(
+        {
+            "name": "Concurrency Test 2",
+            "system_prompt": "Prompt 2",
+            "llm": {"model": "phi-2", "temperature": 0.7, "max_tokens": 512},
+            "stt": {"model": "whisper-1", "language": "auto"},
+            "tts": {"engine": "kokoro", "voice_id": "af_heart", "speed": 1.0},
+        }
+    )
 
     try:
         # Load both concurrently

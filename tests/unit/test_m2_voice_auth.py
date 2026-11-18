@@ -3,6 +3,7 @@ Unit tests for Task M2-VOICE-AUTH: Direct API key auth on WS /v1/voice/stream.
 Verifies ticket auth, Bearer auth, xi-api-key auth, query param auth, scope checks,
 rejections (4401/4403), and usage tracking.
 """
+
 import asyncio
 import pytest
 import pytest_asyncio
@@ -172,4 +173,3 @@ async def test_ws_voice_usage_logged_for_api_key():
     matching = [entry for entry in summary if entry["key_id"] == key_info["id"]]
     assert len(matching) >= 1
     assert matching[0]["endpoint"] == "/v1/voice/stream"
-

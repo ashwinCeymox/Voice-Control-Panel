@@ -20,8 +20,8 @@
 
 ## 2. Empirical Benchmark Measurements (Apple M2 & Linux CPU Profile)
 
-All measurements conducted using the real-time 100ms PCM chunk replay harness ([`tests/benchmark/run_streaming_benchmarks.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/tests/benchmark/run_streaming_benchmarks.py)).  
-Raw per-request data saved in [`tests/fixtures/benchmarks/streaming_stt_raw.csv`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/tests/fixtures/benchmarks/streaming_stt_raw.csv).
+All measurements conducted using the real-time 100ms PCM chunk replay harness ([`tests/benchmark/run_streaming_benchmarks.py`](../../tests/benchmark/run_streaming_benchmarks.py)).  
+Raw per-request data saved in [`tests/fixtures/benchmarks/streaming_stt_raw.csv`](../../tests/fixtures/benchmarks/streaming_stt_raw.csv).
 
 | Metric | Plan Target | Measured at N=1 | Measured at N=3 | Measured at N=5 (Peak Load) | Target Met? |
 |---|---|---|---|---|:---:|
@@ -51,5 +51,5 @@ Raw per-request data saved in [`tests/fixtures/benchmarks/streaming_stt_raw.csv`
 ## 4. Architectural Decision Signoff
 
 1. **Engine Selection:** Adopt **E1 (`sherpa-onnx-streaming-zipformer-en-20M-2023-02-17`)** as the primary streaming STT engine.
-2. **Gateway Adapter Contract:** Implement `StreamingSTTClient` in [`app/providers/streaming_stt_client.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/providers/streaming_stt_client.py) adhering to the `STTProvider.stream()` contract.
-3. **Reproducible Model Packaging:** Packaged via [`scripts/download-streaming-stt-model.sh`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/scripts/download-streaming-stt-model.sh).
+2. **Gateway Adapter Contract:** Implement `StreamingSTTClient` in [`app/providers/streaming_stt_client.py`](../../app/providers/streaming_stt_client.py) adhering to the `STTProvider.stream()` contract.
+3. **Reproducible Model Packaging:** Packaged via [`scripts/download-streaming-stt-model.sh`](../../scripts/download-streaming-stt-model.sh).

@@ -9,11 +9,11 @@
 
 ## 1. Automated Snippet Verification
 
-All copyable integration templates in [`docs/snippets/`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/docs/snippets) were verified against the live FastAPI test harness:
+All copyable integration templates in [`docs/snippets/`](../snippets) were verified against the live FastAPI test harness:
 - **Direct Engine Isolation Verified:** All snippets target FastAPI gateway on port 8000 using standard `Authorization: Bearer <key>` headers. None route to internal LocalAI (8080) or local-tts (8880) ports.
-- **LLM Streaming:** [`docs/snippets/llm_stream.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/docs/snippets/llm_stream.py) successfully negotiates Server-Sent Events (SSE) streaming and delivers tokens.
-- **TTS Streaming:** [`docs/snippets/tts_stream.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/docs/snippets/tts_stream.py) streams 24 kHz 16-bit mono PCM chunks.
-- **OpenAI SDK:** [`docs/snippets/llm_openai_sdk.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/docs/snippets/llm_openai_sdk.py) confirms drop-in compatibility with the official OpenAI Python SDK by overriding `base_url` to `${BASE_URL}/v1`.
+- **LLM Streaming:** [`docs/snippets/llm_stream.py`](../snippets/llm_stream.py) successfully negotiates Server-Sent Events (SSE) streaming and delivers tokens.
+- **TTS Streaming:** [`docs/snippets/tts_stream.py`](../snippets/tts_stream.py) streams 24 kHz 16-bit mono PCM chunks.
+- **OpenAI SDK:** [`docs/snippets/llm_openai_sdk.py`](../snippets/llm_openai_sdk.py) confirms drop-in compatibility with the official OpenAI Python SDK by overriding `base_url` to `${BASE_URL}/v1`.
 
 ---
 

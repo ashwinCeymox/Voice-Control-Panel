@@ -1,8 +1,8 @@
 """Agent management REST endpoints and test-chat streaming."""
-import asyncio
+
 import json
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -14,7 +14,6 @@ from app.schemas.agent import (
     AgentConfig,
     AgentUpdateConfig,
     AgentListResponse,
-    AgentLoadResponse,
     TestChatRequest,
 )
 from app.services.agent_manager import AgentManager, DEFAULT_AGENT, VAD_PRESETS
@@ -29,11 +28,16 @@ llm_client = LocalAILLMClient()
 
 
 async def validate_agent_models(data: Dict[str, Any]):
-    """Verify that models referenced by the agent are installed."""
+    """Verify that models referenced by the agent are installed in the dynamic manifest."""
     try:
-        installed = await get_installed_models_data()
+        from app.services.model_manifest import model_manifest
+
+        installed = await model_manifest.get_manifest()
     except Exception:
-        return
+        try:
+            installed = await get_installed_models_data()
+        except Exception:
+            return
 
     installed_llms = {m["id"].lower() for m in installed.get("llm", [])}
     installed_stts = {m["id"].lower() for m in installed.get("stt", [])}
@@ -50,8 +54,12 @@ async def validate_agent_models(data: Dict[str, Any]):
     stt_cfg = data.get("stt") or {}
     stt_model = (stt_cfg.get("model") or "").lower()
     if installed_stts and stt_model:
-        is_whisper_alias = stt_model in ("whisper-1", "whisper") and any("whisper" in m for m in installed_stts)
-        if not is_whisper_alias and not any(stt_model in m or m in stt_model for m in installed_stts):
+        is_whisper_alias = stt_model in ("whisper-1", "whisper") and any(
+            "whisper" in m for m in installed_stts
+        )
+        if not is_whisper_alias and not any(
+            stt_model in m or m in stt_model for m in installed_stts
+        ):
             missing.append(f"STT model '{stt_cfg.get('model')}'")
 
     tts_cfg = data.get("tts") or {}
@@ -61,7 +69,9 @@ async def validate_agent_models(data: Dict[str, Any]):
             missing.append(f"TTS engine '{tts_cfg.get('engine')}'")
 
     if missing:
-        detail_msg = f"Install the model first to proceed. Missing: {', '.join(missing)}"
+        detail_msg = (
+            f"Install the model first to proceed. Missing: {', '.join(missing)}"
+        )
         raise HTTPException(
             status_code=400,
             detail=detail_msg,
@@ -148,8 +158,13 @@ async def update_agent(
     # Validate required fields are present in merged result
     if not merged_data.get("name") or not str(merged_data["name"]).strip():
         raise HTTPException(status_code=400, detail="Field 'name' cannot be empty")
-    if not merged_data.get("system_prompt") or not str(merged_data["system_prompt"]).strip():
-        raise HTTPException(status_code=400, detail="Field 'system_prompt' cannot be empty")
+    if (
+        not merged_data.get("system_prompt")
+        or not str(merged_data["system_prompt"]).strip()
+    ):
+        raise HTTPException(
+            status_code=400, detail="Field 'system_prompt' cannot be empty"
+        )
 
     await validate_agent_models(merged_data)
 
@@ -195,8 +210,12 @@ async def duplicate_agent(
         "llm": existing["llm"],
         "stt": existing["stt"],
         "tts": existing["tts"],
-        "vad": existing.get("vad", {"mode": "energy", "threshold": 0.045, "min_silence_ms": 650}),
-        "audio": existing.get("audio", {"echo_mode": "laptop_speakers", "barge_in": True}),
+        "vad": existing.get(
+            "vad", {"mode": "energy", "threshold": 0.045, "min_silence_ms": 650}
+        ),
+        "audio": existing.get(
+            "audio", {"echo_mode": "laptop_speakers", "barge_in": True}
+        ),
     }
     created = await AgentManager.create_agent(duplicate_data)
     return created

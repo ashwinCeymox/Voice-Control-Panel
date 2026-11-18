@@ -49,8 +49,12 @@ function vadStaticPlugin(): Plugin {
 }
 
 export default defineConfig({
+  base: '/voicecontrolpanel/',
   plugins: [react(), vadStaticPlugin()],
   assetsInclude: ['**/*.wasm', '**/*.onnx'],
+  build: {
+    sourcemap: false,
+  },
   server: {
     port: 5173,
     host: '127.0.0.1',

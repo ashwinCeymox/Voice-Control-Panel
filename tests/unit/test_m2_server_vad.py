@@ -3,10 +3,8 @@ Unit tests for Task M2-SERVER-VAD: Server-side Silero VAD for headless audio str
 Tests ServerVAD class, chunk processing, speech segment extraction,
 and automatic turn detection in WS /v1/voice/stream without client VAD control events.
 """
-import asyncio
-import os
+
 import wave
-import numpy as np
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
@@ -108,12 +106,24 @@ async def test_ws_voice_server_vad_headless_stream(monkeypatch):
     # Mock orchestrator turn execution for quick unit testing
     from app.services.voice_orchestrator import orchestrator
 
-    async def mock_transcribe(audio_bytes, filename=None, content_type=None, model=None):
+    async def mock_transcribe(
+        audio_bytes,
+        filename=None,
+        content_type=None,
+        model=None,
+        language=None,
+        **kwargs,
+    ):
         class MockResp:
             text = "hello from telephony"
+
         return MockResp()
 
+    async def mock_tts(*args, **kwargs):
+        yield b"\x00\x00" * 320
+
     monkeypatch.setattr(orchestrator.stt, "transcribe", mock_transcribe)
+    monkeypatch.setattr(orchestrator.tts, "stream_synthesis_ws", mock_tts)
 
     client = TestClient(app)
     with client.websocket_connect(
@@ -136,6 +146,7 @@ async def test_ws_voice_server_vad_headless_stream(monkeypatch):
 
         # The server should process the turn automatically
         import json
+
         events_received = []
         while True:
             raw = ws.receive()

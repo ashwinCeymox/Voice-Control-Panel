@@ -1,0 +1,10 @@
+[caddy-auth]
+enabled  = true
+port     = http,https
+filter   = caddy-auth
+logpath  = /var/log/caddy/xyz.access.log
+maxretry = 10
+findtime = 5m
+bantime  = 1h
+# Add your own trusted IP here so you never lock yourself out:
+# ignoreip = 127.0.0.1/8 ::1 YOUR.OWN.IP

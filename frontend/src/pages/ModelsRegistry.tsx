@@ -24,6 +24,7 @@ export const ModelsRegistry: React.FC = () => {
   const [activeJobs, setActiveJobs] = useState<Record<string, InstallJob>>({});
   const [warningModel, setWarningModel] = useState<GalleryModel | null>(null);
   const [uninstallingId, setUninstallingId] = useState<string | null>(null);
+  const [updatingKindId, setUpdatingKindId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const PAGE_SIZE = 24;
@@ -47,8 +48,9 @@ export const ModelsRegistry: React.FC = () => {
 
       // Fetch gallery models with query parameters
       const params = new URLSearchParams();
-      if (categoryFilter && categoryFilter !== 'all') {
-        params.set('category', categoryFilter);
+      const effectiveCategory = categoryFilter.startsWith('stt') ? 'stt' : categoryFilter;
+      if (effectiveCategory && effectiveCategory !== 'all') {
+        params.set('category', effectiveCategory);
       }
       if (searchQuery.trim()) {
         params.set('q', searchQuery.trim());
@@ -193,8 +195,11 @@ export const ModelsRegistry: React.FC = () => {
         );
       }
       setFeedback({ type: 'success', msg: `Model ${modelId} uninstalled and freed from disk.` });
+      // Optimistically mark model as uninstalled
+      setModels((prev) => prev.map((m) => m.id === modelId ? { ...m, installed: false } : m));
       setTimeout(() => setFeedback(null), 4000);
       await fetchData();
+
     } catch (err: any) {
       setFeedback({ type: 'error', msg: err.message });
       setTimeout(() => setFeedback(null), 5000);
@@ -203,8 +208,48 @@ export const ModelsRegistry: React.FC = () => {
     }
   };
 
+  const handleUpdateKind = async (modelId: string, newKind: 'batch' | 'streaming') => {
+    try {
+      setUpdatingKindId(modelId);
+      // Optimistic update
+      setModels((prev) =>
+        prev.map((m) => (m.id === modelId ? { ...m, kind: newKind } : m))
+      );
+
+      const base = getApiBase();
+      const res = await fetch(`${base}/v1/models/${encodeURIComponent(modelId)}/classification`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(true),
+        body: JSON.stringify({
+          task: 'stt',
+          kind: newKind,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.detail || err?.error?.message || `Failed to update model classification (HTTP ${res.status})`);
+      }
+
+      setFeedback({
+        type: 'success',
+        msg: `Model classification updated: ${modelId} is now ${newKind.toUpperCase()}`,
+      });
+      setTimeout(() => setFeedback(null), 3500);
+    } catch (err: any) {
+      console.error('Failed to update kind:', err);
+      setFeedback({ type: 'error', msg: err?.message || 'Failed to update model classification' });
+      setTimeout(() => setFeedback(null), 5000);
+      fetchData();
+    } finally {
+      setUpdatingKindId(null);
+    }
+  };
+
   const filteredModels = models.filter((m) => {
     if (activeTab === 'installed' && !m.installed) return false;
+    if (categoryFilter === 'stt-streaming' && (m.category !== 'stt' || m.kind !== 'streaming')) return false;
+    if (categoryFilter === 'stt-batch' && (m.category !== 'stt' || m.kind === 'streaming')) return false;
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       return (
@@ -367,7 +412,7 @@ export const ModelsRegistry: React.FC = () => {
                 key={cat}
                 onClick={() => setCategoryFilter(cat)}
                 className={`px-3 py-1 rounded-md uppercase font-medium transition ${
-                  categoryFilter === cat
+                  categoryFilter === cat || (cat === 'stt' && categoryFilter.startsWith('stt'))
                     ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
@@ -390,6 +435,42 @@ export const ModelsRegistry: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {categoryFilter.startsWith('stt') && (
+        <div className="flex items-center gap-2 bg-slate-950/60 border border-slate-800/80 rounded-lg p-2 text-xs">
+          <span className="text-slate-500 text-[11px] font-mono uppercase px-1">STT Mode Filter:</span>
+          <button
+            onClick={() => setCategoryFilter('stt')}
+            className={`px-2.5 py-1 rounded text-xs transition ${
+              categoryFilter === 'stt'
+                ? 'bg-indigo-600/30 text-indigo-300 font-medium border border-indigo-500/30'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            All STT ({models.filter((m) => m.category === 'stt').length})
+          </button>
+          <button
+            onClick={() => setCategoryFilter('stt-streaming')}
+            className={`px-2.5 py-1 rounded text-xs transition ${
+              categoryFilter === 'stt-streaming'
+                ? 'bg-sky-600/30 text-sky-300 font-medium border border-sky-500/30'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Streaming ({models.filter((m) => m.category === 'stt' && m.kind === 'streaming').length})
+          </button>
+          <button
+            onClick={() => setCategoryFilter('stt-batch')}
+            className={`px-2.5 py-1 rounded text-xs transition ${
+              categoryFilter === 'stt-batch'
+                ? 'bg-indigo-600/30 text-indigo-300 font-medium border border-indigo-500/30'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Batch ({models.filter((m) => m.category === 'stt' && m.kind !== 'streaming').length})
+          </button>
+        </div>
+      )}
 
       {/* Warning Modal */}
       {warningModel && (
@@ -446,12 +527,20 @@ export const ModelsRegistry: React.FC = () => {
                 >
                   <div className="space-y-3">
                     <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <h3 className="font-semibold text-slate-100 text-sm">{model.name}</h3>
-                        <span className="text-[11px] font-mono text-slate-500">{model.id}</span>
+                      <div className="min-w-0 pr-2">
+                        <h3 className="font-semibold text-slate-100 text-sm truncate">{model.name}</h3>
+                        <span className="text-[11px] font-mono text-slate-500 truncate block">{model.id}</span>
                       </div>
-                      <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-indigo-400 shrink-0">
-                        {model.category}
+                      <span className={`text-[10px] uppercase font-mono px-2 py-0.5 rounded border shrink-0 ${
+                        model.category === 'stt'
+                          ? model.kind === 'streaming'
+                            ? 'bg-sky-950/80 border-sky-800 text-sky-400'
+                            : 'bg-indigo-950/80 border-indigo-800 text-indigo-400'
+                          : 'bg-slate-900 border-slate-800 text-indigo-400'
+                      }`}>
+                        {model.category === 'stt'
+                          ? `STT • ${model.kind === 'streaming' ? 'STREAM' : 'BATCH'}`
+                          : model.category}
                       </span>
                     </div>
 
@@ -465,6 +554,50 @@ export const ModelsRegistry: React.FC = () => {
                         RAM: ~{model.ram_required_mb} MB
                       </span>
                     </div>
+
+                    {/* STT Model Classification Selector */}
+                    {model.category === 'stt' && (
+                      <div className="flex items-center justify-between bg-slate-900/60 border border-slate-800/80 rounded-lg p-2 text-xs">
+                        <span className="text-[11px] text-slate-400 font-medium flex items-center gap-1.5">
+                          <Activity className="w-3.5 h-3.5 text-indigo-400" />
+                          Speech Mode:
+                        </span>
+                        <div className="flex items-center gap-1 bg-slate-950 p-0.5 rounded-md border border-slate-800">
+                          <button
+                            type="button"
+                            disabled={updatingKindId === model.id}
+                            onClick={() => handleUpdateKind(model.id, 'batch')}
+                            className={`px-2.5 py-1 text-[11px] font-medium rounded transition flex items-center gap-1 ${
+                              model.kind !== 'streaming'
+                                ? 'bg-indigo-600 text-white shadow-sm font-semibold'
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                            title="Classify as Batch STT (full audio transcription)"
+                          >
+                            {updatingKindId === model.id && model.kind !== 'streaming' ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : null}
+                            Batch
+                          </button>
+                          <button
+                            type="button"
+                            disabled={updatingKindId === model.id}
+                            onClick={() => handleUpdateKind(model.id, 'streaming')}
+                            className={`px-2.5 py-1 text-[11px] font-medium rounded transition flex items-center gap-1 ${
+                              model.kind === 'streaming'
+                                ? 'bg-sky-600 text-white shadow-sm font-semibold'
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                            title="Classify as Realtime Streaming STT (live audio streaming)"
+                          >
+                            {updatingKindId === model.id && model.kind === 'streaming' ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : null}
+                            Streaming
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-3 pt-3 border-t border-slate-900">

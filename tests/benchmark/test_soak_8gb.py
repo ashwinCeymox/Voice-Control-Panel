@@ -1,13 +1,13 @@
 """8 GB Soak & Benchmark Test Suite verifying stability, latency, and memory safety (T3)."""
-import asyncio
+
 import time
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 from app.api.system import get_mac_memory_info
-from app.services.agent_manager import AgentManager, DEFAULT_AGENT
+from app.services.agent_manager import DEFAULT_AGENT
 from app.core.security import create_websocket_ticket
 
 AUTH_HEADER = {"Authorization": "Bearer dev-voice-key-12345"}
@@ -30,7 +30,9 @@ async def test_agent_load_and_fail_recovery():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # Load default agent
-        resp = await client.post(f"/v1/agents/{DEFAULT_AGENT['id']}/load", headers=AUTH_HEADER)
+        resp = await client.post(
+            f"/v1/agents/{DEFAULT_AGENT['id']}/load", headers=AUTH_HEADER
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ready"
@@ -41,8 +43,13 @@ async def test_agent_load_and_fail_recovery():
         assert act_resp.json()["status"] == "ready"
 
         # Simulate memory overload failure
-        with patch("app.services.agent_manager.get_mac_memory_info", return_value={"total_mb": 3000.0, "available_mb": 100.0, "used_mb": 2900.0}):
-            fail_resp = await client.post(f"/v1/agents/{DEFAULT_AGENT['id']}/load", headers=AUTH_HEADER)
+        with patch(
+            "app.services.agent_manager.get_mac_memory_info",
+            return_value={"total_mb": 3000.0, "available_mb": 100.0, "used_mb": 2900.0},
+        ):
+            fail_resp = await client.post(
+                f"/v1/agents/{DEFAULT_AGENT['id']}/load", headers=AUTH_HEADER
+            )
             assert fail_resp.status_code == 400
             assert "insufficient memory" in fail_resp.json()["detail"].lower()
 
@@ -52,6 +59,7 @@ async def test_10_consecutive_voice_turns():
     """Execute 10 consecutive turns without state pollution or memory leaks."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+
         async def mock_stream(*args, **kwargs):
             yield "Hello"
             yield " world"

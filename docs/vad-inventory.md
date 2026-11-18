@@ -6,7 +6,7 @@ This document answers the seven Phase 0 inventory questions defined in `vad-plan
 
 ## 1. Speech Start and End Detection Today
 
-**Location:** Client-side in [`frontend/src/audio/vad.ts`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/frontend/src/audio/vad.ts) via Web Audio API.
+**Location:** Client-side in [`frontend/src/audio/vad.ts`](../frontend/src/audio/vad.ts) via Web Audio API.
 
 - **Mechanism:**
   - An `AnalyserNode` (`fftSize = 512`, `smoothingTimeConstant = 0`) is attached to `audioContext.createMediaStreamSource(stream)`.
@@ -18,7 +18,7 @@ This document answers the seven Phase 0 inventory questions defined in `vad-plan
 - **Speech End:**
   - When $\text{RMS} \le \text{idleThreshold}$, transitions to `'trailing_silence'` and starts a timer.
   - If silence persists continuously for $\ge \text{silenceMs}$ (default `650ms` from agent config), triggers `onSpeechEnd()`.
-  - In [`frontend/src/pages/Assistant.tsx`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/frontend/src/pages/Assistant.tsx#L377-L400), `onSpeechEnd` executes `commitTurn()`, which stops the active `MediaRecorder` and dispatches `{"type": "audio.commit"}` over WebSocket.
+  - In [`frontend/src/pages/Assistant.tsx`](../frontend/src/pages/Assistant.tsx#L377-L400), `onSpeechEnd` executes `commitTurn()`, which stops the active `MediaRecorder` and dispatches `{"type": "audio.commit"}` over WebSocket.
 - **Barge-In (Assistant Speaking):**
   - While assistant plays audio (`isPlayingBack === true`), an elevated `bargeInThreshold` (`0.065` for speakers, `0.045` for headphones) with a 100ms hold timer (`bargeInHoldMs`) checks for user speech over playback. On confirmation, it triggers `onBargeIn()`, stopping playback and dispatching `{"type": "turn.cancel"}`.
 
@@ -26,7 +26,7 @@ This document answers the seven Phase 0 inventory questions defined in `vad-plan
 
 ## 2. WebSocket Stream Format and audio.commit
 
-**Endpoint:** `WS /v1/voice/stream?ticket=<auth_ticket>` handled by [`app/api/voice.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/api/voice.py#L83-L370).
+**Endpoint:** `WS /v1/voice/stream?ticket=<auth_ticket>` handled by [`app/api/voice.py`](../app/api/voice.py#L83-L370).
 
 - **Session Initialization:**
   Client sends a JSON text frame:
@@ -53,7 +53,7 @@ This document answers the seven Phase 0 inventory questions defined in `vad-plan
 
 ## 3. Whisper Options in the LocalAI Call
 
-**Client:** [`app/providers/localai_stt.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/providers/localai_stt.py#L90-L100).
+**Client:** [`app/providers/localai_stt.py`](../app/providers/localai_stt.py#L90-L100).
 
 - **Current Parameters Sent:**
   - `POST /v1/audio/transcriptions` (multipart form-data):
@@ -66,7 +66,7 @@ This document answers the seven Phase 0 inventory questions defined in `vad-plan
   - `condition_on_previous_text`: not explicitly passed (Whisper default is true, causing repetitive hallucination risks).
   - VAD options: No internal Whisper VAD parameters (`vad_filter`, `threshold`) are configured in LocalAI request.
 - **LocalAI Model Specification:**
-  Defined in `/Users/hashhwin047icloud.com/Downloads/test-pro/arch/LocalAI/models/whisper-base.yaml`:
+  Defined in `/home/voiceagent/Downloads/test-pro/arch/LocalAI/models/whisper-base.yaml`:
   ```yaml
   backend: whisper
   name: whisper-base
@@ -113,7 +113,7 @@ Because LocalAI does not expose `no_speech_prob` or `avg_logprob`, the confidenc
 ## 5. Frontend Build Tool & Static Asset Serving
 
 - **Build Tool:** Vite 5 (`vite: "^5.4.11"`), React 18, TypeScript 5.6.
-- **Config:** [`frontend/vite.config.ts`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/frontend/vite.config.ts) runs on port 5173.
+- **Config:** [`frontend/vite.config.ts`](../frontend/vite.config.ts) runs on port 5173.
 - **Static Assets:**
   - Standard Vite root for public assets is `frontend/public/`.
   - Any files placed in `frontend/public/` are served at root (`/`) during `vite dev` and copied verbatim to `frontend/dist/` on `vite build`.
@@ -126,7 +126,7 @@ Because LocalAI does not expose `no_speech_prob` or `avg_logprob`, the confidenc
 - **Database:**
   - Stored in SQLite `voice_platform.db` table `agents` in column `vad_json TEXT NOT NULL`.
 - **Python Schema:**
-  - Defined in [`app/schemas/agent.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/schemas/agent.py#L26-L32):
+  - Defined in [`app/schemas/agent.py`](../app/schemas/agent.py#L26-L32):
     ```python
     class VADConfig(BaseModel):
         mode: str = "energy"
@@ -134,10 +134,10 @@ Because LocalAI does not expose `no_speech_prob` or `avg_logprob`, the confidenc
         min_silence_ms: int = 650
     ```
 - **Consumers:**
-  - [`app/services/agent_manager.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/services/agent_manager.py#L19): Default agent configuration.
-  - [`app/api/agents.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/api/agents.py): Agent CRUD endpoints.
-  - [`frontend/src/pages/Assistant.tsx`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/frontend/src/pages/Assistant.tsx#L480): Instantiates `BrowserVAD(..., { silenceMs: agent.vad.min_silence_ms, idleThreshold: agent.vad.threshold })`.
-  - [`frontend/src/pages/Agents.tsx`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/frontend/src/pages/Agents.tsx#L764): UI slider for `min_silence_ms`.
+  - [`app/services/agent_manager.py`](../app/services/agent_manager.py#L19): Default agent configuration.
+  - [`app/api/agents.py`](../app/api/agents.py): Agent CRUD endpoints.
+  - [`frontend/src/pages/Assistant.tsx`](../frontend/src/pages/Assistant.tsx#L480): Instantiates `BrowserVAD(..., { silenceMs: agent.vad.min_silence_ms, idleThreshold: agent.vad.threshold })`.
+  - [`frontend/src/pages/Agents.tsx`](../frontend/src/pages/Agents.tsx#L764): UI slider for `min_silence_ms`.
 
 ---
 

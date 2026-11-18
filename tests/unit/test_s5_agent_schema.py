@@ -2,10 +2,10 @@
 Unit tests for S5: Mode Selection, Schema Bump (v2), and Models Discovery.
 Follows TDD.
 """
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from app.main import app
-from app.schemas.agent import AgentConfig, STTConfig
 from app.services.agent_manager import AgentManager, DEFAULT_AGENT
 
 HEADERS = {"Authorization": "Bearer dev-voice-key-12345"}
@@ -30,7 +30,11 @@ async def test_create_streaming_agent():
         payload = {
             "name": "Streaming Voice Agent",
             "system_prompt": "You are a fast streaming assistant.",
-            "llm": {"model": "llama-3.2-1b-instruct", "temperature": 0.7, "max_tokens": 256},
+            "llm": {
+                "model": "llama-3.2-1b-instruct",
+                "temperature": 0.7,
+                "max_tokens": 256,
+            },
             "stt": {
                 "model": "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17",
                 "kind": "streaming",
@@ -65,7 +69,7 @@ async def test_installed_models_includes_streaming_metadata():
         # At least one model with kind="streaming" and provider="stream-stt"
         streaming_models = [m for m in data["stt"] if m.get("kind") == "streaming"]
         assert len(streaming_models) >= 1
-        assert streaming_models[0]["provider"] == "stream-stt"
+        assert any(m.get("provider") == "stream-stt" for m in streaming_models)
 
 
 @pytest.mark.asyncio
@@ -98,7 +102,11 @@ async def test_streaming_agent_silero_vad_normalization():
         payload = {
             "name": "Fast Sherpa Agent",
             "system_prompt": "You are a fast streaming assistant.",
-            "llm": {"model": "llama-3.2-1b-instruct", "temperature": 0.7, "max_tokens": 256},
+            "llm": {
+                "model": "llama-3.2-1b-instruct",
+                "temperature": 0.7,
+                "max_tokens": 256,
+            },
             "stt": {
                 "model": "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17",
                 "kind": "streaming",

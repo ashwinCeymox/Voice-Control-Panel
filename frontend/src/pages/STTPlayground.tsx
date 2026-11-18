@@ -12,8 +12,9 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { TranscriptResponse } from '../types/api';
-import { getApiBase, getApiKey } from '../api/client';
+import { getApiBase, getApiKey, getWsBase } from '../api/client';
 import { float32ToPCM16 } from '../audio/vadController';
+import { AudioResampler, StreamingAudioChunker } from '../audio/resampler';
 
 const API_BASE = getApiBase();
 const AUTH_HEADERS = {
@@ -22,20 +23,13 @@ const AUTH_HEADERS = {
   },
 };
 
-function getWsBase(): string {
-  if (typeof window !== 'undefined') {
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.hostname || '127.0.0.1';
-    return `${wsProto}//${host}:8000`;
-  }
-  return 'ws://127.0.0.1:8000';
-}
-
 interface STTModelItem {
   id: string;
   name: string;
   kind: 'batch' | 'streaming';
   provider?: string;
+  available?: boolean;
+  unavailable_reason?: string;
 }
 
 export const STTPlayground: React.FC = () => {
@@ -47,7 +41,9 @@ export const STTPlayground: React.FC = () => {
   // Model & Language options
   const [installedModels, setInstalledModels] = useState<STTModelItem[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
-  const [language, setLanguage] = useState<string>('auto');
+  const [language, setLanguage] = useState<string>('en'); // Lock default to English
+  const [chunkSizeMs, setChunkSizeMs] = useState<number>(560); // 560ms optimal lookahead context
+  const [hardwareRate, setHardwareRate] = useState<number>(16000);
 
   // Mic recording state (Batch)
   const [isRecording, setIsRecording] = useState<boolean>(false);
@@ -64,6 +60,7 @@ export const STTPlayground: React.FC = () => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const chunkerRef = useRef<StreamingAudioChunker | null>(null);
   const streamStartTimeRef = useRef<number>(0);
 
   // Timing telemetry
@@ -72,28 +69,81 @@ export const STTPlayground: React.FC = () => {
     durationSec: number;
     rtf: number;
   } | null>(null);
+  const [reclassifying, setReclassifying] = useState<boolean>(false);
+  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
+  const [streamModelTelemetry, setStreamModelTelemetry] = useState<{
+    modelUsed?: string;
+    runtime?: string;
+    fallback?: boolean;
+  } | null>(null);
+
+  const [fetchingModels, setFetchingModels] = useState<boolean>(false);
 
   useEffect(() => {
     fetchInstalledSTT();
+    const onFocus = () => fetchInstalledSTT();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
   }, []);
 
   const fetchInstalledSTT = async () => {
     try {
-      const res = await fetch(`${API_BASE}/v1/models/installed`, { headers: AUTH_HEADERS });
+      setFetchingModels(true);
+      const res = await fetch(`${API_BASE}/v1/models?task=stt&available=true`, { headers: AUTH_HEADERS });
       if (res.ok) {
         const data = await res.json();
-        const sttList: STTModelItem[] = Array.isArray(data.stt)
-          ? data.stt.map((m: any) => ({
-              id: m.id,
-              name: m.name || m.id,
-              kind: (m.kind === 'streaming' || m.provider === 'stream-stt') ? 'streaming' : 'batch',
-              provider: m.provider,
-            }))
-          : [];
+        const rawList = data.data || data.models || (Array.isArray(data) ? data : []);
+        const sttList: STTModelItem[] = rawList.map((m: any) => ({
+          id: m.id,
+          name: m.display_name || m.name || m.id,
+          kind: m.kind === 'streaming' ? 'streaming' : 'batch',
+          provider: m.engine,
+          available: m.available !== false,
+          unavailable_reason: m.unavailable_reason,
+        }));
         setInstalledModels(sttList);
       }
     } catch (err) {
       console.warn('Failed to fetch installed models:', err);
+    } finally {
+      setFetchingModels(false);
+    }
+  };
+
+  const handleToggleClassification = async (modelId: string) => {
+    if (!modelId) return;
+    const targetKind: 'batch' | 'streaming' = mode === 'streaming' ? 'batch' : 'streaming';
+    try {
+      setReclassifying(true);
+      setError(null);
+
+      // Optimistic update of installedModels
+      setInstalledModels((prev) =>
+        prev.map((m) => (m.id === modelId ? { ...m, kind: targetKind } : m))
+      );
+
+      const res = await fetch(`${API_BASE}/v1/models/${encodeURIComponent(modelId)}/classification`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
+        body: JSON.stringify({
+          task: 'stt',
+          kind: targetKind,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || err.error?.message || 'Failed to update model classification');
+      }
+
+      setMode(targetKind);
+      setSelectedModel(modelId);
+    } catch (err: any) {
+      console.error('Classification toggle error:', err);
+      setError(err?.message || 'Failed to reclassify model');
+      fetchInstalledSTT();
+    } finally {
+      setReclassifying(false);
     }
   };
 
@@ -206,16 +256,35 @@ export const STTPlayground: React.FC = () => {
   const startLiveStreaming = async () => {
     try {
       setError(null);
+      setFallbackNotice(null);
+      setStreamModelTelemetry(null);
       setResult(null);
       setLiveConfirmed('');
       setLiveTentative('');
       setTelemetry(null);
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          sampleSize: 16,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
       mediaStreamRef.current = stream;
 
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      const audioCtx = new AudioContextClass();
       audioContextRef.current = audioCtx;
+      setHardwareRate(audioCtx.sampleRate);
+
+      // Dedicated real-time linear resampler from macOS mic rate (44.1k/48k) to 16kHz
+      const resampler = new AudioResampler(audioCtx.sampleRate, 16000);
+      // Lookahead streaming chunk buffer (560ms–1120ms)
+      const chunker = new StreamingAudioChunker(16000, chunkSizeMs);
+      chunkerRef.current = chunker;
 
       const source = audioCtx.createMediaStreamSource(stream);
       const processor = audioCtx.createScriptProcessor(4096, 1, 1);
@@ -233,21 +302,36 @@ export const STTPlayground: React.FC = () => {
       }, 1000);
 
       ws.onopen = () => {
-        // Send stream handshake
+        // Send stream handshake with explicit language lock and context window
+        const streamModelId =
+          selectedModel ||
+          installedModels.find((m) => m.kind === 'streaming' && m.available !== false)?.id ||
+          installedModels.find((m) => m.available !== false)?.id ||
+          '';
         ws.send(
           JSON.stringify({
             type: 'stream.start',
-            model: selectedModel || 'sherpa-onnx-streaming-zipformer-en-20M',
+            model: streamModelId,
             sample_rate: 16000,
             format: 'pcm_s16le',
+            language: language || 'en',
+            chunk_ms: chunkSizeMs,
           })
         );
 
         processor.onaudioprocess = (e) => {
           if (ws.readyState === WebSocket.OPEN) {
             const inputData = e.inputBuffer.getChannelData(0);
-            const pcmBytes = float32ToPCM16(inputData);
-            ws.send(pcmBytes.buffer);
+            // 1. Properly resample live mic input to 16kHz
+            const resampled16k = resampler.resample(inputData);
+            if (resampled16k.length > 0) {
+              // 2. Accumulate in 560ms–1120ms context window before sending
+              const chunks = chunker.push(resampled16k);
+              for (const chunk of chunks) {
+                const pcmBytes = float32ToPCM16(chunk);
+                ws.send(pcmBytes.buffer);
+              }
+            }
           }
         };
 
@@ -263,9 +347,17 @@ export const STTPlayground: React.FC = () => {
             setLiveTentative(data.tentative || '');
           } else if (data.type === 'transcript.completed' || data.type === 'transcript.final') {
             const finalText = data.text || '';
-            setResult({ text: finalText, language: 'en' });
+            setResult({ text: finalText, language: data.language || 'en', model: data.model_used || data.model });
             setLiveConfirmed(finalText);
             setLiveTentative('');
+            setStreamModelTelemetry({
+              modelUsed: data.model_used || data.model,
+              runtime: data.runtime || 'sherpa-onnx',
+              fallback: Boolean(data.fallback),
+            });
+            if (data.fallback) {
+              setFallbackNotice(`STT Fallback: Model '${data.model_used || data.model}' substituted`);
+            }
             const latencyMs = Math.round(performance.now() - streamStartTimeRef.current);
             const dur = Math.max(1, (performance.now() - streamStartTimeRef.current) / 1000);
             const rtf = (latencyMs / 1000) / (dur || 1);
@@ -274,8 +366,10 @@ export const STTPlayground: React.FC = () => {
               durationSec: parseFloat(dur.toFixed(1)),
               rtf: parseFloat(rtf.toFixed(2)),
             });
+          } else if (data.type === 'stt.fallback') {
+            setFallbackNotice(`STT Fallback Triggered: ${data.reason || 'Service substituted model'}`);
           } else if (data.type === 'error') {
-            setError(data.message || 'Streaming STT error');
+            setError(data.code ? `[${data.code}] ${data.message}` : (data.message || 'Streaming STT error'));
           }
         } catch (err) {
           console.error('Error parsing stream event:', err);
@@ -319,6 +413,14 @@ export const STTPlayground: React.FC = () => {
     }
 
     if (wsStreamRef.current && wsStreamRef.current.readyState === WebSocket.OPEN) {
+      // Flush residual 16kHz lookahead buffer
+      if (chunkerRef.current) {
+        const remaining = chunkerRef.current.flush();
+        if (remaining && remaining.length > 0) {
+          const pcmBytes = float32ToPCM16(remaining);
+          wsStreamRef.current.send(pcmBytes.buffer);
+        }
+      }
       wsStreamRef.current.send(JSON.stringify({ type: 'audio.commit' }));
       setTimeout(() => {
         if (wsStreamRef.current && wsStreamRef.current.readyState === WebSocket.OPEN) {
@@ -362,17 +464,24 @@ export const STTPlayground: React.FC = () => {
       setIsStreaming(true);
 
       ws.onopen = () => {
+        const streamModelId =
+          selectedModel ||
+          installedModels.find((m) => m.kind === 'streaming' && m.available !== false)?.id ||
+          installedModels.find((m) => m.available !== false)?.id ||
+          '';
         ws.send(
           JSON.stringify({
             type: 'stream.start',
-            model: selectedModel || 'sherpa-onnx-streaming-zipformer-en-20M',
+            model: streamModelId,
             sample_rate: 16000,
             format: 'pcm_s16le',
+            language: language || 'en',
+            chunk_ms: chunkSizeMs,
           })
         );
 
-        // Stream chunks of 3200 bytes (~100ms) with 60ms interval to simulate streaming playback
-        const chunkSize = 3200;
+        // Stream chunks with chosen lookahead context (e.g. 560ms = 17,920 bytes)
+        const chunkByteSize = Math.round((16000 * (chunkSizeMs / 1000.0)) * 2);
         let offset = 0;
         const interval = setInterval(() => {
           if (offset >= pcmData.byteLength || ws.readyState !== WebSocket.OPEN) {
@@ -382,10 +491,10 @@ export const STTPlayground: React.FC = () => {
             }
             return;
           }
-          const slice = pcmData.subarray(offset, offset + chunkSize);
+          const slice = pcmData.subarray(offset, Math.min(offset + chunkByteSize, pcmData.byteLength));
           ws.send(slice.buffer);
-          offset += chunkSize;
-        }, 60);
+          offset += chunkByteSize;
+        }, Math.max(100, Math.round(chunkSizeMs * 0.4)));
       };
 
       ws.onmessage = (event) => {
@@ -396,9 +505,17 @@ export const STTPlayground: React.FC = () => {
             setLiveTentative(data.tentative || '');
           } else if (data.type === 'transcript.completed' || data.type === 'transcript.final') {
             const finalText = data.text || '';
-            setResult({ text: finalText, language: 'en' });
+            setResult({ text: finalText, language: data.language || 'en', model: data.model_used || data.model });
             setLiveConfirmed(finalText);
             setLiveTentative('');
+            setStreamModelTelemetry({
+              modelUsed: data.model_used || data.model,
+              runtime: data.runtime || 'sherpa-onnx',
+              fallback: Boolean(data.fallback),
+            });
+            if (data.fallback) {
+              setFallbackNotice(`STT Fallback: Model '${data.model_used || data.model}' substituted`);
+            }
             const latencyMs = Math.round(performance.now() - startTime);
             const dur = audioBuffer.duration;
             const rtf = (latencyMs / 1000) / (dur || 1);
@@ -410,8 +527,10 @@ export const STTPlayground: React.FC = () => {
             setIsStreaming(false);
             setLoading(false);
             ws.close();
+          } else if (data.type === 'stt.fallback') {
+            setFallbackNotice(`STT Fallback Triggered: ${data.reason || 'Service substituted model'}`);
           } else if (data.type === 'error') {
-            setError(data.message || 'Streaming STT error');
+            setError(data.code ? `[${data.code}] ${data.message}` : (data.message || 'Streaming STT error'));
             setIsStreaming(false);
             setLoading(false);
           }
@@ -443,7 +562,7 @@ export const STTPlayground: React.FC = () => {
     }
   };
 
-  const currentModels = installedModels.filter((m) => m.kind === mode);
+  const currentModels = installedModels.filter((m) => m.kind === mode && m.available !== false);
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -515,10 +634,21 @@ export const STTPlayground: React.FC = () => {
       )}
 
       {/* Model & Language Controls Bar */}
-      <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
           <label className="text-xs text-slate-300 font-medium block mb-1.5 flex items-center justify-between">
-            <span>{mode === 'streaming' ? 'Streaming Model' : 'Batch Model'}</span>
+            <span className="flex items-center gap-1.5">
+              <span>{mode === 'streaming' ? 'Streaming Model' : 'Batch Model'}</span>
+              <button
+                type="button"
+                onClick={fetchInstalledSTT}
+                disabled={fetchingModels || isStreaming || isRecording}
+                title="Refresh installed models"
+                className="text-slate-400 hover:text-sky-400 transition p-0.5 rounded"
+              >
+                <RefreshCw className={`w-3 h-3 ${fetchingModels ? 'animate-spin text-sky-400' : ''}`} />
+              </button>
+            </span>
             <span className="text-[10px] text-sky-400 uppercase font-mono px-1.5 py-0.5 rounded bg-sky-950/60 border border-sky-800/40">
               {mode}
             </span>
@@ -539,29 +669,93 @@ export const STTPlayground: React.FC = () => {
               ))
             )}
           </select>
+
+          {selectedModel && (
+            <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-900 text-[11px]">
+              <span className="text-slate-400">
+                Assigned: <strong className="text-slate-200 uppercase font-mono">{mode}</strong>
+              </span>
+              <button
+                type="button"
+                disabled={isStreaming || isRecording || reclassifying}
+                onClick={() => handleToggleClassification(selectedModel)}
+                className="text-xs text-sky-400 hover:text-sky-300 font-medium flex items-center gap-1 hover:underline disabled:opacity-50"
+                title={`Move ${selectedModel} to ${mode === 'streaming' ? 'Batch' : 'Streaming'} STT mode`}
+              >
+                {reclassifying && <RefreshCw className="w-3 h-3 animate-spin text-sky-400" />}
+                Move to {mode === 'streaming' ? 'Batch' : 'Streaming'}
+              </button>
+            </div>
+          )}
         </div>
 
         <div>
-          <label className="text-xs text-slate-300 font-medium block mb-1.5">Language</label>
+          <label className="text-xs text-slate-300 font-medium block mb-1.5 flex items-center justify-between">
+            <span>Target Language</span>
+            <span className="text-[10px] text-emerald-400 uppercase font-mono px-1.5 py-0.5 rounded bg-emerald-950/60 border border-emerald-800/40">
+              {language === 'auto' ? 'Auto-Detect' : 'Locked'}
+            </span>
+          </label>
           <select
             value={language}
             onChange={(e) => setLanguage(e.target.value)}
-            disabled={isStreaming || isRecording || mode === 'streaming'}
+            disabled={isStreaming || isRecording}
             className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500 disabled:opacity-50"
           >
-            <option value="auto">Auto-detect Language</option>
-            <option value="en">English (en)</option>
+            <option value="en">English (en) - Recommended Lock</option>
             <option value="es">Spanish (es)</option>
             <option value="fr">French (fr)</option>
             <option value="de">German (de)</option>
             <option value="ja">Japanese (ja)</option>
             <option value="zh">Chinese (zh)</option>
+            <option value="auto">Auto-detect Language</option>
           </select>
-          {mode === 'streaming' && (
-            <span className="text-[10px] text-slate-500 mt-1 block">
-              Streaming Zipformer uses native real-time English transducer decoding.
+          <span className="text-[10px] text-slate-500 mt-1 block">
+            {language !== 'auto'
+              ? 'Explicit locale lock active (avoids burst auto-detection misfires).'
+              : 'Auto-detection may misclassify short streaming bursts.'}
+          </span>
+        </div>
+
+        <div>
+          <label className="text-xs text-slate-300 font-medium block mb-1.5 flex items-center justify-between">
+            <span>Streaming Context Window</span>
+            <span className="text-[10px] text-indigo-400 uppercase font-mono px-1.5 py-0.5 rounded bg-indigo-950/60 border border-indigo-800/40">
+              Lookahead
+            </span>
+          </label>
+          <select
+            value={chunkSizeMs}
+            onChange={(e) => setChunkSizeMs(Number(e.target.value))}
+            disabled={isStreaming || isRecording}
+            className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500 disabled:opacity-50"
+          >
+            <option value={560}>560 ms (Recommended - 8.9k samples)</option>
+            <option value={1120}>1120 ms (High Acoustic Context)</option>
+            <option value={280}>280 ms (Ultra Low Latency)</option>
+          </select>
+          <span className="text-[10px] text-slate-500 mt-1 block">
+            Accumulates sufficient right-context frames to prevent mid-phoneme truncation.
+          </span>
+        </div>
+      </div>
+
+      {/* Audio Pipeline Diagnostics Banner */}
+      <div className="p-3 bg-slate-950 border border-slate-800/90 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="flex items-center gap-2 font-mono">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="text-slate-400">Audio Pipeline:</span>
+          <span className="text-emerald-400 font-semibold">16kHz 16-bit Mono PCM</span>
+          {hardwareRate !== 16000 && (
+            <span className="text-[10px] text-sky-400 bg-sky-950/80 border border-sky-800/80 px-1.5 py-0.5 rounded font-sans">
+              Live Resampler ({hardwareRate}Hz → 16kHz)
             </span>
           )}
+        </div>
+        <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 font-mono">
+          <span>Language: <strong className="text-slate-200 uppercase">{language}</strong></span>
+          <span>Chunk Window: <strong className="text-sky-400">{chunkSizeMs}ms</strong></span>
+          <span>Engine Weights: <strong className="text-indigo-400 font-semibold">FP32/F16</strong></span>
         </div>
       </div>
 
@@ -660,6 +854,13 @@ export const STTPlayground: React.FC = () => {
               )}
             </div>
 
+            {fallbackNotice && (
+              <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-300 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>{fallbackNotice}</span>
+              </div>
+            )}
+
             {loading ? (
               <div className="p-12 text-center text-slate-500 text-xs flex items-center justify-center gap-2">
                 <RefreshCw className="w-4 h-4 animate-spin text-sky-400" />
@@ -695,13 +896,21 @@ export const STTPlayground: React.FC = () => {
                 <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-4 text-slate-100 text-sm leading-relaxed min-h-[90px]">
                   {result.text || <span className="text-slate-500 italic">(No speech detected)</span>}
                 </div>
-                <div className="text-xs text-slate-400 flex flex-wrap gap-4">
+                <div className="text-xs text-slate-400 flex flex-wrap gap-4 pt-2 border-t border-slate-900">
                   <span>
                     Detected Language: <strong className="text-slate-200">{result.language || 'en'}</strong>
                   </span>
                   <span>
-                    Engine: <strong className="text-slate-200">{mode === 'streaming' ? 'Sherpa-ONNX' : 'LocalAI'}</strong>
+                    Model Used: <strong className="text-slate-200">{streamModelTelemetry?.modelUsed || result.model || selectedModel}</strong>
                   </span>
+                  <span>
+                    Runtime: <strong className="text-slate-200">{streamModelTelemetry?.runtime || (mode === 'streaming' ? 'sherpa-onnx' : 'localai')}</strong>
+                  </span>
+                  {streamModelTelemetry?.fallback && (
+                    <span className="text-amber-400 font-semibold flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5" /> Fallback Substituted
+                    </span>
+                  )}
                 </div>
               </div>
             ) : (

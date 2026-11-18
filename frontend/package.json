@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/copy-vad-assets.js",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "postinstall": "node scripts/copy-vad-assets.js"
   },
   "dependencies": {
     "@ricky0123/vad-web": "^0.0.31",

@@ -1,4 +1,5 @@
 """Agent schemas matching docs/contracts/openapi.yaml and docs/contracts/agent-schema.json."""
+
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
@@ -85,7 +86,11 @@ class AgentConfig(BaseModel):
                 }
                 if vad is None:
                     data["vad"] = streaming_defaults
-                elif isinstance(vad, dict) and "redemption_ms" not in vad and "min_silence_ms" not in vad:
+                elif (
+                    isinstance(vad, dict)
+                    and "redemption_ms" not in vad
+                    and "min_silence_ms" not in vad
+                ):
                     data["vad"] = {**streaming_defaults, **vad}
         return data
 

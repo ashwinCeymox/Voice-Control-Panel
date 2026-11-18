@@ -1,19 +1,16 @@
 """
 QA & Soak Test Suite for S6: Failure Tests, Concurrency Limiter, and Security Verification.
 """
+
 from contextlib import ExitStack
-import asyncio
 import json
 import logging
 import pytest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch
 from starlette.testclient import TestClient
 from app.main import app
 from app.core.config import settings
 from app.core.security import create_websocket_ticket
-from app.services.key_manager import KeyManager, ApiKeyRecord
-from app.core.errors import ProviderUnavailableError
-from app.core.limits import stream_limiter
 
 
 @pytest.fixture
@@ -27,14 +24,23 @@ def test_s6_stream_concurrency_limit_enforcement(sync_client):
         # Open 5 streaming connections up to limit
         for _ in range(settings.MAX_ACTIVE_STT_STREAMS):
             t = create_websocket_ticket("admin")
-            stack.enter_context(sync_client.websocket_connect(f"/v1/audio/transcriptions/stream?ticket={t}"))
+            stack.enter_context(
+                sync_client.websocket_connect(
+                    f"/v1/audio/transcriptions/stream?ticket={t}"
+                )
+            )
 
         # 6th stream should exceed concurrency limit
         t6 = create_websocket_ticket("admin")
-        with sync_client.websocket_connect(f"/v1/audio/transcriptions/stream?ticket={t6}") as ws6:
+        with sync_client.websocket_connect(
+            f"/v1/audio/transcriptions/stream?ticket={t6}"
+        ) as ws6:
             msg = ws6.receive_json()
             assert msg.get("type") == "error"
-            assert any(k in msg.get("message", "").lower() for k in ("limit", "overloaded", "concurrent", "rejected", "too many"))
+            assert any(
+                k in msg.get("message", "").lower()
+                for k in ("limit", "overloaded", "concurrent", "rejected", "too many")
+            )
 
 
 def test_s6_bad_audio_frames_resilience(sync_client):
@@ -43,10 +49,12 @@ def test_s6_bad_audio_frames_resilience(sync_client):
     with sync_client.websocket_connect(f"/v1/voice/stream?ticket={ticket}") as ws:
         ws.receive_json()  # session.created
 
-        ws.send_json({
-            "type": "session.start",
-            "stt_kind": "streaming",
-        })
+        ws.send_json(
+            {
+                "type": "session.start",
+                "stt_kind": "streaming",
+            }
+        )
         ws.send_json({"type": "vad.speech_start"})
 
         # Send random malformed garbage bytes
@@ -72,12 +80,22 @@ def test_s6_security_transcript_privacy(sync_client, caplog):
     secret_text = "ultra_sensitive_customer_confidential_token_xyz987"
 
     async def mock_stream(audio_gen, model=None, language=None):
-        yield {"type": "transcript.partial", "seq": 1, "confirmed": secret_text, "tentative": ""}
+        yield {
+            "type": "transcript.partial",
+            "seq": 1,
+            "confirmed": secret_text,
+            "tentative": "",
+        }
         yield {"type": "transcript.completed", "text": secret_text}
 
     with caplog.at_level(logging.DEBUG):
-        with patch("app.providers.streaming_stt_client.StreamingSTTClient.stream", side_effect=mock_stream):
-            with sync_client.websocket_connect(f"/v1/voice/stream?ticket={ticket}") as ws:
+        with patch(
+            "app.providers.streaming_stt_client.StreamingSTTClient.stream",
+            side_effect=mock_stream,
+        ):
+            with sync_client.websocket_connect(
+                f"/v1/voice/stream?ticket={ticket}"
+            ) as ws:
                 ws.receive_json()
                 ws.send_json({"type": "session.start", "stt_kind": "streaming"})
                 ws.send_json({"type": "vad.speech_start"})
@@ -93,8 +111,12 @@ def test_s6_security_transcript_privacy(sync_client, caplog):
 
     # Caplog inspection: secret text must NOT appear in application log records
     for record in caplog.records:
-        if record.name.startswith("voice_agent") or record.name.startswith("streaming_stt"):
-            assert secret_text not in record.getMessage(), f"Confidential speech leaked in log: {record.getMessage()}"
+        if record.name.startswith("voice_agent") or record.name.startswith(
+            "streaming_stt"
+        ):
+            assert secret_text not in record.getMessage(), (
+                f"Confidential speech leaked in log: {record.getMessage()}"
+            )
 
 
 def test_s6_multi_turn_soak(sync_client):
@@ -114,16 +136,23 @@ def test_s6_multi_turn_soak(sync_client):
 
     from app.services.voice_orchestrator import orchestrator
 
-    with patch("app.providers.streaming_stt_client.StreamingSTTClient.stream", side_effect=mock_stream), \
-         patch.object(orchestrator.llm, "stream_tokens", side_effect=mock_llm_tokens), \
-         patch.object(orchestrator.tts, "stream_synthesis_ws", side_effect=mock_tts):
+    with (
+        patch(
+            "app.providers.streaming_stt_client.StreamingSTTClient.stream",
+            side_effect=mock_stream,
+        ),
+        patch.object(orchestrator.llm, "stream_tokens", side_effect=mock_llm_tokens),
+        patch.object(orchestrator.tts, "stream_synthesis_ws", side_effect=mock_tts),
+    ):
         with sync_client.websocket_connect(f"/v1/voice/stream?ticket={ticket}") as ws:
             ws.receive_json()  # session.created
 
-            ws.send_json({
-                "type": "session.start",
-                "stt_kind": "streaming",
-            })
+            ws.send_json(
+                {
+                    "type": "session.start",
+                    "stt_kind": "streaming",
+                }
+            )
 
             for turn_idx in range(turn_count):
                 ws.send_json({"type": "vad.speech_start"})

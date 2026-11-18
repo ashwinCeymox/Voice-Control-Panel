@@ -1,11 +1,11 @@
 """Voice turn orchestration for synchronous turns and cancellation registry."""
+
 import asyncio
 import base64
 import time
 import uuid
 from typing import Dict, Optional
 from app.core.config import settings
-from app.core.errors import AppError
 from app.providers.localai_llm import LocalAILLMClient
 from app.providers.localai_stt import LocalAISTTClient
 from app.providers.localtts_client import LocalTTSClient
@@ -56,7 +56,9 @@ class VoiceOrchestrator:
 
         # 2. History & LLM Completion
         llm_start = time.perf_counter()
-        history = await SessionRepository.get_recent_messages(sid, limit=settings.MAX_SESSION_MESSAGES)
+        history = await SessionRepository.get_recent_messages(
+            sid, limit=settings.MAX_SESSION_MESSAGES
+        )
         system_prompt = ChatMessage(
             role="system",
             content="You are a helpful, concise voice AI assistant. Keep responses natural, conversational, and under two sentences.",
@@ -115,7 +117,9 @@ class VoiceOrchestrator:
             transcript=transcript,
             response_text=response_text,
             audio_base64=audio_b64,
-            audio_format=AudioFormat(sample_rate=24000, sample_format="s16le", channels=1),
+            audio_format=AudioFormat(
+                sample_rate=24000, sample_format="s16le", channels=1
+            ),
             metrics=metrics,
         )
 

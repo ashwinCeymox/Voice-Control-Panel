@@ -2,6 +2,7 @@
 Unit tests for Task M2-BACKUP: Automated SQLite snapshot backup script and admin backup endpoint.
 Tests VACUUM INTO snapshots, integrity verification, admin endpoint auth, and backup listing.
 """
+
 import os
 import subprocess
 import aiosqlite
@@ -126,7 +127,13 @@ def test_restore_script_execution(tmp_path):
 
     # Find the newest backup in data/backups
     backup_dir = "data/backups"
-    backups = sorted([os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.endswith(".db")])
+    backups = sorted(
+        [
+            os.path.join(backup_dir, f)
+            for f in os.listdir(backup_dir)
+            if f.endswith(".db")
+        ]
+    )
     assert len(backups) > 0
     latest_backup = backups[-1]
 

@@ -1,17 +1,22 @@
 """Chat schemas compatible with OpenAI specification for LocalAI LLM."""
+
 from typing import List, Optional, Literal
 from pydantic import BaseModel, Field
 
 
 class ChatMessage(BaseModel):
-    role: Literal["system", "user", "assistant"] = Field(..., description="Message role")
+    role: Literal["system", "user", "assistant"] = Field(
+        ..., description="Message role"
+    )
     content: str = Field(..., description="Message text content")
 
 
 class ChatCompletionRequest(BaseModel):
     model: Optional[str] = Field(default=None, description="LocalAI LLM model ID")
     messages: List[ChatMessage] = Field(..., description="Conversation messages")
-    stream: bool = Field(default=False, description="Enable Server-Sent Events streaming")
+    stream: bool = Field(
+        default=False, description="Enable Server-Sent Events streaming"
+    )
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=None, ge=1)
 

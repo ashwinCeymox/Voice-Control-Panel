@@ -1,7 +1,7 @@
 import httpx
 
-BASE_URL = "{{BASE_URL}}"   # for example http://192.168.1.20:8000
-API_KEY = "{{API_KEY}}"     # keep it out of source control
+BASE_URL = "{{BASE_URL}}"  # for example http://192.168.1.20:8000
+API_KEY = "{{API_KEY}}"  # keep it out of source control
 
 url = f"{BASE_URL}/v1/text-to-speech/{{VOICE}}/stream"
 payload = {

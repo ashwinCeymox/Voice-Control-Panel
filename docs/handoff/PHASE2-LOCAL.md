@@ -22,8 +22,8 @@ All 5 core Phase 2 tasks were implemented following strict Test-Driven Developme
 ## 2. Deliverables Summary
 
 ### M2-VOICE-AUTH: Direct API Key Auth on Voice WebSocket
-- **Files Modified:** [`app/api/voice.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/api/voice.py)
-- **Tests:** [`tests/unit/test_m2_voice_auth.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/tests/unit/test_m2_voice_auth.py) (9/9 passed)
+- **Files Modified:** [`app/api/voice.py`](../../app/api/voice.py)
+- **Tests:** [`tests/unit/test_m2_voice_auth.py`](../../tests/unit/test_m2_voice_auth.py) (9/9 passed)
 - **Features:**
   - Multiple authentication mechanisms supported:
     - Browser single-use tickets: `WS /v1/voice/stream?ticket=<ticket>` (preserves backward compatibility).
@@ -42,11 +42,11 @@ All 5 core Phase 2 tasks were implemented following strict Test-Driven Developme
 ---
 
 ### M2-SERVER-VAD: Server-Side Silero VAD Engine
-- **Files Added:** [`app/services/server_vad.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/services/server_vad.py)
-- **Files Modified:** [`app/api/voice.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/api/voice.py)
-- **Tests:** [`tests/unit/test_m2_server_vad.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/tests/unit/test_m2_server_vad.py) (5/5 passed)
+- **Files Added:** [`app/services/server_vad.py`](../../app/services/server_vad.py)
+- **Files Modified:** [`app/api/voice.py`](../../app/api/voice.py)
+- **Tests:** [`tests/unit/test_m2_server_vad.py`](../../tests/unit/test_m2_server_vad.py) (5/5 passed)
 - **Features:**
-  - Wraps `sherpa_onnx.VoiceActivityDetector` utilizing [`frontend/public/vad/silero_vad_v5.onnx`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/frontend/public/vad/silero_vad_v5.onnx).
+  - Wraps `sherpa_onnx.VoiceActivityDetector` utilizing [`frontend/public/vad/silero_vad_v5.onnx`](../../frontend/public/vad/silero_vad_v5.onnx).
   - Processes continuous 16-bit mono PCM chunks.
   - State machine emits:
     - `SpeechStart`: Detects start of user speech and triggers interruption / cancels in-flight LLM/TTS generation.
@@ -57,16 +57,16 @@ All 5 core Phase 2 tasks were implemented following strict Test-Driven Developme
 
 ### M2-QUOTA: Key Quotas & HTTP 429 Protection
 - **Files Modified:**
-  - [`app/storage/database.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/storage/database.py)
-  - [`app/core/security.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/core/security.py)
-  - [`app/services/key_manager.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/services/key_manager.py)
-  - [`app/api/admin_keys.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/api/admin_keys.py)
-  - [`app/api/chat.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/api/chat.py)
-  - [`app/api/transcriptions.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/api/transcriptions.py)
-  - [`app/api/tts.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/api/tts.py)
-  - [`app/api/stream_stt.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/api/stream_stt.py)
-  - [`app/api/voice.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/api/voice.py)
-- **Tests:** [`tests/unit/test_m2_quotas.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/tests/unit/test_m2_quotas.py) (5/5 passed)
+  - [`app/storage/database.py`](../../app/storage/database.py)
+  - [`app/core/security.py`](../../app/core/security.py)
+  - [`app/services/key_manager.py`](../../app/services/key_manager.py)
+  - [`app/api/admin_keys.py`](../../app/api/admin_keys.py)
+  - [`app/api/chat.py`](../../app/api/chat.py)
+  - [`app/api/transcriptions.py`](../../app/api/transcriptions.py)
+  - [`app/api/tts.py`](../../app/api/tts.py)
+  - [`app/api/stream_stt.py`](../../app/api/stream_stt.py)
+  - [`app/api/voice.py`](../../app/api/voice.py)
+- **Tests:** [`tests/unit/test_m2_quotas.py`](../../tests/unit/test_m2_quotas.py) (5/5 passed)
 - **Features:**
   - Database columns `max_daily_tokens` (INTEGER) and `max_daily_audio_seconds` (REAL) added to `api_keys`.
   - Automatic migration on database startup without data loss.
@@ -79,10 +79,10 @@ All 5 core Phase 2 tasks were implemented following strict Test-Driven Developme
 
 ### M2-METRICS: Zero-Dependency Prometheus Exporter
 - **Files Added:**
-  - [`app/services/metrics.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/services/metrics.py)
-  - [`app/api/metrics.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/api/metrics.py)
-- **Files Modified:** [`app/main.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/main.py)
-- **Tests:** [`tests/unit/test_m2_metrics.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/tests/unit/test_m2_metrics.py) (4/4 passed)
+  - [`app/services/metrics.py`](../../app/services/metrics.py)
+  - [`app/api/metrics.py`](../../app/api/metrics.py)
+- **Files Modified:** [`app/main.py`](../../app/main.py)
+- **Tests:** [`tests/unit/test_m2_metrics.py`](../../tests/unit/test_m2_metrics.py) (4/4 passed)
 - **Features:**
   - `GET /metrics` exports standard Prometheus text exposition format (`text/plain; version=0.0.4; charset=utf-8`).
   - Metrics tracked:
@@ -95,15 +95,15 @@ All 5 core Phase 2 tasks were implemented following strict Test-Driven Developme
 ---
 
 ### M2-BACKUP: Online Database Snapshot & Admin API
-- **Files Added:** [`scripts/backup-db.sh`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/scripts/backup-db.sh)
-- **Files Modified:** [`app/api/admin_keys.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/app/api/admin_keys.py)
-- **Tests:** [`tests/unit/test_m2_backup.py`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/tests/unit/test_m2_backup.py) (4/4 passed)
+- **Files Added:** [`scripts/backup-db.sh`](../../scripts/backup-db.sh)
+- **Files Modified:** [`app/api/admin_keys.py`](../../app/api/admin_keys.py)
+- **Tests:** [`tests/unit/test_m2_backup.py`](../../tests/unit/test_m2_backup.py) (4/4 passed)
 - **Features:**
   - Uses SQLite online `VACUUM INTO` statement — zero locks, zero downtime, safe with concurrent WAL writes.
   - Automatically verifies snapshot consistency via `PRAGMA integrity_check`.
   - Admin endpoint: `POST /v1/admin/backup` returns snapshot metadata (`status`, `backup_file`, `backup_path`, `size_bytes`, `integrity`).
   - Snapshot listing: `GET /v1/admin/backups` lists available backups sorted by newest first.
-  - Standalone shell script [`scripts/backup-db.sh`](file:///Users/hashhwin047icloud.com/Downloads/test-pro/arch/local-voice-agent/scripts/backup-db.sh) with automatic retention of the 20 most recent backups.
+  - Standalone shell script [`scripts/backup-db.sh`](../../scripts/backup-db.sh) with automatic retention of the 20 most recent backups.
 
 ---
 

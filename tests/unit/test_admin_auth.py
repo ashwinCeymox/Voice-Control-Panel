@@ -1,12 +1,12 @@
 """
 Unit tests for Super Admin Authentication, Session Management, and Proxy Awareness (Phase 3).
 """
+
 import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 import pytest
 from starlette.testclient import TestClient
-from starlette.websockets import WebSocketDisconnect
 
 from app.main import app
 from app.core.config import settings
@@ -18,6 +18,7 @@ from app.storage.database import init_db, get_db
 @pytest.fixture(autouse=True)
 def reset_auth_state():
     """Ensure database is initialized and clear sessions/lockouts before each test."""
+
     async def _clean():
         await init_db()
         _IP_FAILURES.clear()
@@ -31,6 +32,7 @@ def reset_auth_state():
                 """
             )
             await db.commit()
+
     asyncio.run(_clean())
     yield
 
@@ -75,7 +77,10 @@ def test_login_success_and_failure(client):
     # 1. Success
     resp = client.post(
         "/v1/panel/login",
-        json={"email": settings.ADMIN_EMAIL, "password": settings.ADMIN_INITIAL_PASSWORD},
+        json={
+            "email": settings.ADMIN_EMAIL,
+            "password": settings.ADMIN_INITIAL_PASSWORD,
+        },
         headers={"X-Requested-With": "XMLHttpRequest"},
     )
     assert resp.status_code == 200
@@ -86,7 +91,10 @@ def test_login_success_and_failure(client):
     # Cookie flags check: HttpOnly and SameSite=strict
     raw_cookie = resp.headers.get("set-cookie", "")
     assert "HttpOnly" in raw_cookie
-    assert "SameSite=strict" in raw_cookie.lower() or "samesite=strict" in raw_cookie.lower()
+    assert (
+        "SameSite=strict" in raw_cookie.lower()
+        or "samesite=strict" in raw_cookie.lower()
+    )
 
     # 2. Wrong password
     resp_bad_pw = client.post(
@@ -100,7 +108,10 @@ def test_login_success_and_failure(client):
     # 3. Wrong email
     resp_bad_email = client.post(
         "/v1/panel/login",
-        json={"email": "nonexistent@voicepanel.io", "password": settings.ADMIN_INITIAL_PASSWORD},
+        json={
+            "email": "nonexistent@voicepanel.io",
+            "password": settings.ADMIN_INITIAL_PASSWORD,
+        },
         headers={"X-Requested-With": "XMLHttpRequest"},
     )
     assert resp_bad_email.status_code == 401
@@ -123,11 +134,17 @@ def test_account_lockout_after_5_failed_attempts(client):
     # 6th attempt with correct password must still return 401 due to lockout
     resp_locked = client.post(
         "/v1/panel/login",
-        json={"email": settings.ADMIN_EMAIL, "password": settings.ADMIN_INITIAL_PASSWORD},
+        json={
+            "email": settings.ADMIN_EMAIL,
+            "password": settings.ADMIN_INITIAL_PASSWORD,
+        },
         headers={"X-Requested-With": "XMLHttpRequest"},
     )
     assert resp_locked.status_code == 401
-    assert resp_locked.json().get("error", {}).get("message") == "Invalid email or password."
+    assert (
+        resp_locked.json().get("error", {}).get("message")
+        == "Invalid email or password."
+    )
 
 
 @pytest.mark.asyncio
@@ -144,7 +161,10 @@ async def test_account_lockout_expires(client):
 
     resp = client.post(
         "/v1/panel/login",
-        json={"email": settings.ADMIN_EMAIL, "password": settings.ADMIN_INITIAL_PASSWORD},
+        json={
+            "email": settings.ADMIN_EMAIL,
+            "password": settings.ADMIN_INITIAL_PASSWORD,
+        },
         headers={"X-Requested-With": "XMLHttpRequest"},
     )
     assert resp.status_code == 200
@@ -156,7 +176,10 @@ def test_change_password_validation_and_session_invalidation(client):
     # 1. Login to get session
     login_resp = client.post(
         "/v1/panel/login",
-        json={"email": settings.ADMIN_EMAIL, "password": settings.ADMIN_INITIAL_PASSWORD},
+        json={
+            "email": settings.ADMIN_EMAIL,
+            "password": settings.ADMIN_INITIAL_PASSWORD,
+        },
         headers={"X-Requested-With": "XMLHttpRequest"},
     )
     assert login_resp.status_code == 200
@@ -165,7 +188,10 @@ def test_change_password_validation_and_session_invalidation(client):
     # 2. Reject wrong old password
     resp = client.post(
         "/v1/panel/change-password",
-        json={"old_password": "WrongOldPassword", "new_password": "ValidNewPassword123!"},
+        json={
+            "old_password": "WrongOldPassword",
+            "new_password": "ValidNewPassword123!",
+        },
         headers={"X-Requested-With": "XMLHttpRequest"},
         cookies={"admin_session": old_cookie},
     )
@@ -183,7 +209,10 @@ def test_change_password_validation_and_session_invalidation(client):
     # 4. Reject identical new password
     resp = client.post(
         "/v1/panel/change-password",
-        json={"old_password": settings.ADMIN_INITIAL_PASSWORD, "new_password": settings.ADMIN_INITIAL_PASSWORD},
+        json={
+            "old_password": settings.ADMIN_INITIAL_PASSWORD,
+            "new_password": settings.ADMIN_INITIAL_PASSWORD,
+        },
         headers={"X-Requested-With": "XMLHttpRequest"},
         cookies={"admin_session": old_cookie},
     )
@@ -214,7 +243,10 @@ def test_change_password_validation_and_session_invalidation(client):
     # 8. Old password can no longer log in
     resp_old_login = client.post(
         "/v1/panel/login",
-        json={"email": settings.ADMIN_EMAIL, "password": settings.ADMIN_INITIAL_PASSWORD},
+        json={
+            "email": settings.ADMIN_EMAIL,
+            "password": settings.ADMIN_INITIAL_PASSWORD,
+        },
         headers={"X-Requested-With": "XMLHttpRequest"},
     )
     assert resp_old_login.status_code == 401
@@ -239,7 +271,10 @@ def test_logout_clears_session(client):
     if login_resp.status_code != 200:
         login_resp = client.post(
             "/v1/panel/login",
-            json={"email": settings.ADMIN_EMAIL, "password": settings.ADMIN_INITIAL_PASSWORD},
+            json={
+                "email": settings.ADMIN_EMAIL,
+                "password": settings.ADMIN_INITIAL_PASSWORD,
+            },
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
     session_cookie = login_resp.cookies.get("admin_session")
@@ -296,13 +331,19 @@ def test_unified_auth_principal_on_admin_routes(client):
     # 2. Log in to get session cookie
     login_resp = client.post(
         "/v1/panel/login",
-        json={"email": settings.ADMIN_EMAIL, "password": settings.ADMIN_INITIAL_PASSWORD},
+        json={
+            "email": settings.ADMIN_EMAIL,
+            "password": settings.ADMIN_INITIAL_PASSWORD,
+        },
         headers={"X-Requested-With": "XMLHttpRequest"},
     )
     if login_resp.status_code != 200:
         login_resp = client.post(
             "/v1/panel/login",
-            json={"email": settings.ADMIN_EMAIL, "password": "SuperSecureNewPassword2026!"},
+            json={
+                "email": settings.ADMIN_EMAIL,
+                "password": "SuperSecureNewPassword2026!",
+            },
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
     cookie = login_resp.cookies.get("admin_session")
@@ -324,13 +365,17 @@ def test_unified_auth_principal_on_admin_routes(client):
     assert ticket is not None
 
     # 5. WebSocket stream handshake works with panel session directly or ticket
-    with client.websocket_connect(f"/v1/audio/transcriptions/stream?ticket={ticket}") as ws:
+    with client.websocket_connect(f"/v1/audio/transcriptions/stream?ticket={ticket}"):
         pass  # Connect accepted without 4401 or 4403
 
-    with client.websocket_connect("/v1/audio/transcriptions/stream", cookies={"admin_session": cookie}) as ws:
+    with client.websocket_connect(
+        "/v1/audio/transcriptions/stream", cookies={"admin_session": cookie}
+    ):
         pass  # Direct cookie auth accepted
 
-    with client.websocket_connect("/v1/voice/stream", cookies={"admin_session": cookie}) as ws:
+    with client.websocket_connect(
+        "/v1/voice/stream", cookies={"admin_session": cookie}
+    ):
         pass  # Direct cookie auth accepted for full-duplex voice stream
 
 
@@ -371,5 +416,7 @@ def test_proxy_awareness_and_secure_cookie():
 
     # When peer IS in TRUSTED_PROXY_IPS, X-Forwarded-For is respected
     with patch.object(settings, "TRUSTED_PROXY_IPS", "10.0.0.1"):
-        req_trusted = DummyRequest(host="10.0.0.1", forwarded_for="203.0.113.195, 10.0.0.1")
+        req_trusted = DummyRequest(
+            host="10.0.0.1", forwarded_for="203.0.113.195, 10.0.0.1"
+        )
         assert resolve_client_ip(req_trusted) == "203.0.113.195"

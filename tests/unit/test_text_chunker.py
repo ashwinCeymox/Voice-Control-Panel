@@ -1,4 +1,5 @@
 """Unit tests for sentence and phrase text chunker."""
+
 import pytest
 from app.services.text_chunker import TextChunker, chunk_stream
 
@@ -23,7 +24,9 @@ def test_chunker_abbreviation_safety():
 def test_chunker_long_text_word_boundary():
     chunker = TextChunker(min_chars=10, max_chars=30)
     # Exceeds max_chars without punctuation
-    chunks = chunker.append("This is a very long sentence without any punctuation whatsoever")
+    chunks = chunker.append(
+        "This is a very long sentence without any punctuation whatsoever"
+    )
     assert len(chunks) >= 1
     # Check that it split on a word boundary, not mid-word
     assert not chunks[0].endswith("-")
@@ -34,7 +37,17 @@ def test_chunker_long_text_word_boundary():
 @pytest.mark.asyncio
 async def test_chunk_stream_generator():
     async def sample_token_stream():
-        tokens = ["The ", "quick ", "brown ", "fox ", "jumped. ", "Over ", "the ", "lazy ", "dog."]
+        tokens = [
+            "The ",
+            "quick ",
+            "brown ",
+            "fox ",
+            "jumped. ",
+            "Over ",
+            "the ",
+            "lazy ",
+            "dog.",
+        ]
         for t in tokens:
             yield t
 

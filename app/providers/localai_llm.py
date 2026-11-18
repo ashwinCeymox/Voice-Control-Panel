@@ -1,4 +1,5 @@
 """LocalAI LLM provider client supporting non-streaming and SSE streaming."""
+
 import json
 import logging
 from typing import AsyncGenerator, Dict, List, Optional
@@ -30,7 +31,9 @@ class LocalAILLMClient:
                     headers["Authorization"] = f"Bearer {settings.LOCALAI_API_KEY}"
                 resp = await client.get(f"{self.base_url}/v1/models", headers=headers)
                 if resp.status_code == 200:
-                    models = [m.get("id") for m in resp.json().get("data", []) if m.get("id")]
+                    models = [
+                        m.get("id") for m in resp.json().get("data", []) if m.get("id")
+                    ]
                     if target in models:
                         return target
                     target_lower = target.lower().replace("-", "").replace("_", "")
@@ -86,7 +89,9 @@ class LocalAILLMClient:
                         choices=choices,
                     )
                 else:
-                    logger.error("LocalAI LLM complete error %d: %s", resp.status_code, resp.text)
+                    logger.error(
+                        "LocalAI LLM complete error %d: %s", resp.status_code, resp.text
+                    )
                     raise ProviderUnavailableError("LocalAI LLM", details=resp.text)
         except httpx.TimeoutException:
             raise ProviderTimeoutError("LocalAI LLM")
@@ -115,10 +120,14 @@ class LocalAILLMClient:
             headers["Authorization"] = f"Bearer {settings.LOCALAI_API_KEY}"
 
         async with httpx.AsyncClient(timeout=float(self.timeout)) as client:
-            async with client.stream("POST", url, json=payload, headers=headers) as resp:
+            async with client.stream(
+                "POST", url, json=payload, headers=headers
+            ) as resp:
                 if resp.status_code != 200:
                     err_body = await resp.aread()
-                    raise ProviderUnavailableError("LocalAI LLM", details=err_body.decode())
+                    raise ProviderUnavailableError(
+                        "LocalAI LLM", details=err_body.decode()
+                    )
 
                 async for line in resp.aiter_lines():
                     line = line.strip()
@@ -131,7 +140,9 @@ class LocalAILLMClient:
                         chunk_json = json.loads(data_str)
                         choices = chunk_json.get("choices", [])
                         if choices:
-                            delta_content = choices[0].get("delta", {}).get("content", "")
+                            delta_content = (
+                                choices[0].get("delta", {}).get("content", "")
+                            )
                             if delta_content:
                                 yield delta_content
                     except json.JSONDecodeError:

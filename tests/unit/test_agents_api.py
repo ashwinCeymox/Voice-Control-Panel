@@ -7,8 +7,9 @@ Bug fixes verified:
   B5-1: PUT /{id} now accepts partial payloads (AgentUpdateConfig).
   B5-2: DELETE default agent uses DEFAULT_AGENT["id"] as single source of truth.
 """
+
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch
 from httpx import ASGITransport, AsyncClient
 from app.main import app
 
@@ -29,6 +30,7 @@ AGENT_PAYLOAD = {
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 async def _create_agent(client: AsyncClient) -> dict:
     r = await client.post("/v1/agents", headers=HEADERS, json=AGENT_PAYLOAD)
     assert r.status_code == 201, r.text
@@ -38,6 +40,7 @@ async def _create_agent(client: AsyncClient) -> dict:
 # ---------------------------------------------------------------------------
 # B4-1: Route ordering — /active resolves before /{id}
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_get_active_agent_resolves_to_active_route_not_id():
@@ -58,6 +61,7 @@ async def test_get_active_agent_resolves_to_active_route_not_id():
 # B4-2: /active response must not duplicate agent fields at top level
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_active_agent_no_duplicate_top_level_fields():
     """GET /v1/agents/active must not pollute the top-level dict with agent fields."""
@@ -67,8 +71,17 @@ async def test_get_active_agent_no_duplicate_top_level_fields():
         assert r.status_code == 200
         data = r.json()
         # These agent fields must NOT appear at the top level (only inside active_agent)
-        duplicated_fields = {"llm", "stt", "tts", "vad", "audio", "system_prompt",
-                             "is_active", "created_at", "updated_at"}
+        duplicated_fields = {
+            "llm",
+            "stt",
+            "tts",
+            "vad",
+            "audio",
+            "system_prompt",
+            "is_active",
+            "created_at",
+            "updated_at",
+        }
         present_at_top = duplicated_fields & set(data.keys())
         assert not present_at_top, (
             f"Agent fields leaked to top level of /active response: {present_at_top}"
@@ -78,6 +91,7 @@ async def test_get_active_agent_no_duplicate_top_level_fields():
 # ---------------------------------------------------------------------------
 # B4-3: load_agent memory check uses total_mb (not available_mb)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_load_agent_succeeds_with_low_available_but_sufficient_total_ram():
@@ -138,6 +152,7 @@ async def test_load_agent_rejects_on_truly_insufficient_total_ram():
 # B5-1: PUT /{id} accepts partial payloads (AgentUpdateConfig)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_put_agent_accepts_partial_payload():
     """PUT /v1/agents/{id} must accept a partial update (only name changed)."""
@@ -174,7 +189,9 @@ async def test_put_agent_full_payload_still_works():
         agent_id = agent["id"]
 
         full_update = {**AGENT_PAYLOAD, "name": "Fully Updated Agent"}
-        r = await client.put(f"/v1/agents/{agent_id}", headers=HEADERS, json=full_update)
+        r = await client.put(
+            f"/v1/agents/{agent_id}", headers=HEADERS, json=full_update
+        )
         assert r.status_code == 200, r.text
         assert r.json()["name"] == "Fully Updated Agent"
 
@@ -185,6 +202,7 @@ async def test_put_agent_full_payload_still_works():
 # ---------------------------------------------------------------------------
 # B5-2: DELETE default agent guard uses DEFAULT_AGENT["id"]
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_delete_default_agent_is_forbidden():
@@ -208,6 +226,7 @@ async def test_delete_nonexistent_agent_returns_404():
 # ---------------------------------------------------------------------------
 # General CRUD correctness
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_create_and_list_and_get_agent():
@@ -301,7 +320,11 @@ async def test_create_agent_missing_model_returns_400_install_first():
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         bad_payload = {
             **AGENT_PAYLOAD,
-            "llm": {"model": "uninstalled-fake-model-xyz", "temperature": 0.7, "max_tokens": 256},
+            "llm": {
+                "model": "uninstalled-fake-model-xyz",
+                "temperature": 0.7,
+                "max_tokens": 256,
+            },
         }
         r = await client.post("/v1/agents", headers=HEADERS, json=bad_payload)
         assert r.status_code == 400

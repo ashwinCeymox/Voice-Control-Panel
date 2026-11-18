@@ -1,0 +1,9 @@
+table inet voice_local {
+  chain output {
+    type filter hook output priority 0; policy accept;
+    # Engines: only the voiceagent user may connect to internal loopback ports
+    oifname "lo" tcp dport { 8080, 8880, 8088 } meta skuid != "voiceagent" drop
+    # Gateway: only caddy reverse proxy + voiceagent internal calls
+    oifname "lo" tcp dport 8000 meta skuid != { "caddy", "voiceagent" } drop
+  }
+}

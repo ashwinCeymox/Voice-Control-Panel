@@ -14,11 +14,8 @@ import { AudioOrb, OrbState } from '../components/AudioOrb';
 import { StreamingPCMPlayer } from '../audio/pcmPlayer';
 import { VadController } from '../audio/vadController';
 import { ServerEvent, Agent } from '../types/api';
-import { getApiKey } from '../api/client';
+import { getApiKey, getApiBase, getWsBase } from '../api/client';
 
-const host = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : '127.0.0.1';
-const API_BASE = `http://${host}:8000`;
-const WS_BASE = `ws://${host}:8000`;
 const AUTH_HEADERS = {
   get Authorization() {
     return `Bearer ${getApiKey()}`;
@@ -129,7 +126,7 @@ export const AssistantView: React.FC = () => {
 
   const fetchActiveAgent = async () => {
     try {
-      const res = await fetch(`${API_BASE}/v1/agents/active`, {
+      const res = await fetch(`${getApiBase()}/v1/agents/active`, {
         headers: AUTH_HEADERS,
       });
       if (res.ok) {
@@ -146,7 +143,7 @@ export const AssistantView: React.FC = () => {
 
   const fetchAllAgents = async () => {
     try {
-      const res = await fetch(`${API_BASE}/v1/agents`, {
+      const res = await fetch(`${getApiBase()}/v1/agents`, {
         headers: AUTH_HEADERS,
       });
       if (res.ok) {
@@ -163,7 +160,7 @@ export const AssistantView: React.FC = () => {
     try {
       setIsSwitchingAgent(true);
       setErrorMsg(null);
-      const res = await fetch(`${API_BASE}/v1/agents/${agentId}/load`, {
+      const res = await fetch(`${getApiBase()}/v1/agents/${agentId}/load`, {
         method: 'POST',
         headers: AUTH_HEADERS,
       });
@@ -238,7 +235,7 @@ export const AssistantView: React.FC = () => {
 
   // Connect WebSocket
   const connectWebSocket = async (): Promise<WebSocket> => {
-    const ticketRes = await fetch(`${API_BASE}/v1/auth/ticket`, {
+    const ticketRes = await fetch(`${getApiBase()}/v1/auth/ticket`, {
       method: 'POST',
       headers: AUTH_HEADERS,
     });
@@ -247,7 +244,7 @@ export const AssistantView: React.FC = () => {
 
     return new Promise((resolve, reject) => {
       let settled = false;
-      const ws = new WebSocket(`${WS_BASE}/v1/voice/stream?ticket=${ticket}`);
+      const ws = new WebSocket(`${getWsBase()}/v1/voice/stream?ticket=${ticket}`);
       ws.binaryType = 'arraybuffer';
 
       const timeout = setTimeout(() => {
@@ -699,10 +696,10 @@ export const AssistantView: React.FC = () => {
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5 font-mono flex items-center gap-2">
-              <span>LLM: {activeAgent?.llm?.model || 'llama-3.2-1b-instruct'}</span>
+              <span>LLM: {activeAgent?.llm?.model || 'None'}</span>
               <span>•</span>
               <span>
-                STT: {activeAgent?.stt?.model || 'whisper-base'} ({activeAgent?.stt?.kind || 'batch'})
+                STT: {activeAgent?.stt?.model || 'None'} ({activeAgent?.stt?.kind || 'batch'})
               </span>
               <span>•</span>
               <span>
@@ -891,19 +888,23 @@ export const AssistantView: React.FC = () => {
           {(transcript || partialCaption) && (
             <div>
               <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-1 flex items-center justify-between">
-                <span>You said:</span>
+                <span>{transcript === 'Nothing heard' || transcript === '(no speech detected)' ? 'Status:' : 'You said:'}</span>
                 {partialCaption && (
                   <span className="text-[10px] text-sky-400 font-normal">Streaming captions</span>
                 )}
               </div>
-              <p className="text-sm text-slate-200 bg-slate-900/60 p-3 rounded-lg border border-slate-800/80">
+              <p className={`text-sm p-3 rounded-lg border ${
+                transcript === 'Nothing heard' || transcript === '(no speech detected)'
+                  ? 'text-slate-400 italic bg-slate-950/40 border-slate-800/50'
+                  : 'text-slate-200 bg-slate-900/60 border-slate-800/80'
+              }`}>
                 {partialCaption ? (
                   <>
                     <span className="text-white font-medium">{partialCaption.confirmed}</span>
                     <span className="text-slate-400 italic">{partialCaption.tentative}</span>
                   </>
                 ) : (
-                  transcript
+                  transcript === '(no speech detected)' ? 'Nothing heard' : transcript
                 )}
               </p>
               {sttFallbackNotice && (

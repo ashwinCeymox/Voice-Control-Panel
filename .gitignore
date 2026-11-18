@@ -1,26 +1,58 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+# secrets and local config
+.env
+.env.*
+!.env.example
 
-# Virtual environments
-.venv
-node_modules/
+# python
+.venv/
+__pycache__/
+*.pyc
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# node / frontend build
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/public/vad/
+
+# runtime data
+data/
+logs/
+.pids/
 *.db
 *.db-wal
 *.db-shm
-.env
+*.sqlite
 
-
-models/
+# third-party engines and models (installed by scripts/setup.sh)
+arch/
 backends/
+models/
 cache/
-data/
-.pids/
-logs/
-*.DS_Store
+*.gguf
+*.onnx
+*.bin
+*.safetensors
+*.pt
+*.nemo
+
+# generated audio and scratch
+*.pcm
+output.wav
+tests/output/
+tmp/
+scratch/
+
+# preserved fixtures exception
+!tests/fixtures/**
+
+# OS and editor
 .DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,4 +1,5 @@
 """FastAPI application entry point and lifespan coordinator."""
+
 import uuid
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
@@ -44,16 +45,25 @@ async def _prewarm_models():
     logger.info("Pre-warming LocalAI STT and LLM models in background...")
     # Pre-warm STT
     try:
-        sample_audio = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "sample_utterance.wav"
+        sample_audio = (
+            Path(__file__).resolve().parent.parent
+            / "tests"
+            / "fixtures"
+            / "sample_utterance.wav"
+        )
         if sample_audio.exists():
             from app.services.voice_orchestrator import orchestrator
+
             await orchestrator.stt.transcribe(
                 audio_bytes=sample_audio.read_bytes(),
                 filename="sample.wav",
                 content_type="audio/wav",
                 model=settings.LOCALAI_STT_MODEL,
             )
-            logger.info("LocalAI STT model '%s' pre-warmed successfully", settings.LOCALAI_STT_MODEL)
+            logger.info(
+                "LocalAI STT model '%s' pre-warmed successfully",
+                settings.LOCALAI_STT_MODEL,
+            )
     except Exception as e:
         logger.debug("STT prewarm skipped or failed: %s", e)
 
@@ -61,6 +71,7 @@ async def _prewarm_models():
     try:
         from app.schemas.chat import ChatCompletionRequest, ChatMessage
         from app.services.voice_orchestrator import orchestrator
+
         await orchestrator.llm.complete(
             ChatCompletionRequest(
                 model=settings.LOCALAI_LLM_MODEL,
@@ -68,7 +79,9 @@ async def _prewarm_models():
                 max_tokens=2,
             )
         )
-        logger.info("LocalAI LLM model '%s' pre-warmed successfully", settings.LOCALAI_LLM_MODEL)
+        logger.info(
+            "LocalAI LLM model '%s' pre-warmed successfully", settings.LOCALAI_LLM_MODEL
+        )
     except Exception as e:
         logger.debug("LLM prewarm skipped or failed: %s", e)
 
@@ -83,7 +96,10 @@ async def lifespan(app: FastAPI):
             f"Invalid ENVIRONMENT '{settings.ENVIRONMENT}'. Allowed values: development, staging, production."
         )
     if env in ("production", "staging"):
-        if settings.ADMIN_API_KEY == "dev-voice-key-12345" or not settings.ADMIN_API_KEY:
+        if (
+            settings.ADMIN_API_KEY == "dev-voice-key-12345"
+            or not settings.ADMIN_API_KEY
+        ):
             raise RuntimeError(
                 f"CRITICAL SECURITY CONFIGURATION ERROR: Running in {env} mode with default or empty ADMIN_API_KEY! "
                 "Generate a 256-bit random key with 'openssl rand -hex 32' and set ADMIN_API_KEY in .env before starting."
@@ -95,15 +111,19 @@ async def lifespan(app: FastAPI):
             )
     await init_db()
     from app.services.admin_auth import AdminAuthService
+
     await AdminAuthService.seed_admin_user()
     try:
         from app.services.model_manifest import model_manifest
+
         await model_manifest.sync_manifest()
         from app.services.residency_manager import residency_manager
+
         await residency_manager.initialize()
     except Exception as e:
         logger.warning("Initial models manifest/residency sync failed: %s", e)
     from app.services.hygiene_manager import hygiene_manager
+
     hygiene_manager.start()
     asyncio.create_task(_prewarm_models())
     yield
@@ -122,7 +142,10 @@ app = FastAPI(
 )
 
 # CORS middleware with restricted origins and credential safety (H2)
-cors_origins = settings.CORS_ALLOWED_ORIGINS or ["http://localhost:5173", "http://127.0.0.1:5173"]
+cors_origins = settings.CORS_ALLOWED_ORIGINS or [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
 cors_allow_credentials = False if "*" in cors_origins else True
 
 app.add_middleware(
