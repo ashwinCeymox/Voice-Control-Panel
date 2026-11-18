@@ -8,6 +8,6 @@ pydantic-settings>=2.4.0,<3.0.0
 python-multipart>=0.0.9
 uvicorn[standard]>=0.30.0
 websockets>=13.0
-pytest>=9.2.0
-pytest-asyncio>=1.4.1.post1
+pytest>=8.3.0
+pytest-asyncio==1.4.1.post1
 sherpa-onnx>=1.10.35
