@@ -137,3 +137,68 @@ This document records the exact command runs, test suites, and audit results for
 - Refusal to start under `ENVIRONMENT=production` and `ENVIRONMENT=staging` with default/weak password: **CONFIRMED** (tested via unit tests `test_production_and_staging_startup_safety`).
 - Invalid environment values fail startup: **CONFIRMED**.
 
+---
+
+## Phase 4 Evidence: Repository Hygiene & First-Push Preparation
+
+### 1. Safety Backup Outside Repository (Section 4.0)
+- **Archive Path:** `/tmp/voice-agent-safety-backup.tar.gz` (227 MB)
+- **Status:** Created and verified before executing destructive operations or history changes. Excludes `.git`, `node_modules`, and `.venv`.
+
+### 2. Repository Inventory (Section 4.2)
+- **Document Created:** `docs/REPO_INVENTORY.md`
+- **Classifications:** Top-level items classified as KEEP, IGNORE, MOVE, DELETE, or EXTERNAL.
+- **VAD Strategy Decision:** Silero VAD WASM worklets and ONNX models removed from git index and generated at install/build time via `frontend/scripts/copy-vad-assets.js`.
+
+### 3. Secrets and Personal Data Scrub (Section 4.3)
+- **Link Sanitizer Execution:** 237 absolute `file:///Users/hashhwin047icloud.com/...` paths replaced with relative project links across `docs/` and root documentation.
+- **Local IP Sanitization:** Private Wi-Fi IP `192.168.0.184` completely removed from documentation.
+- **Placeholder Passwords:** Development credential placeholders updated to `change-me-use-12-plus-chars` in `.env.example`.
+- **Verification Scan:**
+  ```bash
+  $ grep -rIn "/Users/hashhwin047icloud.com" --exclude-dir={.git,node_modules,.venv,arch,models,data,logs,tmp} .
+  # 0 hits
+  $ grep -rIn "file:///" docs/ *.md
+  # 0 real links (only doc mentions in pod.md)
+  ```
+
+### 4. Git Configuration & Untracking (Section 4.4)
+- **Hardened `.gitignore`:** Ignores secrets, database files, models (`*.onnx`, `*.gguf`, `*.bin`, `*.pt`, `*.safetensors`), `.venv/`, `node_modules/`, `data/`, `logs/`, `.pids/`, `frontend/public/vad/`.
+- **`.gitattributes`:** Configured with `* text=auto` LF normalization and binary attributes for audio, images, archives, and database files.
+- **VAD Assets Untracked:** 30 binary and wasm files (~110 MB) untracked from git index with `git rm -r --cached frontend/public/vad/` and managed deterministically via `frontend/scripts/copy-vad-assets.js`.
+
+### 5. Structure Cleanup (Section 4.5)
+- Root planning files relocated to `docs/plans/` (25 documents preserved).
+- Symlinks at root (`quick-scan-guide`, `technical-docs`) and scratch files (`output.wav`, `tts-test.py`) cleaned up.
+- Root contains only `README.md`, `AGENTS.md`, and notice files.
+
+### 6. Pinned Versions & Third-Party Notices (Section 4.6)
+- **Pinned Manifest:** `docs/VERSIONS.md` records pinned binaries (LocalAI v2.26.0, local-tts v0.1.0, Sherpa-ONNX 1.10.35), SHA256 checksums, and model weights.
+- **Licenses:** `THIRD_PARTY_NOTICES.md` records upstream licenses for Kokoro (Apache-2.0), Silero VAD (MIT), Sherpa-ONNX (Apache-2.0), LocalAI (MIT), Llama 3.2 (Community License), etc.
+- **Platform Automation:** `scripts/setup.sh`, `scripts/start-all.sh`, and `scripts/stop-all.sh` created with platform detection (Metal on macOS, CUDA on Linux) and loopback port isolation.
+
+### 7. Quality Gate Audits (Section 4.7)
+- **Python Linting:** `ruff check .` -> **All checks passed (0 errors)**.
+- **Python Formatting:** `ruff format --check .` -> **97 files already formatted (clean)**.
+- **Frontend Build:** `cd frontend && npm run build` -> **Exit code 0 (clean)**.
+- **Full Test Suite:** `.venv/bin/pytest tests/ -q` -> **225 passed, 0 failures**.
+- **Auth Matrix Audit:** `.venv/bin/python scripts/auth_matrix_probe.py` -> **All 31 routes verified**.
+- **Python Security Audit:** `.venv/bin/pip-audit` -> **No known vulnerabilities found**.
+- **NPM Security Audit:** `cd frontend && npm audit --omit=dev` -> **found 0 vulnerabilities**.
+- **Pre-commit Config:** `.pre-commit-config.yaml` added.
+
+### 8. Fresh-Clone Portability Check (Section 4.9)
+- **Cloned to `/tmp/clean-check`:** Clean clone from local git repo.
+- **Repo Object Size:** `.git` folder is only **41 MB**.
+- **Test Execution:** `.venv/bin/pytest tests/ -q` -> **220 passed, 5 skipped (VAD onnx model absent prior to setup.sh)**, 0 failures!
+- **Single Tracked File Size Limit:** Largest tracked file is **164 KB** (well below the 5 MB threshold).
+
+### 9. Git Commits in this Execution
+1. `ddf6f26`: `feat(auth): Phase 3 - Super admin authentication, session management, and proxy awareness`
+2. `743e527`: `feat(repo): Phase 4 - Repository hygiene, engine automation, and first-push readiness`
+3. `6cc2540`: `fix(deps): relax requirements to >= pinned floors for python 3.10-3.12 compatibility`
+4. `dcc867d`: `fix(deps): add numpy explicitly to dependencies`
+5. `5c90ce7`: `fix(deps): pin pytest-asyncio to 1.4.1.post1 to prevent NodeId compatibility issue`
+6. `0ace2ba`: `fix(tests): handle clean-clone VAD model absence and client session isolation`
+
+

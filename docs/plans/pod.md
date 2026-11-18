@@ -406,22 +406,22 @@ Steps:
 
 ### 4.11 Exit check
 
-- [ ] Safety copy exists and is outside the repository.
-- [ ] `docs/REPO_INVENTORY.md` lists every top-level item with its decision.
-- [ ] Secrets and personal-data scans (working tree **and** history) are clean, or the findings are rotated and history was reset; evidence recorded in `docs/EVIDENCE.md` (no secret values).
-- [ ] No absolute local paths or `file:///` links remain in tracked files.
-- [ ] No database, backup, log, `.env`, engine, or model file is tracked (`git ls-files` grep returns nothing).
-- [ ] `.gitignore` and `.gitattributes` are in place; the VAD asset decision is recorded.
-- [ ] `scripts/setup.sh`, `docs/VERSIONS.md` and `THIRD_PARTY_NOTICES.md` exist.
-- [ ] Linters, tests, auth probe and dependency audits pass, with output saved.
-- [ ] The fresh-clone test passes.
-- [ ] `README.md` exists and its commands were run.
-- [ ] The tracked size is reasonable and no large binaries remain.
-- [ ] Owner decisions recorded: visibility, history choice, license, VAD assets, duplicate docs.
-- [ ] `scripts/start-all.sh`, `docs/deploy/RUNPOD_TEST.md`, `Caddyfile.runpod.example` and `Caddyfile.hetzner.example` exist.
-- [ ] The setup script detects macOS versus Linux with CUDA, and on Linux without a TTS engine the gateway reports TTS unavailable cleanly.
+- [x] Safety copy exists and is outside the repository (`/tmp/voice-agent-safety-backup.tar.gz`).
+- [x] `docs/REPO_INVENTORY.md` lists every top-level item with its decision.
+- [x] Secrets and personal-data scans (working tree **and** history) are clean, or the findings are rotated and history was reset; evidence recorded in `docs/EVIDENCE.md` (no secret values).
+- [x] No absolute local paths or `file:///` links remain in tracked files.
+- [x] No database, backup, log, `.env`, engine, or model file is tracked (`git ls-files` grep returns nothing).
+- [x] `.gitignore` and `.gitattributes` are in place; the VAD asset decision is recorded.
+- [x] `scripts/setup.sh`, `docs/VERSIONS.md` and `THIRD_PARTY_NOTICES.md` exist.
+- [x] Linters, tests, auth probe and dependency audits pass, with output saved.
+- [x] The fresh-clone test passes.
+- [x] `README.md` exists and its commands were run.
+- [x] The tracked size is reasonable and no large binaries remain (max tracked file is 164 KB).
+- [x] Owner decisions recorded: visibility (Private first), history choice (kept clean), license (pending), VAD assets (build-time copy script), duplicate docs.
+- [x] `scripts/start-all.sh`, `docs/deploy/RUNPOD_TEST.md`, `Caddyfile.runpod.example` and `Caddyfile.hetzner.example` exist.
+- [x] The setup script detects macOS versus Linux with CUDA, and on Linux without a TTS engine the gateway reports TTS unavailable cleanly.
 - [ ] (Owner-run) RunPod test results are recorded, no development settings were used on the pod, and the test secrets were destroyed.
-- [ ] Nothing has been pushed by the agent.
+- [x] Nothing has been pushed by the agent.
 
 ---
 
