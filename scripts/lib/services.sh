@@ -325,6 +325,7 @@ print_banner() {
         printf "  ${BOLD}${YELLOW}🔑 INITIAL ADMIN LOGIN CREDENTIALS (Generated Once):${RESET}\n"
         printf "     • Email:    ${BOLD}%s${RESET}\n" "${admin_email}"
         printf "     • Password: ${BOLD}%s${RESET}\n" "${NEW_ADMIN_INITIAL_PASSWORD_GENERATED}"
+        printf "     • Storage:  ${BOLD}Stored exclusively in SQLite database (never in .env)${RESET}\n"
         printf "     ${DIM}(You will be prompted to change this password on your first login)${RESET}\n"
         if [ -n "${NEW_ADMIN_API_KEY_GENERATED:-}" ]; then
             printf "     • Admin API Key: ${BOLD}%s${RESET}\n" "${NEW_ADMIN_API_KEY_GENERATED}"

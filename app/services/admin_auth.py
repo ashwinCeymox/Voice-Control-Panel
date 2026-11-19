@@ -66,8 +66,11 @@ class AdminAuthService:
         _IP_FAILURES.pop(client_ip, None)
 
     @classmethod
-    async def seed_admin_user(cls) -> None:
-        """Seed super admin on startup if admin_user table is empty."""
+    async def seed_admin_user(cls) -> Optional[str]:
+        """Seed super admin on startup if admin_user table is empty.
+        Stores argon2id password hash exclusively in SQLite database (never in .env).
+        Returns generated password if fresh seed occurred, else None.
+        """
         env = settings.ENVIRONMENT.lower()
         if env not in ("development", "staging", "production"):
             raise RuntimeError(
@@ -81,16 +84,25 @@ class AdminAuthService:
                 row = await cursor.fetchone()
                 if row:
                     logger.debug("Admin user already initialized (%s)", row["email"])
-                    return
+                    return None
 
-        # Refuse to start in staging or production with unsafe or default password
+        # Determine password: if override provided in test env, use it. Otherwise generate random.
         init_pass = settings.ADMIN_INITIAL_PASSWORD or ""
+        generated = False
+
         if env in ("staging", "production"):
-            if not init_pass or init_pass == "adminVOICE3.md" or len(init_pass) < 12:
+            if init_pass == "adminVOICE3.md" or (init_pass and len(init_pass) < 12):
                 raise RuntimeError(
                     f"CRITICAL SECURITY CONFIGURATION ERROR: Running in {env} with missing, default, or weak ADMIN_INITIAL_PASSWORD! "
                     "ADMIN_INITIAL_PASSWORD must be set to a secure, random string of at least 12 characters."
                 )
+
+        if not init_pass:
+            init_pass = secrets.token_urlsafe(16)
+            generated = True
+        elif env == "development" and init_pass == "adminVOICE3.md":
+            # Retain developer default in dev environment
+            pass
 
         pass_hash = _ph.hash(init_pass)
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -106,8 +118,13 @@ class AdminAuthService:
             )
             await db.commit()
         logger.info(
-            "Admin user seeded successfully with email: %s", settings.ADMIN_EMAIL
+            "Admin user seeded successfully with email: %s in SQLite database", settings.ADMIN_EMAIL
         )
+        if generated:
+            logger.warning(
+                "Initial admin password generated and stored exclusively in SQLite database (never in .env)."
+            )
+        return init_pass if generated else None
 
     @classmethod
     async def get_admin_user(cls) -> Optional[dict]:

@@ -110,15 +110,16 @@ case "${COMMAND}" in
     reset-admin)
         log_info "=== Break-Glass Admin Password Reset ==="
         NEW_PASS="$(generate_secret 16)"
-        set_env_val "ADMIN_INITIAL_PASSWORD" "${NEW_PASS}"
         if [ -f "${ROOT_DIR}/.venv/bin/python" ]; then
-            "${ROOT_DIR}/.venv/bin/python" -m app.cli reset-admin --password "${NEW_PASS}" 2>/dev/null || true
+            "${ROOT_DIR}/.venv/bin/python" -m app.cli reset-admin --password "${NEW_PASS}"
+        else
+            python3 -m app.cli reset-admin --password "${NEW_PASS}"
         fi
-        local admin_email
         admin_email="$(get_env_val "ADMIN_EMAIL" "admin@voicepanel.io")"
         printf "\n  ${BOLD}${YELLOW}🔑 NEW ADMIN CREDENTIALS GENERATED:${RESET}\n"
         printf "     • Email:    ${BOLD}%s${RESET}\n" "${admin_email}"
         printf "     • Password: ${BOLD}%s${RESET}\n" "${NEW_PASS}"
+        printf "     • Storage:  ${BOLD}Stored exclusively in SQLite database (never in .env)${RESET}\n"
         printf "     ${DIM}(Password must be changed at next login)${RESET}\n\n"
         exit 0
         ;;
@@ -148,6 +149,17 @@ case "${COMMAND}" in
             run_installer
         fi
         resolve_all_ports
+
+        # Seed initial super admin in SQLite DB if table is empty (never written to .env)
+        if [ -f "${ROOT_DIR}/.venv/bin/python" ]; then
+            seed_res="$("${ROOT_DIR}/.venv/bin/python" -m app.cli seed-admin 2>/dev/null || true)"
+            if [[ "${seed_res}" == *"ADMIN_SEED_GENERATED:"* ]]; then
+                NEW_ADMIN_INITIAL_PASSWORD_GENERATED="${seed_res#*ADMIN_SEED_GENERATED:}"
+                NEW_ADMIN_INITIAL_PASSWORD_GENERATED="${NEW_ADMIN_INITIAL_PASSWORD_GENERATED%%$'\n'*}"
+                export NEW_ADMIN_INITIAL_PASSWORD_GENERATED
+            fi
+        fi
+
         start_services
         print_banner
 

@@ -121,12 +121,15 @@ if [ "${CURRENT_ENV}" = "production" ] || [ "${CURRENT_ENV}" = "staging" ]; then
         log_ok "ADMIN_API_KEY is customized for ${CURRENT_ENV}."
     fi
 
-    INITIAL_PASS="${ADMIN_INITIAL_PASSWORD:-adminVOICE3.md}"
-    if [ "${INITIAL_PASS}" = "adminVOICE3.md" ] || [ ${#INITIAL_PASS} -lt 12 ]; then
-        log_fail "CRITICAL: ADMIN_INITIAL_PASSWORD must be >= 12 characters and not default in ${CURRENT_ENV}."
-        ERRORS=$((ERRORS + 1))
+    if [ -n "${ADMIN_INITIAL_PASSWORD:-}" ]; then
+        if [ "${ADMIN_INITIAL_PASSWORD}" = "adminVOICE3.md" ] || [ ${#ADMIN_INITIAL_PASSWORD} -lt 12 ]; then
+            log_fail "CRITICAL: ADMIN_INITIAL_PASSWORD must be >= 12 characters and not default in ${CURRENT_ENV}."
+            ERRORS=$((ERRORS + 1))
+        else
+            log_ok "ADMIN_INITIAL_PASSWORD satisfies security requirements."
+        fi
     else
-        log_ok "ADMIN_INITIAL_PASSWORD satisfies security requirements."
+        log_ok "Admin password security: Passwords stored securely in SQLite database (never in .env)."
     fi
 
     if [ -z "${API_KEY_HASH_SECRET:-}" ] || [ "${API_KEY_HASH_SECRET}" = "generate-a-secure-random-secret-key-32-bytes" ]; then

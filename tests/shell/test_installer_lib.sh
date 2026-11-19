@@ -60,7 +60,12 @@ if [[ "${admin_key}" != va_live_* ]]; then
     echo "FAIL: ADMIN_API_KEY was not properly generated (${admin_key})"
     exit 1
 fi
-echo "  ✓ .env initialized with mode 600 and random keys"
+
+if grep -q "ADMIN_INITIAL_PASSWORD" "${ENV_FILE}"; then
+    echo "FAIL: ADMIN_INITIAL_PASSWORD found in .env (must be database-only)"
+    exit 1
+fi
+echo "  ✓ .env initialized with mode 600, random keys, and passwords excluded from .env"
 
 # ------------------------------------------------------------------------------
 # Test 2: .env preserves existing user values (Non-destructive)

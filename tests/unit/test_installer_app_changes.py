@@ -9,7 +9,7 @@ import os
 import pytest
 from unittest.mock import patch
 
-from app.core.config import Settings
+from app.core.config import Settings, settings
 from app.services.admin_auth import AdminAuthService
 
 
@@ -64,3 +64,38 @@ def test_startup_guard_staging_rejects_weak_initial_password():
             if s.ENVIRONMENT in ("staging", "production") and len(s.ADMIN_INITIAL_PASSWORD or "") < 12:
                 raise RuntimeError("CRITICAL SECURITY CONFIGURATION ERROR: Weak initial password")
         assert "CRITICAL SECURITY CONFIGURATION ERROR" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_database_only_admin_password_storage():
+    """Admin password must be stored exclusively in SQLite database (argon2id) and never in .env."""
+    from app.storage.database import get_db
+
+    # Clean admin_user table for this test
+    async with get_db() as db:
+        await db.execute("DELETE FROM admin_user")
+        await db.commit()
+
+    with patch.object(settings, "ADMIN_INITIAL_PASSWORD", None), patch.object(settings, "ENVIRONMENT", "production"):
+        gen_pass = await AdminAuthService.seed_admin_user()
+        assert gen_pass is not None
+        assert len(gen_pass) >= 16
+
+        # Check DB has argon2id hash
+        user = await AdminAuthService.get_admin_user()
+        assert user is not None
+        assert user["password_hash"].startswith("$argon2id$")
+        assert user["must_change_password"] == 1
+
+        # Verify password verifies against hash
+        from argon2 import PasswordHasher
+        ph = PasswordHasher()
+        assert ph.verify(user["password_hash"], gen_pass)
+
+    # Restore admin_user with dev password for subsequent tests
+    async with get_db() as db:
+        await db.execute("DELETE FROM admin_user")
+        await db.commit()
+    with patch.object(settings, "ADMIN_INITIAL_PASSWORD", "adminVOICE3.md"), patch.object(settings, "ENVIRONMENT", "development"):
+        await AdminAuthService.seed_admin_user()
+

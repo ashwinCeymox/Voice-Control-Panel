@@ -158,13 +158,9 @@ init_env() {
         NEW_ADMIN_API_KEY_GENERATED="${new_admin_key}"
     fi
 
-    local cur_initial_pass
-    cur_initial_pass="$(get_env_val "ADMIN_INITIAL_PASSWORD")"
-    if [ -z "${cur_initial_pass}" ] || [ "${cur_initial_pass}" = "admin123" ] || [ "${cur_initial_pass}" = "admin123456" ]; then
-        local new_pass
-        new_pass="$(generate_secret 16)"
-        set_env_val "ADMIN_INITIAL_PASSWORD" "${new_pass}"
-        NEW_ADMIN_INITIAL_PASSWORD_GENERATED="${new_pass}"
+    # Ensure passwords are never stored in .env (stored in SQLite db only)
+    if grep -q "^ADMIN_INITIAL_PASSWORD=" "${ENV_FILE}" 2>/dev/null; then
+        sed -i.bak '/^ADMIN_INITIAL_PASSWORD=/d' "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
     fi
 
     # Read active values into global variables

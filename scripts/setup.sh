@@ -132,31 +132,34 @@ fi
 # 6. Environment Configuration (.env)
 if [ ! -f "${ROOT_DIR}/.env" ]; then
     log_info "Generating secure .env configuration from .env.example..."
-    RAND_PASSWORD="$("${ROOT_DIR}/.venv/bin/python" -c "import secrets; print(secrets.token_urlsafe(16))")"
     RAND_ADMIN_KEY="$("${ROOT_DIR}/.venv/bin/python" -c "import secrets; print('va-admin-' + secrets.token_urlsafe(32))")"
     RAND_HASH_SECRET="$("${ROOT_DIR}/.venv/bin/python" -c "import secrets; print(secrets.token_hex(32))")"
 
     sed \
-        -e "s|ADMIN_INITIAL_PASSWORD=.*|ADMIN_INITIAL_PASSWORD=${RAND_PASSWORD}|g" \
         -e "s|ADMIN_API_KEY=.*|ADMIN_API_KEY=${RAND_ADMIN_KEY}|g" \
         -e "s|API_KEY_HASH_SECRET=.*|API_KEY_HASH_SECRET=${RAND_HASH_SECRET}|g" \
         "${ROOT_DIR}/.env.example" > "${ROOT_DIR}/.env"
 
     chmod 600 "${ROOT_DIR}/.env"
     log_ok "Generated .env with cryptographically random secrets."
-    echo -e "${BOLD}${YELLOW}--------------------------------------------------------------------${RESET}"
-    echo -e "${BOLD}🔑 INITIAL SUPER ADMIN CREDENTIALS GENERATED:${RESET}"
-    echo -e "   Username:         ${GREEN}admin${RESET}"
-    echo -e "   Initial Password: ${GREEN}${RAND_PASSWORD}${RESET}"
-    echo -e "   (You will be required to change this password on initial login)"
-    echo -e "${BOLD}${YELLOW}--------------------------------------------------------------------${RESET}"
 else
     log_ok ".env file already exists. Preserving existing secrets."
 fi
 
-# 7. Database Initialization
-log_info "Initializing SQLite database schema and seeding super admin user..."
-"${ROOT_DIR}/.venv/bin/python" -c "import asyncio; from app.storage.database import init_db; asyncio.run(init_db())"
+# 7. Database Initialization & Super Admin Seeding
+log_info "Initializing SQLite database schema and seeding super admin user in database..."
+SEED_OUT="$("${ROOT_DIR}/.venv/bin/python" -m app.cli seed-admin 2>/dev/null || true)"
+if [[ "${SEED_OUT}" == *"ADMIN_SEED_GENERATED:"* ]]; then
+    GEN_PASS="${SEED_OUT#*ADMIN_SEED_GENERATED:}"
+    GEN_PASS="${GEN_PASS%%$'\n'*}"
+    echo -e "${BOLD}${YELLOW}--------------------------------------------------------------------${RESET}"
+    echo -e "${BOLD}🔑 INITIAL SUPER ADMIN CREDENTIALS GENERATED:${RESET}"
+    echo -e "   Username:         ${GREEN}admin@voicepanel.io${RESET}"
+    echo -e "   Initial Password: ${GREEN}${GEN_PASS}${RESET}"
+    echo -e "   Storage:          ${GREEN}Stored exclusively in SQLite database (never in .env)${RESET}"
+    echo -e "   (You will be required to change this password on initial login)"
+    echo -e "${BOLD}${YELLOW}--------------------------------------------------------------------${RESET}"
+fi
 log_ok "Database initialized."
 
 echo -e "\n${BOLD}${GREEN}====================================================================${RESET}"

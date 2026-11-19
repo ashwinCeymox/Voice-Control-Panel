@@ -83,7 +83,8 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = os.environ.get("ENVIRONMENT", "development")
     ADMIN_EMAIL: str = os.environ.get("ADMIN_EMAIL", "admin@voicepanel.io")
     ADMIN_INITIAL_PASSWORD: Optional[str] = os.environ.get(
-        "ADMIN_INITIAL_PASSWORD", "adminVOICE3.md"
+        "ADMIN_INITIAL_PASSWORD",
+        "adminVOICE3.md" if os.environ.get("ENVIRONMENT", "development") == "development" else None,
     )
     GATEWAY_HOST: str = os.environ.get("GATEWAY_HOST", "127.0.0.1")
     GATEWAY_PORT: int = int(os.environ.get("GATEWAY_PORT", "8000"))
