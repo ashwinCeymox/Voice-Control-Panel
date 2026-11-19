@@ -30,6 +30,7 @@ DRY_RUN="false"
 SKIP_INSTALL="false"
 SKIP_MODELS="false"
 FOREGROUND="false"
+CUSTOM_ADMIN_PASSWORD=""
 
 COMMAND="up"
 
@@ -51,7 +52,15 @@ while [ $# -gt 0 ]; do
             FOREGROUND="true"
             shift
             ;;
-        up|start|stop|restart|status|install|ports|url|doctor|logs|reset-admin)
+        reset-admin)
+            COMMAND="$1"
+            shift
+            if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
+                CUSTOM_ADMIN_PASSWORD="$1"
+                shift
+            fi
+            ;;
+        up|start|stop|restart|status|install|ports|url|doctor|logs)
             COMMAND="$1"
             shift
             ;;
@@ -106,7 +115,7 @@ case "${COMMAND}" in
         ;;
     reset-admin)
         log_info "=== Break-Glass Admin Password Reset ==="
-        NEW_PASS="${2:-}"
+        NEW_PASS="${CUSTOM_ADMIN_PASSWORD:-}"
         if [ -z "${NEW_PASS}" ]; then
             NEW_PASS="$(generate_secret 16)"
         fi
