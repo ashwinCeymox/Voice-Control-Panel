@@ -250,6 +250,10 @@ start_gateway() {
         count=$((count + 1))
     done
     log_warn "FastAPI Gateway health probe timed out after ${max_wait}s; check logs/backend.log"
+    if [ -f "${LOGS_DIR}/backend.log" ]; then
+        log_warn "=== Recent logs from logs/backend.log ==="
+        tail -n 20 "${LOGS_DIR}/backend.log" >&2
+    fi
 }
 
 # Start Vite Frontend (development mode only)
