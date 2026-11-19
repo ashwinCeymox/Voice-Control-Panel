@@ -56,6 +56,10 @@ scratch/
 # preserved fixtures exception
 !tests/fixtures/**
 
+# archived notes & scratch
+archive/
+
+
 # OS and editor
 .DS_Store
 .idea/
