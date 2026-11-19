@@ -208,6 +208,32 @@ start_gateway() {
         set_env_val "GATEWAY_HOST" "0.0.0.0"
     fi
 
+    # Ensure frontend production assets (frontend/dist/index.html) exist
+    local frontend_dir="${ROOT_DIR}/frontend"
+    if [ ! -f "${frontend_dir}/dist/index.html" ]; then
+        if ! command -v npm >/dev/null 2>&1 && [ -x "${TOOLS_DIR}/node/bin/npm" ]; then
+            export PATH="${TOOLS_DIR}/node/bin:${PATH}"
+        fi
+        if command -v npm >/dev/null 2>&1; then
+            log_info "Production frontend assets missing. Building web control panel (${frontend_dir}/dist)..."
+            (
+                cd "${frontend_dir}"
+                if [ ! -d "node_modules" ]; then
+                    log_info "Installing frontend npm packages..."
+                    npm ci --prefer-offline --no-audit || npm install --no-audit
+                fi
+                npm run build
+            )
+            if [ -f "${frontend_dir}/dist/index.html" ]; then
+                log_ok "Frontend production assets compiled successfully."
+            else
+                log_warn "Frontend build did not create dist/index.html; gateway will show initializing screen."
+            fi
+        else
+            log_warn "npm not found in PATH; cannot build frontend/dist automatically."
+        fi
+    fi
+
     log_info "Starting FastAPI Gateway Orchestrator on ${GATEWAY_HOST}:${GATEWAY_PORT}..."
     local uvicorn_exec="${ROOT_DIR}/.venv/bin/uvicorn"
 

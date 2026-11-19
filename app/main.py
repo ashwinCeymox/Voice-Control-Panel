@@ -191,36 +191,59 @@ app.include_router(metrics_router)
 app.include_router(panel_auth_router)
 app.include_router(api_testing_router)
 
-# Mount Control Panel static SPA if built (supports single-port / single-origin RunPod & Hetzner deployment)
+# Mount Control Panel static SPA (supports single-port / single-origin RunPod & Hetzner deployment)
 frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
-if frontend_dist.is_dir():
-    from starlette.staticfiles import StaticFiles
-    from starlette.responses import FileResponse, RedirectResponse
+assets_dir = frontend_dist / "assets"
+assets_dir.mkdir(parents=True, exist_ok=True)
 
-    assets_dir = frontend_dist / "assets"
-    if assets_dir.is_dir():
-        app.mount(
-            "/voicecontrolpanel/assets",
-            StaticFiles(directory=str(assets_dir)),
-            name="controlpanel_assets",
-        )
+from starlette.staticfiles import StaticFiles
+from starlette.responses import FileResponse, RedirectResponse, HTMLResponse, JSONResponse
 
-    @app.get("/voicecontrolpanel")
-    @app.get("/voicecontrolpanel/")
-    async def serve_controlpanel_root():
-        return FileResponse(frontend_dist / "index.html")
+app.mount(
+    "/voicecontrolpanel/assets",
+    StaticFiles(directory=str(assets_dir)),
+    name="controlpanel_assets",
+)
 
-    @app.get("/voicecontrolpanel/{full_path:path}")
-    async def serve_controlpanel(full_path: str = ""):
-        target = frontend_dist / full_path
-        if full_path and target.is_file():
-            return FileResponse(target)
-        return FileResponse(frontend_dist / "index.html")
+
+@app.get("/voicecontrolpanel")
+@app.get("/voicecontrolpanel/")
+async def serve_controlpanel_root():
+    index_file = frontend_dist / "index.html"
+    if index_file.is_file():
+        return FileResponse(index_file)
+    return HTMLResponse(
+        """<!DOCTYPE html>
+<html>
+<head><title>Voice Control Panel - Initializing</title><meta http-equiv="refresh" content="5"></head>
+<body style="font-family:sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+<div style="text-align:center;max-width:520px;padding:2.5rem;background:#1e293b;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,0.5);border:1px solid #334155;">
+<h2 style="color:#38bdf8;margin-top:0;">🎙️ Voice Control Panel</h2>
+<p style="color:#94a3b8;line-height:1.6;">Frontend production build is initializing or not yet compiled.<br/>This page will refresh automatically in 5 seconds...</p>
+<p style="font-size:0.85rem;color:#64748b;margin-bottom:0;">To compile manually: <code style="color:#f1f5f9;background:#0f172a;padding:2px 6px;border-radius:4px;">cd frontend && npm run build</code></p>
+</div>
+</body>
+</html>""",
+        status_code=503,
+    )
+
+
+@app.get("/voicecontrolpanel/{full_path:path}")
+async def serve_controlpanel(full_path: str = ""):
+    target = frontend_dist / full_path
+    if full_path and target.is_file():
+        return FileResponse(target)
+    index_file = frontend_dist / "index.html"
+    if index_file.is_file():
+        return FileResponse(index_file)
+    return JSONResponse(
+        {"error": "Resource not found or frontend still building"}, status_code=404
+    )
 
 
 @app.get("/")
 async def root(request: Request):
-    if settings.SERVE_FRONTEND and frontend_dist.is_dir():
+    if settings.SERVE_FRONTEND:
         accept = request.headers.get("accept", "")
         if "text/html" in accept:
             return RedirectResponse(url="/voicecontrolpanel", status_code=307)

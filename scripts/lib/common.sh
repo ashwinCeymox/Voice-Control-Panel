@@ -42,6 +42,10 @@ STAMPS_DIR="${ROOT_DIR}/.install-stamps"
 
 mkdir -p "${RUN_DIR}" "${LOGS_DIR}" "${TOOLS_DIR}" "${STAMPS_DIR}"
 
+if [ -d "${TOOLS_DIR}/node/bin" ]; then
+    export PATH="${TOOLS_DIR}/node/bin:${PATH}"
+fi
+
 # Detect Platform
 detect_platform() {
     OS_TYPE="$(uname -s | tr '[:upper:]' '[:lower:]')"
