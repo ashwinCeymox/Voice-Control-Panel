@@ -1,8 +1,9 @@
 """Application configuration and settings."""
 
+import json
 import os
 from typing import Any, List, Optional, Union
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,6 +11,7 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     APP_HOST: str = "127.0.0.1"
     APP_PORT: int = 8000
+    SERVE_FRONTEND: bool = True
     APP_DATABASE_PATH: str = os.environ.get("APP_DATABASE_PATH", "voice_platform.db")
     MODELS_MANIFEST_PATH: str = os.environ.get(
         "MODELS_MANIFEST_PATH", "data/installed_models_manifest.json"
@@ -97,7 +99,29 @@ class Settings(BaseSettings):
     API_KEY_HASH_SECRET: str = os.environ.get(
         "API_KEY_HASH_SECRET", "dev-secret-key-change-me-in-production-use-high-entropy"
     )
-    CORS_ALLOWED_ORIGINS: List[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    CORS_ALLOWED_ORIGINS: Union[List[str], str] = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+    @field_validator("CORS_ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def parse_cors_allowed_origins(cls, v: Any) -> List[str]:
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return ["http://localhost:5173", "http://127.0.0.1:5173"]
+            if v.startswith("[") and v.endswith("]"):
+                try:
+                    parsed = json.loads(v)
+                    if isinstance(parsed, list):
+                        return [str(origin).strip() for origin in parsed if str(origin).strip()]
+                except Exception:
+                    pass
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        if isinstance(v, (list, tuple)):
+            return [str(origin).strip() for origin in v if str(origin).strip()]
+        return ["http://localhost:5173", "http://127.0.0.1:5173"]
     ENABLE_DOCS: bool = False
     LOG_TRANSCRIPTS: bool = False
     STT_ALLOW_FALLBACK: bool = False

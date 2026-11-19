@@ -99,3 +99,25 @@ async def test_database_only_admin_password_storage():
     with patch.object(settings, "ADMIN_INITIAL_PASSWORD", "adminVOICE3.md"), patch.object(settings, "ENVIRONMENT", "development"):
         await AdminAuthService.seed_admin_user()
 
+
+def test_cors_allowed_origins_parsing():
+    """CORS_ALLOWED_ORIGINS must parse comma-separated string, JSON list, or python list."""
+    with patch.dict(os.environ, {"CORS_ALLOWED_ORIGINS": "http://localhost:5173,http://localhost:80"}):
+        s = Settings()
+        assert s.CORS_ALLOWED_ORIGINS == ["http://localhost:5173", "http://localhost:80"]
+
+    with patch.dict(os.environ, {"CORS_ALLOWED_ORIGINS": '["https://panel.example.com", "http://localhost:5173"]'}):
+        s = Settings()
+        assert s.CORS_ALLOWED_ORIGINS == ["https://panel.example.com", "http://localhost:5173"]
+
+    with patch.dict(os.environ, {"CORS_ALLOWED_ORIGINS": ""}):
+        s = Settings()
+        assert s.CORS_ALLOWED_ORIGINS == ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+
+def test_serve_frontend_setting():
+    """SERVE_FRONTEND must be accessible on Settings and default to True."""
+    s = Settings()
+    assert s.SERVE_FRONTEND is True
+
+
