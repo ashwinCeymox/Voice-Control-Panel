@@ -106,7 +106,10 @@ case "${COMMAND}" in
         ;;
     reset-admin)
         log_info "=== Break-Glass Admin Password Reset ==="
-        NEW_PASS="$(generate_secret 16)"
+        NEW_PASS="${2:-}"
+        if [ -z "${NEW_PASS}" ]; then
+            NEW_PASS="$(generate_secret 16)"
+        fi
         if [ -f "${ROOT_DIR}/.venv/bin/python" ]; then
             "${ROOT_DIR}/.venv/bin/python" -m app.cli reset-admin --password "${NEW_PASS}"
         else

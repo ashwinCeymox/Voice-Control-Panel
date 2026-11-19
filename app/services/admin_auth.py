@@ -147,11 +147,6 @@ class AdminAuthService:
         now_ts = now.timestamp()
         generic_error = "Invalid email or password."
 
-        # Check IP throttling
-        if cls._is_ip_throttled(client_ip, now_ts):
-            logger.warning("Login attempt blocked: IP %s is throttled", client_ip)
-            raise UnauthorizedError(generic_error)
-
         admin = await cls.get_admin_user()
         if not admin:
             # Constant-time dummy check
@@ -177,6 +172,14 @@ class AdminAuthService:
                     raise UnauthorizedError(generic_error)
             except (ValueError, TypeError):
                 pass
+        elif admin.get("failed_attempts", 0) == 0:
+            # Reset IP failure counter if account is cleanly reset
+            cls._reset_ip_failures(client_ip)
+
+        # Check IP throttling
+        if cls._is_ip_throttled(client_ip, now_ts):
+            logger.warning("Login attempt blocked: IP %s is throttled", client_ip)
+            raise UnauthorizedError(generic_error)
 
         # Verify email match (case-insensitive)
         email_match = admin["email"].strip().lower() == email.strip().lower()
@@ -375,7 +378,7 @@ class AdminAuthService:
         new_hash = _ph.hash(new_password)
         now_iso = datetime.now(timezone.utc).isoformat()
         async with get_db() as db:
-            await db.execute(
+            cursor = await db.execute(
                 """
                 UPDATE admin_user
                 SET password_hash = ?, must_change_password = 1, failed_attempts = 0, locked_until = NULL, updated_at = ?
@@ -383,7 +386,16 @@ class AdminAuthService:
                 """,
                 (new_hash, now_iso),
             )
+            if cursor.rowcount == 0:
+                await db.execute(
+                    """
+                    INSERT INTO admin_user (id, email, password_hash, must_change_password, failed_attempts, locked_until, updated_at)
+                    VALUES (1, ?, ?, 1, 0, NULL, ?)
+                    """,
+                    (settings.ADMIN_EMAIL, new_hash, now_iso),
+                )
             await db.execute("DELETE FROM admin_session")
             await db.commit()
+        _IP_FAILURES.clear()
         logger.warning("Admin password was reset via break-glass command.")
         return new_password
