@@ -38,7 +38,7 @@ capture_metrics() {
 
     # 3. Memory snapshot
     local rss_mb
-    rss_mb=$(ps -o rss= -p $$ 2>/dev/null | awk '{print round($1/1024, 2)}' || echo "0")
+    rss_mb=$(ps -o rss= -p $$ 2>/dev/null | awk '{print int($1/1024)}' || echo "0")
 
     python3 -c "
 import json
@@ -112,9 +112,12 @@ if pct_dur > 15.0:
     regressions.append(f'Execution time worsened by {pct_dur:.1f}% (threshold: 10%)')
 
 # Auth routes
-print(f'Auth Matrix Routes          | {b["auth_routes_tested"]:10d} | {c["auth_routes_tested"]:10d} | {c["auth_routes_tested"] - b["auth_routes_tested"]:+d}')
-if c['auth_routes_tested'] < b['auth_routes_tested']:
-    regressions.append(f'Auth matrix routes tested dropped from {b[\"auth_routes_tested\"]} to {c[\"auth_routes_tested\"]}')
+b_auth = b.get('auth_routes_tested', 0)
+c_auth = c.get('auth_routes_tested', 0)
+auth_diff = c_auth - b_auth
+print(f'Auth Matrix Routes          | {b_auth:10d} | {c_auth:10d} | {auth_diff:+d}')
+if c_auth < b_auth:
+    regressions.append(f'Auth matrix routes tested dropped from {b_auth} to {c_auth}')
 
 print('==========================================================')
 if regressions:

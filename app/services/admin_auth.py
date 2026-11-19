@@ -346,3 +346,27 @@ class AdminAuthService:
             "Admin password changed successfully and all previous sessions invalidated."
         )
         return new_session_id
+
+    @classmethod
+    async def reset_admin_password(cls, new_password: Optional[str] = None) -> str:
+        """Break-glass admin password reset:
+        Generates or sets new password, enforces must_change_password=1, invalidates all sessions, clears lockouts.
+        Returns the plaintext password.
+        """
+        if not new_password:
+            new_password = secrets.token_urlsafe(16)
+        new_hash = _ph.hash(new_password)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        async with get_db() as db:
+            await db.execute(
+                """
+                UPDATE admin_user
+                SET password_hash = ?, must_change_password = 1, failed_attempts = 0, locked_until = NULL, updated_at = ?
+                WHERE id = 1
+                """,
+                (new_hash, now_iso),
+            )
+            await db.execute("DELETE FROM admin_session")
+            await db.commit()
+        logger.warning("Admin password was reset via break-glass command.")
+        return new_password

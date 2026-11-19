@@ -1,7 +1,8 @@
 """Application configuration and settings."""
 
 import os
-from typing import List, Optional
+from typing import Any, List, Optional, Union
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,7 +15,8 @@ class Settings(BaseSettings):
         "MODELS_MANIFEST_PATH", "data/installed_models_manifest.json"
     )
 
-    # LocalAI
+    # Ports & Internal Engine Base URLs
+    LOCALAI_PORT: int = 8080
     LOCALAI_BASE_URL: str = "http://127.0.0.1:8080"
     LOCALAI_MODELS_PATH: Optional[str] = os.environ.get(
         "LOCALAI_MODELS_PATH",
@@ -28,6 +30,7 @@ class Settings(BaseSettings):
     LOCALAI_ALLOWED_STT_MODELS: Optional[str] = None
 
     # local-tts
+    TTS_PORT: int = 8880
     LOCAL_TTS_HTTP_BASE_URL: str = "http://127.0.0.1:8880"
     LOCAL_TTS_WS_BASE_URL: str = "ws://127.0.0.1:8880"
     LOCAL_TTS_MODEL: str = "kokoro"
@@ -35,12 +38,38 @@ class Settings(BaseSettings):
     LOCAL_TTS_SPEED: float = 1.0
 
     # Streaming STT (sherpa-onnx / Moonshine)
-    STREAMING_STT_URL: str = os.environ.get(
-        "STREAMING_STT_URL", "http://127.0.0.1:8088"
-    )
-    STREAMING_STT_WS_URL: str = os.environ.get(
-        "STREAMING_STT_WS_URL", "ws://127.0.0.1:8088/ws"
-    )
+    STT_PORT: int = 8088
+    STREAMING_STT_URL: str = "http://127.0.0.1:8088"
+    STREAMING_STT_WS_URL: str = "ws://127.0.0.1:8088/ws"
+
+    @model_validator(mode="before")
+    @classmethod
+    def derive_ports_and_urls(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            localai_port = data.get("LOCALAI_PORT") or os.environ.get("LOCALAI_PORT")
+            if localai_port:
+                base_url = data.get("LOCALAI_BASE_URL") or os.environ.get("LOCALAI_BASE_URL", "")
+                if not base_url or base_url.startswith("http://127.0.0.1:") or base_url.startswith("http://localhost:"):
+                    data["LOCALAI_BASE_URL"] = f"http://127.0.0.1:{localai_port}"
+
+            tts_port = data.get("TTS_PORT") or os.environ.get("TTS_PORT")
+            if tts_port:
+                base_http = data.get("LOCAL_TTS_HTTP_BASE_URL") or os.environ.get("LOCAL_TTS_HTTP_BASE_URL", "")
+                if not base_http or base_http.startswith("http://127.0.0.1:") or base_http.startswith("http://localhost:"):
+                    data["LOCAL_TTS_HTTP_BASE_URL"] = f"http://127.0.0.1:{tts_port}"
+                base_ws = data.get("LOCAL_TTS_WS_BASE_URL") or os.environ.get("LOCAL_TTS_WS_BASE_URL", "")
+                if not base_ws or base_ws.startswith("ws://127.0.0.1:") or base_ws.startswith("ws://localhost:"):
+                    data["LOCAL_TTS_WS_BASE_URL"] = f"ws://127.0.0.1:{tts_port}"
+
+            stt_port = data.get("STT_PORT") or os.environ.get("STT_PORT")
+            if stt_port:
+                stt_url = data.get("STREAMING_STT_URL") or os.environ.get("STREAMING_STT_URL", "")
+                if not stt_url or stt_url.startswith("http://127.0.0.1:") or stt_url.startswith("http://localhost:"):
+                    data["STREAMING_STT_URL"] = f"http://127.0.0.1:{stt_port}"
+                stt_ws = data.get("STREAMING_STT_WS_URL") or os.environ.get("STREAMING_STT_WS_URL", "")
+                if not stt_ws or stt_ws.startswith("ws://127.0.0.1:") or stt_ws.startswith("ws://localhost:"):
+                    data["STREAMING_STT_WS_URL"] = f"ws://127.0.0.1:{stt_port}/ws"
+        return data
     STT_STREAM_ENABLED: bool = True
     STREAMING_STT_TIMEOUT_SECONDS: float = 15.0
     MAX_ACTIVE_STT_STREAMS: int = 5
@@ -59,7 +88,7 @@ class Settings(BaseSettings):
     GATEWAY_HOST: str = os.environ.get("GATEWAY_HOST", "127.0.0.1")
     GATEWAY_PORT: int = int(os.environ.get("GATEWAY_PORT", "8000"))
     PUBLIC_BASE_URL: Optional[str] = os.environ.get("PUBLIC_BASE_URL") or os.environ.get("BASE_URL")
-    COOKIE_SECURE: Optional[bool] = None
+    COOKIE_SECURE: Optional[Union[bool, str]] = None
     TRUSTED_PROXY_IPS: str = os.environ.get("TRUSTED_PROXY_IPS", "")
     ADMIN_API_KEY: Optional[str] = os.environ.get(
         "ADMIN_API_KEY", "dev-voice-key-12345"
@@ -106,8 +135,14 @@ class Settings(BaseSettings):
 
     @property
     def cookie_secure(self) -> bool:
-        if self.COOKIE_SECURE is not None:
+        if isinstance(self.COOKIE_SECURE, bool):
             return self.COOKIE_SECURE
+        if isinstance(self.COOKIE_SECURE, str):
+            val = self.COOKIE_SECURE.strip().lower()
+            if val in ("true", "1", "yes"):
+                return True
+            if val in ("false", "0", "no"):
+                return False
         return self.ENVIRONMENT.lower() in ("staging", "production")
 
     @property

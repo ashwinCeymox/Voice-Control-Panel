@@ -269,3 +269,82 @@ CREATE TABLE admin_session (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, expir
 
 
 
+
+
+---
+
+## Phase I0 - I7: One-Command Installer (`start.sh`) & Cleanup Verification (19 Nov 2026)
+
+### 1. Baseline & Safety Copy (Phase I0)
+- **Git Baseline Tag:** `pre-installer` on commit `07956ea`.
+- **Safety Copy Location:** `/tmp/voice_agent_pre_installer_backup/` (full repository copy excluding `.venv` and `node_modules`).
+- **Initial Baseline Captured in `data/baseline_metrics.json`:**
+  - `pytest_passed`: 262
+  - `pytest_failed`: 0
+  - `pytest_duration_sec`: 137.66
+  - `auth_routes_tested`: 33
+  - `memory_rss_mb`: 0.0
+- **Startup Audit Documented:** [`docs/START_BEFORE.md`](docs/START_BEFORE.md).
+
+### 2. Repository Cleanup & Part A Exit (Phase I1)
+- **Top-Level Inventory & Report:** [`docs/CLEANUP_REPORT.md`](docs/CLEANUP_REPORT.md).
+- **Tracked Junk Check:** `git ls-files | grep -E "\.(db|sqlite|...)"` -> **0 files found**.
+- **Junk Removed from Disk:** Empty directories `.benchmarks`, `configuration`, `downloading` and `.DS_Store` files removed.
+- **Rules Hardened:** `.gitignore` updated to track and ignore `.run/`, `.tools/`, `.install-stamps/`.
+
+### 3. Pinned Versions & Checksums (Phase I2)
+- **Config file:** [`deploy/versions.env`](deploy/versions.env)
+  - Python >= 3.11.0
+  - Node LTS: v20.18.0 (SHA256 `4ff39002f6fa731efc7b508f7b539bf5038ec8b57be2eb74f3ff56d819e99351`)
+  - LocalAI: v4.12.1 (Linux x86_64 & CUDA 12 binaries)
+  - Sherpa-ONNX: >= 1.10.35 & `sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2`
+
+### 4. Modular Installer & Unified Launcher (Phases I3 & I4)
+- **Modules Created in `scripts/lib/`:**
+  - `common.sh`: Platform/GPU detection, stderr log routing, directory resolution.
+  - `env.sh`: Non-destructive `.env` creation/merge, high-entropy secret generation, mode 600 enforcement.
+  - `ports.sh`: Portable python bind check, conflict resolution, RunPod public port collision guard.
+  - `runpod.sh`: Dynamic URL resolution (`https://<pod-id>-<port>.proxy.runpod.net`), `/workspace` persistence verification.
+  - `install.sh`: Idempotent system packages, Python venv, Node/frontend build, model downloads.
+  - `services.sh`: Process control by recorded PID in `.run/*.pid`, health polling, banner.
+- **Entrypoint:** [`start.sh`](start.sh) supporting `up`, `start`, `stop`, `restart`, `status`, `ports`, `url`, `doctor`, `logs`, `reset-admin`, `--dry-run`, and `--foreground`.
+
+### 5. Application Changes (Phase I5)
+- **Break-Glass Password Reset:** [`app/cli.py`](app/cli.py) (`python -m app.cli reset-admin`) with argon2id hash, session invalidation, and `must_change_password=1`.
+- **Derived Engine URLs:** [`app/core/config.py`](app/core/config.py) auto-derives `LOCALAI_BASE_URL`, `LOCAL_TTS_HTTP_BASE_URL`, and `STREAMING_STT_URL` dynamically from configured port settings.
+- **Startup Guards:** [`app/main.py`](app/main.py) enforces security guards in staging/production, rejecting wildcard CORS.
+
+### 6. Test Suites Execution (Phase I6 & I7)
+- **Shell Library Tests (`tests/shell/test_installer_lib.sh`):**
+  ```
+  === Running Installer Shell Library Tests ===
+  • Test 1: .env initialization when missing...  ✓ Passed (mode 600, random keys)
+  • Test 2: .env preserves user customization... ✓ Passed (zero overwrite)
+  • Test 3: Port conflict detection and auto-migration... ✓ Passed (migrated to next free port)
+  • Test 4: RunPod public gateway port protection... ✓ Passed (halted with error, no silent move)
+  • Test 5: RunPod proxy URL derivation... ✓ Passed (dynamic URL calculated)
+  ==========================================================
+      🎉 ALL INSTALLER LIBRARY TESTS PASSED (5/5)
+  ==========================================================
+  ```
+- **Application Unit Tests (`tests/unit/test_installer_app_changes.py`):**
+  - `test_reset_admin_password_workflow`: PASSED
+  - `test_derived_engine_urls`: PASSED
+  - `test_cookie_secure_auto_evaluation`: PASSED
+  - `test_startup_guard_staging_rejects_weak_initial_password`: PASSED
+  - **4/4 passed in 0.80s**.
+
+- **Regression Comparison vs `pre-installer` Baseline (`scripts/regression_compare.sh`):**
+  ```
+  ==========================================================
+             REGRESSION COMPARISON REPORT                   
+  ==========================================================
+  Metric                      | Baseline   | Current    | Diff
+  ----------------------------+------------+------------+---------
+  Pytest Passed               |        262 |        266 | +4
+  Pytest Failed               |          0 |          0 | +0
+  Test Duration (sec)         |     137.66 |     112.80 | -18.1%
+  Auth Matrix Routes          |         33 |         33 | +0
+  ==========================================================
+  ✅ NO REGRESSIONS DETECTED. Metrics within tolerances.
+  ```

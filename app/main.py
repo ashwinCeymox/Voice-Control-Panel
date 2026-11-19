@@ -110,6 +110,11 @@ async def lifespan(app: FastAPI):
                 f"CRITICAL SECURITY CONFIGURATION ERROR: Running with GATEWAY_HOST='{settings.GATEWAY_HOST}' (mode: {env}) with default API_KEY_HASH_SECRET! "
                 "Generate a high-entropy secret with 'openssl rand -hex 32' and set API_KEY_HASH_SECRET in .env."
             )
+        if "*" in (settings.CORS_ALLOWED_ORIGINS or []):
+            raise RuntimeError(
+                f"CRITICAL SECURITY CONFIGURATION ERROR: Running in {env} with wildcard CORS ('*')! "
+                "Specify explicit trusted origins in CORS_ALLOWED_ORIGINS in .env."
+            )
     await init_db()
     from app.services.admin_auth import AdminAuthService
 
