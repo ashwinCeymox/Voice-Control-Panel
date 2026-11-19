@@ -206,8 +206,8 @@ app.mount(
 )
 
 
-@app.get("/voicecontrolpanel")
-@app.get("/voicecontrolpanel/")
+@app.api_route("/voicecontrolpanel", methods=["GET", "HEAD"])
+@app.api_route("/voicecontrolpanel/", methods=["GET", "HEAD"])
 async def serve_controlpanel_root():
     index_file = frontend_dist / "index.html"
     if index_file.is_file():
@@ -228,7 +228,7 @@ async def serve_controlpanel_root():
     )
 
 
-@app.get("/voicecontrolpanel/{full_path:path}")
+@app.api_route("/voicecontrolpanel/{full_path:path}", methods=["GET", "HEAD"])
 async def serve_controlpanel(full_path: str = ""):
     target = frontend_dist / full_path
     if full_path and target.is_file():
@@ -241,7 +241,7 @@ async def serve_controlpanel(full_path: str = ""):
     )
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root(request: Request):
     if settings.SERVE_FRONTEND:
         accept = request.headers.get("accept", "")
