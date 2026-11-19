@@ -44,7 +44,7 @@ check_public_reachability() {
     log_info "Verifying gateway self-check at ${target_url}/health/live (up to ${max_wait}s)..."
 
     while [ "${elapsed}" -lt "${max_wait}" ]; do
-        if curl -sk -m 3 "${target_url}/health/live" >/dev/null 2>&1; then
+        if curl -skf -m 3 "${target_url}/health/live" >/dev/null 2>&1; then
             log_ok "Gateway is live and reachable via ${target_url}."
             return 0
         fi
@@ -53,8 +53,8 @@ check_public_reachability() {
     done
 
     if [ "${IS_RUNPOD}" = "true" ]; then
-        log_warn "Gateway is responding locally on 127.0.0.1:${GATEWAY_PORT}, but external URL was not reached within ${max_wait}s."
-        log_warn "Check that HTTP port ${GATEWAY_PORT} is specified under 'Expose HTTP Ports' in your RunPod pod settings."
+        log_warn "Gateway is responding locally inside container, but external URL (${target_url}) was not reached within ${max_wait}s."
+        log_warn "Please ensure HTTP port ${GATEWAY_PORT} is added to 'Expose HTTP Ports' in your RunPod pod settings."
     else
         log_warn "Gateway self-check on ${target_url} timed out after ${max_wait}s."
     fi

@@ -65,11 +65,18 @@ start_localai() {
     fi
 
     log_info "Starting LocalAI on 127.0.0.1:${LOCALAI_PORT}..."
-    local localai_bin="${LOCALAI_EXEC:-${ROOT_DIR}/../LocalAI/local-ai}"
+    local localai_bin="${LOCALAI_EXEC:-}"
+    if [ -z "${localai_bin}" ] || [ ! -x "${localai_bin}" ]; then
+        if [ -x "${TOOLS_DIR}/localai/local-ai" ]; then
+            localai_bin="${TOOLS_DIR}/localai/local-ai"
+        elif [ -x "${ROOT_DIR}/../LocalAI/local-ai" ]; then
+            localai_bin="${ROOT_DIR}/../LocalAI/local-ai"
+        fi
+    fi
     local models_path="${LOCALAI_MODELS_PATH:-${ROOT_DIR}/models}"
 
-    if [ ! -x "${localai_bin}" ]; then
-        log_warn "LocalAI executable not found at ${localai_bin}; skipping LocalAI start."
+    if [ -z "${localai_bin}" ] || [ ! -x "${localai_bin}" ]; then
+        log_warn "LocalAI executable not found; skipping LocalAI start."
         return 0
     fi
 
@@ -194,6 +201,13 @@ start_gateway() {
         return 0
     fi
 
+    # Safety guard: On RunPod, GATEWAY_HOST must ALWAYS be 0.0.0.0 for proxy routing
+    if [ "${IS_RUNPOD}" = "true" ] && [ "${GATEWAY_HOST}" = "127.0.0.1" ]; then
+        log_info "RunPod container detected: Setting GATEWAY_HOST=0.0.0.0 for public reachability..."
+        GATEWAY_HOST="0.0.0.0"
+        set_env_val "GATEWAY_HOST" "0.0.0.0"
+    fi
+
     log_info "Starting FastAPI Gateway Orchestrator on ${GATEWAY_HOST}:${GATEWAY_PORT}..."
     local uvicorn_exec="${ROOT_DIR}/.venv/bin/uvicorn"
 
@@ -226,15 +240,16 @@ start_gateway() {
     pid="$(cat "${RUN_DIR}/gateway.pid")"
 
     local count=0
-    while [ "${count}" -lt 30 ]; do
-        if curl -sk -m 2 "http://127.0.0.1:${GATEWAY_PORT}/health/live" >/dev/null 2>&1; then
+    local max_wait=45
+    while [ "${count}" -lt "${max_wait}" ]; do
+        if curl -skf -m 2 "http://127.0.0.1:${GATEWAY_PORT}/health/live" >/dev/null 2>&1; then
             log_ok "FastAPI Gateway is live on port ${GATEWAY_PORT} (PID: ${pid})"
             return 0
         fi
         sleep 1
         count=$((count + 1))
     done
-    log_warn "FastAPI Gateway health probe timed out after 30s; check logs/backend.log"
+    log_warn "FastAPI Gateway health probe timed out after ${max_wait}s; check logs/backend.log"
 }
 
 # Start Vite Frontend (development mode only)
@@ -313,9 +328,6 @@ print_banner() {
     printf "  ${BOLD}🌐 Public Web Panel:${RESET}    ${SKY}%s${RESET}\n" "${PUBLIC_URL}/voicecontrolpanel"
     printf "  ${BOLD}🔌 API Base URL:${RESET}        ${SKY}%s/v1${RESET}\n" "${PUBLIC_URL}"
     printf "  ${BOLD}🩺 Gateway Health:${RESET}      ${SKY}%s/health/ready${RESET}\n" "${PUBLIC_URL}"
-    if [ "${PUBLIC_URL}" != "${LOCAL_URL}" ]; then
-        printf "  ${BOLD}💻 Local Loopback:${RESET}      ${SKY}%s${RESET}\n" "${LOCAL_URL}"
-    fi
     printf "${BOLD}${GREEN}--------------------------------------------------------------------${RESET}\n"
 
     # Display credentials securely on first-run only (terminal only, never written to log files)

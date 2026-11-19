@@ -124,6 +124,16 @@ init_env() {
     append_env_if_missing "GATEWAY_PORT" "8000" "Public gateway port (must match Expose HTTP Ports on RunPod)"
     append_env_if_missing "GATEWAY_HOST" "${default_host}" "Gateway listen host (0.0.0.0 on RunPod, 127.0.0.1 on Mac)"
 
+    # RunPod container runtime adjustments (must bind 0.0.0.0 so proxy can route to pod)
+    if [ "${IS_RUNPOD}" = "true" ]; then
+        set_env_val "GATEWAY_HOST" "0.0.0.0"
+        local cur_env
+        cur_env="$(get_env_val "ENVIRONMENT")"
+        if [ -z "${cur_env}" ] || [ "${cur_env}" = "development" ]; then
+            set_env_val "ENVIRONMENT" "staging"
+        fi
+    fi
+
     # Internal Service Ports
     append_env_if_missing "LOCALAI_PORT" "8080" "Internal LocalAI engine port (loopback only)"
     append_env_if_missing "TTS_PORT" "8880" "Internal Kokoro TTS engine port (loopback only)"
@@ -151,7 +161,7 @@ init_env() {
 
     local cur_admin_key
     cur_admin_key="$(get_env_val "ADMIN_API_KEY")"
-    if [ -z "${cur_admin_key}" ] || [[ "${cur_admin_key}" == *"your_api_key_here"* ]]; then
+    if [ -z "${cur_admin_key}" ] || [[ "${cur_admin_key}" == *"your_api_key_here"* ]] || [[ "${cur_admin_key}" == *"change-me"* ]]; then
         local new_admin_key
         new_admin_key="va_live_$(generate_secret 24)"
         set_env_val "ADMIN_API_KEY" "${new_admin_key}"

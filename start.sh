@@ -92,9 +92,6 @@ case "${COMMAND}" in
         compute_urls
         printf "\n  ${BOLD}🌐 Public Web Panel:${RESET} %s/voicecontrolpanel\n" "${PUBLIC_URL}"
         printf "  ${BOLD}🔌 API Base URL:${RESET}     %s/v1\n" "${PUBLIC_URL}"
-        if [ "${PUBLIC_URL}" != "${LOCAL_URL}" ]; then
-            printf "  ${BOLD}💻 Local Loopback:${RESET}   %s\n" "${LOCAL_URL}"
-        fi
         printf "\n"
         exit 0
         ;;

@@ -157,6 +157,7 @@ cors_allow_credentials = False if "*" in cors_origins else True
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
+    allow_origin_regex=r"https://.*\.proxy\.runpod\.net",
     allow_credentials=cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -197,7 +198,7 @@ app.include_router(api_testing_router)
 frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 if frontend_dist.is_dir():
     from starlette.staticfiles import StaticFiles
-    from starlette.responses import FileResponse
+    from starlette.responses import FileResponse, RedirectResponse
 
     assets_dir = frontend_dist / "assets"
     if assets_dir.is_dir():
@@ -208,6 +209,7 @@ if frontend_dist.is_dir():
         )
 
     @app.get("/voicecontrolpanel")
+    @app.get("/voicecontrolpanel/")
     async def serve_controlpanel_root():
         return FileResponse(frontend_dist / "index.html")
 
@@ -220,9 +222,14 @@ if frontend_dist.is_dir():
 
 
 @app.get("/")
-async def root():
+async def root(request: Request):
+    if settings.SERVE_FRONTEND and frontend_dist.is_dir():
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept:
+            return RedirectResponse(url="/voicecontrolpanel", status_code=307)
     return {
         "app": "Self-Hosted Voice AI Platform",
         "status": "online",
         "docs": "/docs",
+        "panel": "/voicecontrolpanel",
     }
