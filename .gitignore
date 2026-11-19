@@ -20,6 +20,11 @@ frontend/dist/
 frontend/.vite/
 frontend/public/vad/
 
+# installer state and tools
+.run/
+.tools/
+.install-stamps/
+
 # runtime data
 data/
 logs/
