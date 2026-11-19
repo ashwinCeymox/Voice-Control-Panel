@@ -133,6 +133,17 @@ case "${COMMAND}" in
         sleep 1
         init_env
         resolve_all_ports
+
+        # Seed initial super admin in SQLite DB if table is empty (never written to .env)
+        if [ -f "${ROOT_DIR}/.venv/bin/python" ]; then
+            seed_res="$("${ROOT_DIR}/.venv/bin/python" -m app.cli seed-admin 2>/dev/null || true)"
+            if [[ "${seed_res}" == *"ADMIN_SEED_GENERATED:"* ]]; then
+                NEW_ADMIN_INITIAL_PASSWORD_GENERATED="${seed_res#*ADMIN_SEED_GENERATED:}"
+                NEW_ADMIN_INITIAL_PASSWORD_GENERATED="${NEW_ADMIN_INITIAL_PASSWORD_GENERATED%%$'\n'*}"
+                export NEW_ADMIN_INITIAL_PASSWORD_GENERATED
+            fi
+        fi
+
         start_services
         print_banner
         exit 0

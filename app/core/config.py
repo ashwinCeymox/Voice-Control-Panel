@@ -84,10 +84,15 @@ class Settings(BaseSettings):
     # Security & Administration
     ENVIRONMENT: str = os.environ.get("ENVIRONMENT", "development")
     ADMIN_EMAIL: str = os.environ.get("ADMIN_EMAIL", "admin@voicepanel.io")
-    ADMIN_INITIAL_PASSWORD: Optional[str] = os.environ.get(
-        "ADMIN_INITIAL_PASSWORD",
-        "adminVOICE3.md" if os.environ.get("ENVIRONMENT", "development") == "development" else None,
-    )
+    ADMIN_INITIAL_PASSWORD: Optional[str] = os.environ.get("ADMIN_INITIAL_PASSWORD")
+
+    @model_validator(mode="after")
+    def resolve_admin_initial_password(self) -> "Settings":
+        if self.ADMIN_INITIAL_PASSWORD is None and self.ENVIRONMENT == "development":
+            self.ADMIN_INITIAL_PASSWORD = "adminVOICE3.md"
+        elif self.ADMIN_INITIAL_PASSWORD == "adminVOICE3.md" and self.ENVIRONMENT in ("staging", "production"):
+            self.ADMIN_INITIAL_PASSWORD = None
+        return self
     GATEWAY_HOST: str = os.environ.get("GATEWAY_HOST", "127.0.0.1")
     GATEWAY_PORT: int = int(os.environ.get("GATEWAY_PORT", "8000"))
     PUBLIC_BASE_URL: Optional[str] = os.environ.get("PUBLIC_BASE_URL") or os.environ.get("BASE_URL")

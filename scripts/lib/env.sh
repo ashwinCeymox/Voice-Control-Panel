@@ -172,8 +172,17 @@ init_env() {
     fi
 
     # Ensure passwords are never stored in .env (stored in SQLite db only)
-    if grep -q "^ADMIN_INITIAL_PASSWORD=" "${ENV_FILE}" 2>/dev/null; then
-        sed -i.bak '/^ADMIN_INITIAL_PASSWORD=/d' "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
+    if grep -q -E "^[[:space:]]*ADMIN_INITIAL_PASSWORD" "${ENV_FILE}" 2>/dev/null; then
+        python3 -c "
+import sys
+path = sys.argv[1]
+with open(path, 'r') as f:
+    lines = f.readlines()
+with open(path, 'w') as f:
+    for line in lines:
+        if not line.strip().startswith('ADMIN_INITIAL_PASSWORD'):
+            f.write(line)
+" "${ENV_FILE}" 2>/dev/null || true
     fi
 
     # Read active values into global variables
