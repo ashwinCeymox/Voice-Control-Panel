@@ -1,0 +1,56 @@
+{
+    auto_https off
+    servers {
+        timeouts {
+            read_header 10s
+            idle 2m
+        }
+    }
+}
+
+# Catch-all on the single exposed RunPod HTTP port (e.g. 8000)
+:8000 {
+    encode zstd gzip
+
+    # ---------- Security Headers ----------
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "microphone=(self), camera=(), geolocation=(), payment=()"
+        -Server
+    }
+
+    # ---------- Hard Blocks: Hide Docs & Metrics from Public Internet ----------
+    @blocked path /metrics /metrics/* /docs /docs/* /redoc /redoc/* /openapi.json
+    handle @blocked {
+        respond 404
+    }
+
+    # ---------- Control Panel with Basic Auth Protection (Panel Path ONLY) ----------
+    redir /voicecontrolpanel /voicecontrolpanel/ 308
+
+    @panel path /voicecontrolpanel/*
+    handle @panel {
+        # Basic auth only protects the human UI panel; never clashes with /v1 API bearer keys
+        basic_auth {
+            admin {$PANEL_BASIC_AUTH_HASH:$2a$14$defaultAdminPlaceholderHashChangeMe}
+        }
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    # ---------- API & Streaming WebSockets (Bearer & Ticket Authentication) ----------
+    handle {
+        request_body {
+            max_size 25MB            # Protect gateway against giant audio payloads
+        }
+        reverse_proxy 127.0.0.1:8001 {
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Real-IP {remote_host}
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 300s
+            }
+        }
+    }
+}

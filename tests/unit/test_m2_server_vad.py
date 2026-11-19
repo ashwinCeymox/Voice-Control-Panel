@@ -22,9 +22,9 @@ pytestmark = pytest.mark.skipif(
     reason="Silero VAD model not found on disk; run scripts/setup.sh to build VAD assets",
 )
 
-TEST_WAV_PATH = "tests/fixtures/sample_utterance.wav"
+TEST_WAV_PATH = "models/streaming-stt/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/test_wavs/0.wav"
 if not os.path.exists(TEST_WAV_PATH):
-    TEST_WAV_PATH = "models/streaming-stt/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/test_wavs/0.wav"
+    TEST_WAV_PATH = "tests/fixtures/sample_utterance.wav"
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -155,15 +155,17 @@ async def test_ws_voice_server_vad_headless_stream(monkeypatch):
 
         # The server should process the turn automatically
         import json
+        import anyio
 
         events_received = []
-        while True:
-            raw = ws.receive()
-            if "text" in raw:
-                msg = json.loads(raw["text"])
-                events_received.append(msg["type"])
-                if msg["type"] in ("turn.completed", "error"):
-                    break
+        with anyio.fail_after(10.0):
+            while True:
+                raw = ws.receive()
+                if "text" in raw:
+                    msg = json.loads(raw["text"])
+                    events_received.append(msg["type"])
+                    if msg["type"] in ("turn.completed", "error"):
+                        break
 
         assert "transcript.completed" in events_received
         assert "turn.completed" in events_received

@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     )
     GATEWAY_HOST: str = os.environ.get("GATEWAY_HOST", "127.0.0.1")
     GATEWAY_PORT: int = int(os.environ.get("GATEWAY_PORT", "8000"))
+    PUBLIC_BASE_URL: Optional[str] = os.environ.get("PUBLIC_BASE_URL") or os.environ.get("BASE_URL")
     COOKIE_SECURE: Optional[bool] = None
     TRUSTED_PROXY_IPS: str = os.environ.get("TRUSTED_PROXY_IPS", "")
     ADMIN_API_KEY: Optional[str] = os.environ.get(
@@ -88,6 +89,20 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    def get_public_base_url(
+        self,
+        request_host: Optional[str] = None,
+        request_scheme: Optional[str] = None,
+    ) -> str:
+        """Resolve dynamic public base URL for clients, documentation, and external proxies."""
+        if self.PUBLIC_BASE_URL and self.PUBLIC_BASE_URL.strip():
+            return self.PUBLIC_BASE_URL.strip().rstrip("/")
+        if request_host and request_host.strip():
+            scheme = request_scheme or ("https" if self.cookie_secure else "http")
+            return f"{scheme}://{request_host.strip()}".rstrip("/")
+        host = self.GATEWAY_HOST if self.GATEWAY_HOST not in ("0.0.0.0", "::") else "127.0.0.1"
+        return f"http://{host}:{self.GATEWAY_PORT}"
 
     @property
     def cookie_secure(self) -> bool:

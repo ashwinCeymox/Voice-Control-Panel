@@ -54,7 +54,14 @@ export const ApiKeys: React.FC = () => {
   const [showNewKeyModal, setShowNewKeyModal] = useState<boolean>(false);
   const [newKeyName, setNewKeyName] = useState<string>('');
   const [newKeyProfileId, setNewKeyProfileId] = useState<string>('');
-  const [newKeyScopes, setNewKeyScopes] = useState<string[]>(['llm', 'stt', 'tts']);
+  const [newKeyScopes, setNewKeyScopes] = useState<string[]>([
+    'llm',
+    'stt',
+    'tts',
+    'stt_stream',
+    'voice',
+    'voice_stream',
+  ]);
   const [newKeyRateLimit, setNewKeyRateLimit] = useState<number>(60);
   const [newKeyMaxConcurrent, setNewKeyMaxConcurrent] = useState<number>(5);
   const [newKeyDailyTokens, setNewKeyDailyTokens] = useState<string>('');

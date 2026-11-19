@@ -177,11 +177,20 @@ async def test_api_contract_installed_models_and_install_lifecycle():
         assert isinstance(data["llm"], list)
         assert isinstance(data["tts"], list)
 
-        # Trigger install
-        inst_resp = await client.post(
+        # Verify TTS installation is blocked
+        tts_inst_resp = await client.post(
             "/v1/models/install",
             headers=AUTH_HEADER,
             json={"model_id": "kitten-tts-micro"},
+        )
+        assert tts_inst_resp.status_code == 400
+        assert "TTS model installation is currently disabled" in tts_inst_resp.json()["detail"]
+
+        # Trigger install for allowed non-TTS model
+        inst_resp = await client.post(
+            "/v1/models/install",
+            headers=AUTH_HEADER,
+            json={"model_id": "whisper-tiny"},
         )
         assert inst_resp.status_code == 202
         job_id = inst_resp.json()["job_id"]

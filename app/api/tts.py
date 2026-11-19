@@ -52,6 +52,11 @@ async def text_to_speech_stream(
     key: ApiKeyRecord = Depends(require_scope("tts")),
 ):
     target_engine = request.model_id or settings.LOCAL_TTS_MODEL or "kokoro"
+    if target_engine.lower() not in ("kokoro", "kokoro-82m", "default"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"TTS engine '{target_engine}' is not available: Only the resident Kokoro TTS engine is currently supported. Engine '{target_engine}' is disabled.",
+        )
     is_avail, unavail_reason = await model_registry.probe_tts_engine(target_engine)
     if not is_avail:
         raise HTTPException(
@@ -116,6 +121,9 @@ async def get_voices(
     key: ApiKeyRecord = Depends(require_scope("tts")),
 ):
     target_engine = engine or model_id or settings.LOCAL_TTS_MODEL or "kokoro"
+    if target_engine.lower() not in ("kokoro", "kokoro-82m", "default"):
+        return {"voices": []}
+
     is_avail, _ = await model_registry.probe_tts_engine(target_engine)
     if not is_avail:
         return {"voices": []}
@@ -198,5 +206,8 @@ async def preview_voice(
 @router.get("/v1/tts/models", response_model=TTSModelListResponse)
 async def get_tts_models(key: ApiKeyRecord = Depends(require_scope("tts"))):
     tts_models = await model_registry.list_models(task="tts", available=True)
+    tts_models = [m for m in tts_models if "kokoro" in m["id"].lower()]
     models = [{"id": m["id"], "name": m["display_name"]} for m in tts_models]
+    if not models:
+        models = [{"id": "kokoro", "name": "Kokoro"}]
     return TTSModelListResponse(models=models)

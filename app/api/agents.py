@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.core.config import settings
-from app.core.security import require_admin_key
+from app.core.security import require_admin_key, get_authenticated_key
 from app.services.key_manager import ApiKeyRecord
 from app.providers.localai_llm import LocalAILLMClient
 from app.schemas.agent import (
@@ -80,7 +80,7 @@ async def validate_agent_models(data: Dict[str, Any]):
 
 @router.get("", response_model=AgentListResponse)
 @router.get("/", response_model=AgentListResponse, include_in_schema=False)
-async def list_agents(admin: ApiKeyRecord = Depends(require_admin_key)):
+async def list_agents(user: ApiKeyRecord = Depends(get_authenticated_key)):
     """List all saved agents."""
     agents = await AgentManager.list_agents()
     return {"agents": agents}
@@ -102,7 +102,7 @@ async def create_agent(
 # BUG FIX: /active must be declared BEFORE /{id} to prevent FastAPI from
 # routing GET /v1/agents/active into get_agent(id="active").
 @router.get("/active")
-async def get_active_agent(admin: ApiKeyRecord = Depends(require_admin_key)):
+async def get_active_agent(user: ApiKeyRecord = Depends(get_authenticated_key)):
     """Get currently loaded active agent details and load state."""
     state_info = AgentManager.get_active_state()
     active_id = state_info.get("active_agent_id")
@@ -120,7 +120,7 @@ async def get_active_agent(admin: ApiKeyRecord = Depends(require_admin_key)):
 
 
 @router.get("/presets/vad")
-async def get_vad_presets(admin: ApiKeyRecord = Depends(require_admin_key)):
+async def get_vad_presets(user: ApiKeyRecord = Depends(get_authenticated_key)):
     """Get recommended Silero VAD presets calibrated for streaming (Sherpa) vs batch."""
     return VAD_PRESETS
 
@@ -128,7 +128,7 @@ async def get_vad_presets(admin: ApiKeyRecord = Depends(require_admin_key)):
 @router.get("/{id}")
 async def get_agent(
     id: str,
-    admin: ApiKeyRecord = Depends(require_admin_key),
+    user: ApiKeyRecord = Depends(get_authenticated_key),
 ):
     """Get agent configuration details."""
     agent = await AgentManager.get_agent(id)

@@ -12,16 +12,9 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { TranscriptResponse } from '../types/api';
-import { getApiBase, getApiKey, getWsBase } from '../api/client';
+import { apiClient, getWebSocketUrl } from '../api/client';
 import { float32ToPCM16 } from '../audio/vadController';
 import { AudioResampler, StreamingAudioChunker } from '../audio/resampler';
-
-const API_BASE = getApiBase();
-const AUTH_HEADERS = {
-  get Authorization() {
-    return `Bearer ${getApiKey()}`;
-  },
-};
 
 interface STTModelItem {
   id: string;
@@ -62,6 +55,7 @@ export const STTPlayground: React.FC = () => {
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const chunkerRef = useRef<StreamingAudioChunker | null>(null);
   const streamStartTimeRef = useRef<number>(0);
+  const commitTimeoutRef = useRef<any>(null);
 
   // Timing telemetry
   const [telemetry, setTelemetry] = useState<{
@@ -89,20 +83,17 @@ export const STTPlayground: React.FC = () => {
   const fetchInstalledSTT = async () => {
     try {
       setFetchingModels(true);
-      const res = await fetch(`${API_BASE}/v1/models?task=stt&available=true`, { headers: AUTH_HEADERS });
-      if (res.ok) {
-        const data = await res.json();
-        const rawList = data.data || data.models || (Array.isArray(data) ? data : []);
-        const sttList: STTModelItem[] = rawList.map((m: any) => ({
-          id: m.id,
-          name: m.display_name || m.name || m.id,
-          kind: m.kind === 'streaming' ? 'streaming' : 'batch',
-          provider: m.engine,
-          available: m.available !== false,
-          unavailable_reason: m.unavailable_reason,
-        }));
-        setInstalledModels(sttList);
-      }
+      const data = await apiClient<any>('/v1/models?task=stt&available=true');
+      const rawList = data.data || data.models || (Array.isArray(data) ? data : []);
+      const sttList: STTModelItem[] = rawList.map((m: any) => ({
+        id: m.id,
+        name: m.display_name || m.name || m.id,
+        kind: m.kind === 'streaming' ? 'streaming' : 'batch',
+        provider: m.engine,
+        available: m.available !== false,
+        unavailable_reason: m.unavailable_reason,
+      }));
+      setInstalledModels(sttList);
     } catch (err) {
       console.warn('Failed to fetch installed models:', err);
     } finally {
@@ -122,19 +113,13 @@ export const STTPlayground: React.FC = () => {
         prev.map((m) => (m.id === modelId ? { ...m, kind: targetKind } : m))
       );
 
-      const res = await fetch(`${API_BASE}/v1/models/${encodeURIComponent(modelId)}/classification`, {
+      await apiClient(`/v1/models/${encodeURIComponent(modelId)}/classification`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
         body: JSON.stringify({
           task: 'stt',
           kind: targetKind,
         }),
       });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || err.error?.message || 'Failed to update model classification');
-      }
 
       setMode(targetKind);
       setSelectedModel(modelId);
@@ -183,20 +168,12 @@ export const STTPlayground: React.FC = () => {
       if (selectedModel) formData.append('model', selectedModel);
       if (language !== 'auto') formData.append('language', language);
 
-      const res = await fetch(`${API_BASE}/v1/audio/transcriptions`, {
+      const data = await apiClient<TranscriptResponse>('/v1/audio/transcriptions', {
         method: 'POST',
-        headers: AUTH_HEADERS,
         body: formData,
       });
 
       const latencyMs = Math.round(performance.now() - startTime);
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData?.error?.message || errData?.detail || 'Transcription failed');
-      }
-
-      const data: TranscriptResponse = await res.json();
       setResult(data);
 
       const dur = data.duration || recordSeconds || 2.5;
@@ -290,7 +267,7 @@ export const STTPlayground: React.FC = () => {
       const processor = audioCtx.createScriptProcessor(4096, 1, 1);
       scriptProcessorRef.current = processor;
 
-      const wsUrl = `${getWsBase()}/v1/audio/transcriptions/stream?api_key=${encodeURIComponent(getApiKey())}`;
+      const wsUrl = await getWebSocketUrl('/v1/audio/transcriptions/stream');
       const ws = new WebSocket(wsUrl);
       wsStreamRef.current = ws;
 
@@ -329,7 +306,8 @@ export const STTPlayground: React.FC = () => {
               const chunks = chunker.push(resampled16k);
               for (const chunk of chunks) {
                 const pcmBytes = float32ToPCM16(chunk);
-                ws.send(pcmBytes.buffer);
+                const chunkBytes = pcmBytes.buffer.slice(pcmBytes.byteOffset, pcmBytes.byteOffset + pcmBytes.byteLength);
+                ws.send(chunkBytes);
               }
             }
           }
@@ -346,13 +324,17 @@ export const STTPlayground: React.FC = () => {
             setLiveConfirmed(data.confirmed || '');
             setLiveTentative(data.tentative || '');
           } else if (data.type === 'transcript.completed' || data.type === 'transcript.final') {
+            if (commitTimeoutRef.current) {
+              clearTimeout(commitTimeoutRef.current);
+              commitTimeoutRef.current = null;
+            }
             const finalText = data.text || '';
             setResult({ text: finalText, language: data.language || 'en', model: data.model_used || data.model });
             setLiveConfirmed(finalText);
             setLiveTentative('');
             setStreamModelTelemetry({
               modelUsed: data.model_used || data.model,
-              runtime: data.runtime || 'sherpa-onnx',
+              runtime: data.runtime || (data.model?.includes('parakeet') || data.model?.includes('nemo') ? 'localai' : 'sherpa-onnx'),
               fallback: Boolean(data.fallback),
             });
             if (data.fallback) {
@@ -366,10 +348,26 @@ export const STTPlayground: React.FC = () => {
               durationSec: parseFloat(dur.toFixed(1)),
               rtf: parseFloat(rtf.toFixed(2)),
             });
+            setIsStreaming(false);
+            setLoading(false);
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.close();
+            }
+            wsStreamRef.current = null;
           } else if (data.type === 'stt.fallback') {
             setFallbackNotice(`STT Fallback Triggered: ${data.reason || 'Service substituted model'}`);
           } else if (data.type === 'error') {
+            if (commitTimeoutRef.current) {
+              clearTimeout(commitTimeoutRef.current);
+              commitTimeoutRef.current = null;
+            }
             setError(data.code ? `[${data.code}] ${data.message}` : (data.message || 'Streaming STT error'));
+            setIsStreaming(false);
+            setLoading(false);
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.close();
+            }
+            wsStreamRef.current = null;
           }
         } catch (err) {
           console.error('Error parsing stream event:', err);
@@ -377,8 +375,14 @@ export const STTPlayground: React.FC = () => {
       };
 
       ws.onerror = (err) => {
+        if (commitTimeoutRef.current) {
+          clearTimeout(commitTimeoutRef.current);
+          commitTimeoutRef.current = null;
+        }
         console.error('WebSocket streaming error:', err);
         setError('WebSocket streaming error. Ensure streaming STT service is online.');
+        setIsStreaming(false);
+        setLoading(false);
       };
 
       ws.onclose = () => {
@@ -418,19 +422,24 @@ export const STTPlayground: React.FC = () => {
         const remaining = chunkerRef.current.flush();
         if (remaining && remaining.length > 0) {
           const pcmBytes = float32ToPCM16(remaining);
-          wsStreamRef.current.send(pcmBytes.buffer);
+          const chunkBytes = pcmBytes.buffer.slice(pcmBytes.byteOffset, pcmBytes.byteOffset + pcmBytes.byteLength);
+          wsStreamRef.current.send(chunkBytes);
         }
       }
       wsStreamRef.current.send(JSON.stringify({ type: 'audio.commit' }));
-      setTimeout(() => {
+      setLoading(true);
+      commitTimeoutRef.current = setTimeout(() => {
         if (wsStreamRef.current && wsStreamRef.current.readyState === WebSocket.OPEN) {
           wsStreamRef.current.close();
         }
         wsStreamRef.current = null;
-      }, 400);
+        setLoading(false);
+        setIsStreaming(false);
+      }, 15000);
+    } else {
+      setIsStreaming(false);
+      setLoading(false);
     }
-
-    setIsStreaming(false);
   };
 
   const streamAudioFile = async (file: File) => {
@@ -456,7 +465,7 @@ export const STTPlayground: React.FC = () => {
       const channelData = resampled.getChannelData(0);
       const pcmData = float32ToPCM16(channelData);
 
-      const wsUrl = `${getWsBase()}/v1/audio/transcriptions/stream?api_key=${encodeURIComponent(getApiKey())}`;
+      const wsUrl = await getWebSocketUrl('/v1/audio/transcriptions/stream');
       const ws = new WebSocket(wsUrl);
       wsStreamRef.current = ws;
 
@@ -492,7 +501,8 @@ export const STTPlayground: React.FC = () => {
             return;
           }
           const slice = pcmData.subarray(offset, Math.min(offset + chunkByteSize, pcmData.byteLength));
-          ws.send(slice.buffer);
+          const sliceBytes = slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.byteLength);
+          ws.send(sliceBytes);
           offset += chunkByteSize;
         }, Math.max(100, Math.round(chunkSizeMs * 0.4)));
       };
@@ -510,7 +520,7 @@ export const STTPlayground: React.FC = () => {
             setLiveTentative('');
             setStreamModelTelemetry({
               modelUsed: data.model_used || data.model,
-              runtime: data.runtime || 'sherpa-onnx',
+              runtime: data.runtime || (data.model?.includes('parakeet') || data.model?.includes('nemo') ? 'localai' : 'sherpa-onnx'),
               fallback: Boolean(data.fallback),
             });
             if (data.fallback) {

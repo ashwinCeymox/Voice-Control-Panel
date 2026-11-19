@@ -66,7 +66,11 @@ class KeyManager:
     ) -> Dict[str, Any]:
         """Generate high-entropy key, store slow hash in DB, return record with plain key once."""
         if scopes is None:
-            scopes = ["llm", "stt", "tts"] if role == "admin" else ["llm"]
+            scopes = (
+                ["llm", "stt", "tts", "stt_stream", "voice", "voice_stream", "admin"]
+                if role == "admin"
+                else ["llm", "stt", "tts", "stt_stream", "voice", "voice_stream"]
+            )
 
         key_id = f"key-{uuid.uuid4().hex[:12]}"
         plain_key, prefix, key_hash = generate_api_key()
@@ -344,11 +348,20 @@ class KeyManager:
         if settings.ADMIN_API_KEY and hmac.compare_digest(
             plain_key, settings.ADMIN_API_KEY
         ):
+            if plain_key == "dev-voice-key-12345":
+                is_cloud_env = settings.ENVIRONMENT.lower() in ("production", "staging")
+                is_public_host = settings.GATEWAY_HOST not in ("127.0.0.1", "localhost")
+                is_remote_client = bool(
+                    client_ip
+                    and client_ip not in ("127.0.0.1", "::1", "localhost", "testclient")
+                )
+                if is_cloud_env or is_public_host or is_remote_client:
+                    return None
             return ApiKeyRecord(
                 id="key-admin-env",
                 name="Environment Admin Key",
                 role="admin",
-                scopes=["llm", "stt", "tts", "admin"],
+                scopes=["llm", "stt", "tts", "admin", "voice", "voice_stream", "stt_stream"],
                 rate_limit=1000,
                 max_concurrent=50,
                 created_at=0.0,
@@ -636,17 +649,25 @@ class KeyManager:
             ) as cursor:
                 row = await cursor.fetchone()
 
+        resolved_base = settings.get_public_base_url()
         if not row:
             return {
-                "base_url": "http://127.0.0.1:8000",
+                "base_url": resolved_base,
                 "default_rate_limit": 60,
                 "default_max_concurrent": 5,
                 "usage_retention_days": 30,
                 "updated_at": time.time(),
             }
 
+        db_base = row[1]
+        # If DB still has local loopback default, adapt dynamically to public configured base
+        if db_base in ("http://127.0.0.1:8000", "http://localhost:8000") and (
+            settings.PUBLIC_BASE_URL or settings.GATEWAY_HOST not in ("127.0.0.1", "localhost")
+        ):
+            db_base = resolved_base
+
         return {
-            "base_url": row[1],
+            "base_url": db_base,
             "default_rate_limit": row[2],
             "default_max_concurrent": row[3],
             "usage_retention_days": row[4],

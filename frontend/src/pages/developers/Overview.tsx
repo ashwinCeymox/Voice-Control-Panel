@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Activity,
   Clock,
@@ -197,6 +197,9 @@ export const Overview: React.FC = () => {
           const payload = JSON.parse(event.data);
           if (payload.residency) setResidency(payload.residency);
           if (payload.system_memory) setSystemMemory(payload.system_memory);
+          if (payload.stt_fallbacks) {
+            setSummary((prev) => (prev ? { ...prev, stt_fallbacks: payload.stt_fallbacks } : prev));
+          }
           if (Array.isArray(payload.toasts) && payload.toasts.length > 0) {
             payload.toasts.forEach((t: any) => {
               const msg = t.message || (typeof t === 'string' ? t : JSON.stringify(t));
@@ -271,6 +274,48 @@ export const Overview: React.FC = () => {
 
   const maxRequests = Math.max(...timeseries.map((p) => p.requests), 1);
   const totalVolume = timeseries.reduce((sum, p) => sum + p.requests, 0);
+  const totalErrors = timeseries.reduce((sum, p) => sum + p.errors, 0);
+  const totalSuccess = Math.max(0, totalVolume - totalErrors);
+  const successRate = totalVolume > 0 ? ((totalSuccess / totalVolume) * 100).toFixed(1) : '100';
+
+  const xTicks = useMemo(() => {
+    if (timeseries.length === 0) return [];
+    if (timeseries.length <= 5) {
+      return timeseries.map((pt, idx) => {
+        const [datePart, timePart] = pt.bucket_label.split(' ');
+        const [, m, d] = (datePart || '').split('-');
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const monthStr = monthNames[parseInt(m, 10) - 1] || m;
+        return {
+          index: idx,
+          formatted: `${monthStr} ${parseInt(d, 10)} ${timePart || ''}`.trim(),
+        };
+      });
+    }
+    const count = 5;
+    const step = (timeseries.length - 1) / (count - 1);
+    const result: Array<{ index: number; formatted: string }> = [];
+    let lastDate: string | undefined = undefined;
+
+    for (let i = 0; i < count; i++) {
+      const idx = Math.min(Math.round(i * step), timeseries.length - 1);
+      const pt = timeseries[idx];
+      if (pt) {
+        const [datePart, timePart] = pt.bucket_label.split(' ');
+        const [, m, d] = (datePart || '').split('-');
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const monthStr = monthNames[parseInt(m, 10) - 1] || m;
+
+        let label = timePart || pt.bucket_label;
+        if (i === 0 || i === count - 1 || datePart !== lastDate) {
+          label = `${monthStr} ${parseInt(d, 10)} ${timePart || ''}`.trim();
+          lastDate = datePart;
+        }
+        result.push({ index: idx, formatted: label });
+      }
+    }
+    return result;
+  }, [timeseries]);
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -448,47 +493,221 @@ export const Overview: React.FC = () => {
       </div>
 
       {/* Activity Timeseries Bar Chart */}
-      <div className="bg-slate-950 border border-slate-800 rounded-xl p-6 space-y-4">
-        <div className="flex items-center justify-between">
+      <div className="bg-slate-950 border border-slate-800 rounded-xl p-6 space-y-5">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-900 pb-4">
           <div>
-            <h3 className="font-semibold text-slate-200 text-sm">Request Volume Over Time</h3>
-            <p className="text-xs text-slate-500">Hourly activity breakdown (zero-filled continuous interval)</p>
+            <div className="flex items-center gap-2.5">
+              <h3 className="font-semibold text-slate-200 text-sm">Request Volume Over Time</h3>
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-slate-400 font-mono">
+                {timeWindow}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">Hourly activity breakdown (zero-filled continuous interval)</p>
+          </div>
+
+          {/* Legend and Key Summary Metrics */}
+          <div className="flex flex-wrap items-center gap-2.5 text-xs">
+            {/* Legend pills */}
+            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-900/90 border border-slate-800 rounded-lg">
+              <span className="w-2.5 h-2.5 rounded-sm bg-indigo-500 inline-block shadow-sm" />
+              <span className="text-slate-400 text-[11px]">Successful:</span>
+              <span className="font-mono font-semibold text-indigo-300">{totalSuccess}</span>
+            </div>
+
+            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-900/90 border border-slate-800 rounded-lg">
+              <span className="w-2.5 h-2.5 rounded-sm bg-amber-500 inline-block shadow-sm" />
+              <span className="text-slate-400 text-[11px]">Errors:</span>
+              <span className="font-mono font-semibold text-amber-300">{totalErrors}</span>
+            </div>
+
+            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-900/90 border border-slate-800 rounded-lg">
+              <span className="w-2.5 h-0.5 bg-slate-700 inline-block rounded-full" />
+              <span className="text-slate-500 text-[11px]">Idle (0)</span>
+            </div>
+
+            <div className="h-4 w-px bg-slate-800 hidden sm:block" />
+
+            {/* Peak & Total Metrics */}
+            <div className="flex items-center gap-2.5 text-[11px] text-slate-400 bg-slate-900/50 px-3 py-1 rounded-lg border border-slate-900">
+              <div>
+                Peak: <span className="text-slate-200 font-mono font-semibold">{totalVolume > 0 ? `${maxRequests} req/h` : '0 req/h'}</span>
+              </div>
+              <span className="text-slate-700">•</span>
+              <div>
+                Total: <span className="text-slate-200 font-mono font-semibold">{totalVolume} reqs</span>
+              </div>
+              {totalVolume > 0 && (
+                <>
+                  <span className="text-slate-700">•</span>
+                  <div>
+                    Success: <span className={`font-mono font-semibold ${Number(successRate) >= 95 ? 'text-emerald-400' : Number(successRate) >= 80 ? 'text-amber-400' : 'text-rose-400'}`}>{successRate}%</span>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
 
-        {timeseries.length === 0 || totalVolume === 0 ? (
-          <div className="h-40 flex flex-col items-center justify-center text-xs text-slate-500 border border-dashed border-slate-800 rounded-lg gap-1">
-            <Activity className="w-5 h-5 text-slate-600 mb-1" />
-            <span>No requests in this range ({timeWindow})</span>
-            <span className="text-[11px] text-slate-600">Send requests via API or Playgrounds to see live volume</span>
+        {timeseries.length === 0 ? (
+          <div className="h-44 flex flex-col items-center justify-center text-xs text-slate-400 border border-dashed border-slate-700 rounded-lg gap-1.5 bg-slate-900/40">
+            <Activity className="w-5 h-5 text-slate-500 mb-1" />
+            <span className="font-medium">No data available for this window ({timeWindow})</span>
+            <span className="text-[11px] text-slate-500">Send requests via API or Playgrounds to see live volume</span>
           </div>
         ) : (
-          <div className="h-44 flex items-end gap-1.5 pt-6 pb-2 border-b border-slate-800 overflow-x-auto">
-            {timeseries.map((pt, i) => {
-              const heightPct = Math.max((pt.requests / maxRequests) * 100, pt.requests > 0 ? 6 : 2);
-              const hasErrors = pt.errors > 0;
-              return (
-                <div key={i} className="flex-1 min-w-[14px] flex flex-col items-center justify-end group relative">
-                  {/* Tooltip */}
-                  <div className="absolute -top-12 hidden group-hover:flex flex-col items-center z-20 pointer-events-none">
-                    <div className="bg-slate-900 border border-slate-700 text-slate-200 text-[10px] px-2 py-1 rounded shadow-lg whitespace-nowrap">
-                      {pt.bucket_label}: {pt.requests} req ({pt.errors} err) · p50 {pt.p50_latency_ms}ms
-                    </div>
-                  </div>
-                  {/* Bar */}
-                  <div
-                    style={{ height: `${heightPct}%` }}
-                    className={`w-full rounded-t transition-all ${
-                      pt.requests === 0
-                        ? 'bg-slate-900'
-                        : hasErrors
-                        ? 'bg-amber-500 hover:bg-amber-400'
-                        : 'bg-indigo-600 hover:bg-indigo-500'
-                    }`}
-                  />
+          <div className="space-y-2">
+            {/* Plot Area with Y-axis */}
+            <div className="flex gap-3 pt-6">
+              {/* Y-axis Labels */}
+              <div className="w-9 h-48 flex flex-col justify-between items-end text-[10px] font-mono text-slate-500 shrink-0 pb-1 select-none">
+                <span>{maxRequests}</span>
+                <span>{Math.round(maxRequests * 0.75)}</span>
+                <span>{Math.round(maxRequests * 0.5)}</span>
+                <span>{Math.round(maxRequests * 0.25)}</span>
+                <span>0</span>
+              </div>
+
+              {/* Chart Grid & Bars Container */}
+              <div className="flex-1 relative h-48">
+                {/* Horizontal Gridlines */}
+                <div className="absolute inset-0 flex flex-col justify-between pointer-events-none pb-1">
+                  <div className="border-t border-slate-800/80 border-dashed w-full" />
+                  <div className="border-t border-slate-800/50 border-dashed w-full" />
+                  <div className="border-t border-slate-800/50 border-dashed w-full" />
+                  <div className="border-t border-slate-800/50 border-dashed w-full" />
+                  <div className="border-t border-slate-800 w-full" />
                 </div>
-              );
-            })}
+
+                {/* Bars */}
+                <div className="absolute inset-0 flex items-end gap-1 pb-1">
+                  {timeseries.map((pt, i) => {
+                    const heightPct = pt.requests > 0 ? Math.max((pt.requests / maxRequests) * 100, 6) : 0;
+                    const errCount = pt.errors;
+                    const succCount = Math.max(0, pt.requests - pt.errors);
+                    const isTooltipLeft = i < 3;
+                    const isTooltipRight = i >= timeseries.length - 3;
+
+                    return (
+                      <div
+                        key={i}
+                        className="flex-1 min-w-[14px] h-full flex flex-col items-center justify-end group relative hover:bg-slate-900/40 rounded transition-colors"
+                      >
+                        {/* Hover Tooltip */}
+                        <div
+                          className={`absolute bottom-full mb-3 hidden group-hover:flex flex-col z-30 pointer-events-none ${
+                            isTooltipLeft
+                              ? 'left-0'
+                              : isTooltipRight
+                              ? 'right-0'
+                              : 'left-1/2 -translate-x-1/2'
+                          }`}
+                        >
+                          <div className="bg-slate-900/95 backdrop-blur-md border border-slate-700/80 text-slate-200 text-xs px-3 py-2 rounded-lg shadow-2xl whitespace-nowrap space-y-1.5 min-w-[160px]">
+                            <div className="font-semibold text-slate-100 border-b border-slate-800 pb-1 flex items-center justify-between gap-3">
+                              <span>{pt.bucket_label}</span>
+                              <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
+                                {pt.requests} {pt.requests === 1 ? 'req' : 'reqs'}
+                              </span>
+                            </div>
+                            {pt.requests === 0 ? (
+                              <div className="text-[11px] text-slate-500 italic py-0.5">No requests recorded (Idle)</div>
+                            ) : (
+                              <>
+                                <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="w-2 h-2 rounded-sm bg-indigo-500 shrink-0" />
+                                    <span className="text-slate-400">Success:</span>
+                                    <span className="font-mono text-indigo-300 font-semibold">{succCount}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="w-2 h-2 rounded-sm bg-amber-500 shrink-0" />
+                                    <span className="text-slate-400">Errors:</span>
+                                    <span className="font-mono text-amber-300 font-semibold">{errCount}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 text-slate-400">
+                                    <span>p50:</span>
+                                    <span className="font-mono text-slate-200">{pt.p50_latency_ms}ms</span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 text-slate-400">
+                                    <span>p95:</span>
+                                    <span className="font-mono text-slate-200">{pt.p95_latency_ms}ms</span>
+                                  </div>
+                                </div>
+                                {(pt.tokens_in > 0 || pt.tokens_out > 0) && (
+                                  <div className="text-[10px] text-slate-400 border-t border-slate-800/80 pt-1 flex justify-between">
+                                    <span>Tokens:</span>
+                                    <span className="font-mono text-emerald-400 font-semibold">{Math.round(pt.tokens_in + pt.tokens_out)}</span>
+                                  </div>
+                                )}
+                                {(pt.audio_seconds_in > 0 || pt.audio_seconds_out > 0) && (
+                                  <div className="text-[10px] text-slate-400 border-t border-slate-800/80 pt-1 flex justify-between">
+                                    <span>Audio:</span>
+                                    <span className="font-mono text-sky-400 font-semibold">{(pt.audio_seconds_in + pt.audio_seconds_out).toFixed(1)}s</span>
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Bar Graphic */}
+                        {pt.requests === 0 ? (
+                          <div className="w-full h-[3px] bg-slate-800/80 rounded-full group-hover:bg-slate-600 transition-colors" />
+                        ) : (
+                          <div
+                            style={{ height: `${heightPct}%` }}
+                            className="w-full relative flex flex-col justify-end rounded-t overflow-visible transition-all shadow-sm group-hover:brightness-110"
+                          >
+                            {/* Value label directly above bar */}
+                            <div className="absolute -top-5 left-1/2 -translate-x-1/2 text-[10px] font-mono font-semibold text-slate-300 group-hover:text-white transition-colors pointer-events-none select-none whitespace-nowrap">
+                              {pt.requests}
+                            </div>
+
+                            {/* Stacked bar segments container */}
+                            <div className="w-full h-full flex flex-col justify-end rounded-t overflow-hidden">
+                              {/* Error segment (top) */}
+                              {errCount > 0 && (
+                                <div
+                                  style={{ height: `${(errCount / pt.requests) * 100}%` }}
+                                  className="w-full bg-amber-500 hover:bg-amber-400 transition-colors"
+                                />
+                              )}
+                              {/* Success segment (bottom) */}
+                              {succCount > 0 && (
+                                <div
+                                  style={{ height: `${(succCount / pt.requests) * 100}%` }}
+                                  className="w-full bg-indigo-500 hover:bg-indigo-400 transition-colors"
+                                />
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* X-axis Timeline Labels */}
+            {timeseries.length > 0 && (
+              <div className="ml-12 mt-1.5 flex justify-between text-[10px] text-slate-500 font-mono select-none">
+                {xTicks.map((tick, idx) => (
+                  <span
+                    key={idx}
+                    className={
+                      idx === 0
+                        ? 'text-left'
+                        : idx === xTicks.length - 1
+                        ? 'text-right'
+                        : 'text-center'
+                    }
+                  >
+                    {tick.formatted}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

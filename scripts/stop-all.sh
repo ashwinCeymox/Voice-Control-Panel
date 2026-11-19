@@ -60,12 +60,5 @@ stop_pid_file "${PID_DIR}/localai.pid" "LocalAI"
 stop_pid_file "${PID_DIR}/local-tts.pid" "local-tts"
 stop_pid_file "${PID_DIR}/local-tts-supervisor.pid" "local-tts supervisor"
 
-# Clean up ports if still bound
-kill_port 5173 "Vite Frontend"
-kill_port 8000 "FastAPI Gateway"
-kill_port 8088 "Sherpa-ONNX STT"
-kill_port 8880 "local-tts"
-kill_port 8080 "LocalAI"
-
 rm -rf "${PID_DIR}"
 echo -e "${GREEN}✓ All services stopped successfully.${RESET}"

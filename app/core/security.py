@@ -73,7 +73,7 @@ def register_api_key(plain_key: str, owner: str = "admin") -> None:
     _DEV_KEY_HASHES[hash_api_key(plain_key)] = owner
 
 
-def verify_api_key(plain_key: str) -> Optional[str]:
+def verify_api_key(plain_key: str, client_ip: Optional[str] = None) -> Optional[str]:
     """Verify an API key and return owner/role if valid."""
     if not plain_key:
         return None
@@ -82,6 +82,17 @@ def verify_api_key(plain_key: str) -> Optional[str]:
     if settings.ADMIN_API_KEY and hmac.compare_digest(
         plain_key, settings.ADMIN_API_KEY
     ):
+        # Refuse default development key if running in staging/production, listening publicly,
+        # or requested from a remote non-loopback IP address.
+        if plain_key == "dev-voice-key-12345":
+            is_cloud_env = settings.ENVIRONMENT.lower() in ("production", "staging")
+            is_public_host = settings.GATEWAY_HOST not in ("127.0.0.1", "localhost")
+            is_remote_client = bool(
+                client_ip
+                and client_ip not in ("127.0.0.1", "::1", "localhost", "testclient")
+            )
+            if is_cloud_env or is_public_host or is_remote_client:
+                return None
         return "admin"
 
     key_hash = hash_api_key(plain_key)
@@ -136,6 +147,10 @@ async def get_authenticated_key(
 
     client_ip = resolve_client_ip(request)
 
+    # Sanitize blank or uninitialized frontend token strings
+    if key in ("", "null", "undefined", "None"):
+        key = None
+
     # 1. If an explicit API key was supplied, validate it
     if key:
         from app.services.key_manager import KeyManager
@@ -146,7 +161,7 @@ async def get_authenticated_key(
             request.state.user = record.role
             return record
 
-        owner = verify_api_key(key)
+        owner = verify_api_key(key, client_ip=client_ip)
         if owner:
             role = "admin" if owner in ("admin", "developer") else "caller"
             record = ApiKeyRecord(
@@ -233,7 +248,7 @@ async def require_admin_key(
 
 
 def require_scope(required_scope: str):
-    """FastAPI dependency factory enforcing a specific scope for caller keys."""
+    """FastAPI dependency factory enforcing capability scopes for API keys (supports streaming hierarchy)."""
 
     async def _scope_checker(
         request: Request,
@@ -246,9 +261,26 @@ def require_scope(required_scope: str):
         )
         if record.role == "admin":
             return record
-        if required_scope not in record.scopes:
-            raise ForbiddenError(f"Missing required scope: '{required_scope}'")
-        return record
+
+        user_scopes = set(s.lower() for s in (record.scopes or []))
+        if "admin" in user_scopes:
+            return record
+
+        # Scope capability mapping allowing streaming across TTS, STT, and LLM
+        if required_scope == "llm" and bool({"llm", "voice", "voice_stream"}.intersection(user_scopes)):
+            return record
+        if required_scope in ("stt", "stt_stream") and bool({"stt", "stt_stream", "voice", "voice_stream"}.intersection(user_scopes)):
+            return record
+        if required_scope in ("tts", "tts_stream") and bool({"tts", "voice", "voice_stream"}.intersection(user_scopes)):
+            return record
+        if required_scope in ("voice", "voice_stream"):
+            if bool({"voice", "voice_stream"}.intersection(user_scopes)) or {"llm", "stt", "tts"}.issubset(user_scopes):
+                return record
+
+        if required_scope.lower() in user_scopes:
+            return record
+
+        raise ForbiddenError(f"Missing required scope: '{required_scope}'")
 
     return _scope_checker
 

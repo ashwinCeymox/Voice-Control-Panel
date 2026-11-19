@@ -68,9 +68,9 @@ class ModelRegistryService:
             if (now - cached[2]) < cache_ttl:
                 return cached[0], cached[1]
 
-        # Pocket/Kitten lack weights in this environment; only Kokoro is installed and supported
+        # Pocket/Kitten and non-Kokoro engines are disabled; only Kokoro is supported
         if engine_id.lower() not in ("kokoro", "kokoro-82m", "default"):
-            reason = f"Engine '{engine_id}' weights not installed on this system"
+            reason = f"Engine '{engine_id}' is not installed or disabled. Only the resident Kokoro TTS engine is supported."
             self._tts_availability_cache[engine_id.lower()] = (False, reason, now)
             return False, reason
 
@@ -126,6 +126,7 @@ class ModelRegistryService:
 
         # 1. Query live loaded processes and installed backends
         installed_backends: set = set()
+        model_backend_map: Dict[str, str] = {}
         try:
             async with httpx.AsyncClient(timeout=3.0) as client:
                 sys_resp = await client.get(
@@ -137,9 +138,13 @@ class ModelRegistryService:
                         installed_backends.add(b.lower())
                     for lm in sys_data.get("loaded_models", []):
                         mid = lm.get("id")
+                        backend = lm.get("backend")
                         if mid:
                             loaded_ids.add(mid)
                             loaded_ids.add(mid.split(":")[0])
+                            if backend:
+                                model_backend_map[mid.lower()] = backend.lower()
+                                model_backend_map[mid.lower().split(":")[0]] = backend.lower()
         except Exception:
             pass
 
@@ -185,6 +190,8 @@ class ModelRegistryService:
             source = "unknown"
 
             lower_mid = mid.lower()
+            backend = model_backend_map.get(lower_mid) or model_backend_map.get(base_mid.lower())
+
             if any(c in caps for c in ("chat", "completion")):
                 task = "llm"
                 runtime = "llama.cpp"
@@ -192,20 +199,21 @@ class ModelRegistryService:
                 confidence = "high"
             elif "transcript" in caps or any(
                 k in lower_mid
-                for k in ("whisper", "parakeet", "asr", "stt", "nemo", "crispasr")
+                for k in ("whisper", "parakeet", "asr", "stt", "nemo", "nemotron", "crispasr")
             ):
                 task = "stt"
-                if "parakeet" in lower_mid:
+                if (backend and "parakeet" in backend) or "parakeet" in lower_mid:
                     runtime = "parakeet.cpp"
-                elif "zipformer" in lower_mid or "sherpa" in lower_mid:
+                elif (backend and "nemo" in backend) or any(k in lower_mid for k in ("nemo", "nemotron")):
+                    runtime = "nemo-speech-cpp"
+                elif (backend and ("zipformer" in backend or "sherpa" in backend)) or any(k in lower_mid for k in ("zipformer", "sherpa")):
                     runtime = "sherpa-onnx"
                 else:
                     runtime = "whisper.cpp"
-                # Only sherpa-onnx models on port 8088 can stream.
-                # parakeet-cpp-realtime_eou_120m-v1 is classified as streaming per catalog specification.
-                is_streaming = runtime == "sherpa-onnx" or any(
+
+                is_streaming = runtime in ("sherpa-onnx", "parakeet.cpp", "nemo-speech-cpp") or any(
                     k in lower_mid
-                    for k in ("realtime_eou", "eou", "zipformer", "sherpa")
+                    for k in ("realtime", "streaming", "stream", "online", "eou", "zipformer", "sherpa")
                 )
                 kind = "streaming" if is_streaming else "batch"
                 source = "metadata" if "transcript" in caps else "file-inference"
@@ -236,6 +244,14 @@ class ModelRegistryService:
                     is_available = False
                     unavailable_reason = (
                         "Missing backend: parakeet-cpp backend not installed in LocalAI"
+                    )
+            elif runtime in ("nemo-speech-cpp", "nemo-speech") or any(k in lower_mid for k in ("nemo", "nemotron")):
+                if installed_backends and not any(
+                    "nemo" in b for b in installed_backends
+                ):
+                    is_available = False
+                    unavailable_reason = (
+                        "Missing backend: nemo-speech-cpp backend not installed in LocalAI"
                     )
             elif runtime in ("whisper.cpp", "whisper"):
                 if installed_backends and not any(
@@ -354,6 +370,9 @@ class ModelRegistryService:
                     for item in items:
                         mid = item.get("model_id") or item.get("id")
                         if not mid:
+                            continue
+                        # Restrict local-tts models exclusively to Kokoro
+                        if "kokoro" not in mid.lower():
                             continue
                         name = item.get("name") or mid.title()
 
@@ -493,6 +512,9 @@ class ModelRegistryService:
         # Apply query filters
         filtered = []
         for m in models:
+            # Enforce Kokoro-only policy platform-wide: disable and exclude any non-Kokoro TTS model
+            if m.get("task") == "tts" and "kokoro" not in m.get("id", "").lower():
+                continue
             if (
                 not include_unclassified
                 and m["task"] in ("other", "unknown")

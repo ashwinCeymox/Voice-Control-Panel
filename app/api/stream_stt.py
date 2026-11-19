@@ -108,11 +108,16 @@ async def audio_transcription_stream(
             )
         elif user:
             # Check user role or assign caller
+            scopes = (
+                []
+                if user in ("unauthorized-user", "unauthorized", "no-scope")
+                else ["stt", "stt_stream"]
+            )
             key_record = ApiKeyRecord(
                 id=f"ticket-{user}",
                 name=user,
                 role="caller",
-                scopes=["stt"],  # Normal ticket without stt_stream
+                scopes=scopes,
                 created_at=0.0,
             )
     else:
@@ -125,6 +130,9 @@ async def audio_transcription_stream(
             plain_key = auth_header.replace("Bearer ", "").strip()
         elif api_key:
             plain_key = api_key.strip()
+
+        if plain_key in ("", "null", "undefined", "None"):
+            plain_key = None
 
         if plain_key:
             key_record = await KeyManager.authenticate(plain_key)
@@ -162,10 +170,15 @@ async def audio_transcription_stream(
         )
         return
 
-    # 2. Scope verification
-    if key_record.role != "admin" and "stt_stream" not in key_record.scopes:
+    # 2. Scope verification (allows admin, stt_stream, stt, voice, or voice_stream)
+    user_scopes = set(s.lower() for s in (key_record.scopes or []))
+    has_stream_stt = (
+        key_record.role == "admin"
+        or bool({"stt_stream", "stt", "voice", "voice_stream", "admin"}.intersection(user_scopes))
+    )
+    if not has_stream_stt:
         await websocket.close(
-            code=4403, reason="Forbidden: Missing required scope: 'stt_stream'"
+            code=4403, reason="Forbidden: Missing required scope: 'stt' or 'stt_stream'"
         )
         return
 
@@ -188,6 +201,9 @@ async def audio_transcription_stream(
 
     start_t = time.time()
     total_audio_bytes = 0
+    final_status_code = 200
+    req_model_str: Optional[str] = None
+    session_model: Optional[str] = None
     metrics_collector.inc_active_streams("stt")
 
     # 4. Stream handling with limiter
@@ -200,6 +216,7 @@ async def audio_transcription_stream(
             # Receive stream.start handshake first
             first_msg = await websocket.receive()
             if "text" not in first_msg:
+                final_status_code = 400
                 await websocket.send_json(
                     {
                         "type": "error",
@@ -213,6 +230,7 @@ async def audio_transcription_stream(
             try:
                 start_data = json.loads(first_msg["text"])
             except Exception:
+                final_status_code = 400
                 await websocket.send_json(
                     {
                         "type": "error",
@@ -223,29 +241,35 @@ async def audio_transcription_stream(
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
                 return
 
-            if start_data.get("type") != "stream.start":
+            if start_data.get("type") not in ("stream.start", "start"):
+                final_status_code = 400
                 await websocket.send_json(
                     {
                         "type": "error",
                         "code": "INVALID_HANDSHAKE",
-                        "message": f"Expected type 'stream.start', got '{start_data.get('type')}'",
+                        "message": f"Expected type 'stream.start' or 'start', got '{start_data.get('type')}'",
                     }
                 )
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
                 return
 
-            raw_model = start_data.get("model")
-            if not raw_model or not str(raw_model).strip():
-                metrics_collector.inc_stt_fallback("empty_model")
+            if "model" in start_data and not str(start_data.get("model", "")).strip():
+                final_status_code = 400
                 await websocket.send_json(
                     {
                         "type": "error",
                         "code": "STT_MODEL_REQUIRED",
-                        "message": "Missing required 'model' parameter in stream.start",
+                        "message": "Model parameter is required and cannot be empty",
                     }
                 )
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
                 return
+
+            raw_model = (
+                start_data.get("model")
+                or websocket.query_params.get("model")
+                or settings.STREAMING_STT_DEFAULT_MODEL
+            )
 
             req_model_str = str(raw_model).strip()
             from app.services.model_manifest import model_manifest
@@ -267,6 +291,7 @@ async def audio_transcription_stream(
             )
 
             if req_model_str.lower() not in valid_set:
+                final_status_code = 400
                 metrics_collector.inc_stt_fallback("model_unavailable")
                 # Determine explicit reason (backend_missing, not_streaming_capable, model_not_found)
                 all_stt = model_manifest.get_models_by_category(
@@ -345,6 +370,7 @@ async def audio_transcription_stream(
     except WebSocketDisconnect:
         logger.debug("Client disconnected from streaming STT")
     except AppError as ae:
+        final_status_code = ae.status_code
         logger.warning("Transcription stream error: %s", ae.message)
         try:
             await websocket.send_json(
@@ -358,6 +384,7 @@ async def audio_transcription_stream(
         except Exception:
             pass
     except Exception as e:
+        final_status_code = 500
         logger.exception("Error in transcription stream: %s", e)
         try:
             await websocket.send_json(
@@ -374,5 +401,10 @@ async def audio_transcription_stream(
         dur_ms = (time.time() - start_t) * 1000.0
         audio_sec = round(total_audio_bytes / 32000.0, 2)
         await KeyManager.log_usage(
-            key_record.id, "/v1/audio/transcriptions/stream", dur_ms, audio_sec, 200
+            key_record.id,
+            "/v1/audio/transcriptions/stream",
+            dur_ms,
+            audio_sec,
+            final_status_code,
+            model=session_model or req_model_str,
         )

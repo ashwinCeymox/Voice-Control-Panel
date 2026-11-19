@@ -103,6 +103,21 @@ class ModelManifest:
                         seen[m["id"].lower()] = dict(m)
                 merged[cat] = list(seen.values())
 
+            # In merged["tts"], restrict strictly to Kokoro models
+            merged["tts"] = [
+                m for m in merged.get("tts", []) if "kokoro" in m.get("id", "").lower()
+            ]
+            if not any("kokoro" in m.get("id", "").lower() for m in merged["tts"]):
+                merged["tts"].append(
+                    {
+                        "id": "kokoro",
+                        "name": "Kokoro (Default)",
+                        "category": "tts",
+                        "provider": "local-tts",
+                        "size_mb": 350,
+                    }
+                )
+
             manifest = {
                 "version": 1,
                 "updated_at": time.time(),
@@ -165,7 +180,18 @@ class ModelManifest:
                 else:
                     is_streaming = (provider == "stream-stt") or any(
                         k in lower_m_id
-                        for k in ("realtime_eou", "eou", "zipformer", "sherpa")
+                        for k in (
+                            "streaming",
+                            "realtime",
+                            "stream",
+                            "online",
+                            "eou",
+                            "zipformer",
+                            "sherpa",
+                            "parakeet",
+                            "nemo",
+                            "nemotron",
+                        )
                     )
                     entry["kind"] = "streaming" if is_streaming else "batch"
 
@@ -312,16 +338,33 @@ class ModelManifest:
         if available_only:
             models = [m for m in models if m.get("available") is not False]
 
+        if category.lower() == "tts":
+            # Kokoro-only restriction: filter out all non-Kokoro models
+            models = [m for m in models if "kokoro" in m.get("id", "").lower()]
+            if not models:
+                models = [
+                    {
+                        "id": "kokoro",
+                        "name": "Kokoro (Default)",
+                        "category": "tts",
+                        "provider": "local-tts",
+                        "size_mb": 350,
+                        "available": True,
+                    }
+                ]
+            return models
+
         if kind and category.lower() == "stt":
             matched = [m for m in models if m.get("kind") == kind]
             if kind == "streaming" and available_only:
                 matched = [
                     m
                     for m in matched
-                    if m.get("provider") == "stream-stt"
-                    or any(
-                        k in m.get("id", "").lower() for k in ("sherpa", "zipformer")
+                    if (
+                        (m.get("provider") == "stream-stt" or any(k in m.get("id", "").lower() for k in ("sherpa", "zipformer")))
+                        and m.get("available") is not False
                     )
+                    or (m.get("provider") == "localai" and m.get("available") is True)
                 ]
             return matched
         return models
@@ -333,6 +376,9 @@ class ModelManifest:
         exclude: Optional[str] = None,
     ) -> Optional[str]:
         """Dynamically resolve the default installed model for a category without hardcoded strings."""
+        if category.lower() == "tts":
+            return "kokoro"
+
         models = self.get_models_by_category(category, kind, available_only=True)
         if exclude:
             models = [m for m in models if m.get("id", "").lower() != exclude.lower()]
@@ -340,7 +386,11 @@ class ModelManifest:
         if models:
             return models[0]["id"]
 
-        # If filtering by kind returned nothing, try any model in category
+        # Streaming models must NEVER fall back to batch models
+        if kind == "streaming":
+            return None
+
+        # If filtering by kind returned nothing for non-streaming, try any model in category
         if kind and category.lower() == "stt":
             fallback_models = self.get_models_by_category(category, available_only=True)
             if exclude:
@@ -362,10 +412,17 @@ class ModelManifest:
         available_only: bool = True,
     ) -> str:
         """Resolve requested model to an installed model; if missing/deleted/unavailable, dynamically heal to default."""
+        if category.lower() == "tts":
+            target = (requested_model or "").strip()
+            if target and "kokoro" in target.lower():
+                return target
+            return "kokoro"
+
         models = self.get_models_by_category(
             category, kind=kind, available_only=available_only
         )
-        if not models:
+        # Streaming STT must NEVER fall back to batch models
+        if not models and kind != "streaming":
             models = self.get_models_by_category(
                 category, available_only=available_only
             )

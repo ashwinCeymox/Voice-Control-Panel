@@ -11,7 +11,10 @@ interface DashboardSettings {
 }
 
 export const Settings: React.FC = () => {
-  const [baseUrl, setBaseUrl] = useState<string>('http://127.0.0.1:8000');
+  const defaultUrl = typeof window !== 'undefined' && window.location.hostname && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+    ? window.location.origin
+    : 'http://127.0.0.1:8000';
+  const [baseUrl, setBaseUrl] = useState<string>(defaultUrl);
   const [defaultRateLimit, setDefaultRateLimit] = useState<number>(60);
   const [defaultMaxConcurrent, setDefaultMaxConcurrent] = useState<number>(5);
   const [retentionDays, setRetentionDays] = useState<number>(30);

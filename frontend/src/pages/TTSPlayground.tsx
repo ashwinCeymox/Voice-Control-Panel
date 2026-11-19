@@ -2,14 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Play, Square, RefreshCw, Volume2, AlertCircle } from 'lucide-react';
 import { StreamingPCMPlayer } from '../audio/pcmPlayer';
 import { Voice } from '../types/api';
-import { getApiBase, getApiKey } from '../api/client';
-
-const API_BASE = getApiBase();
-const AUTH_HEADERS = {
-  get Authorization() {
-    return `Bearer ${getApiKey()}`;
-  },
-};
+import { fetchWithAuth } from '../api/client';
 
 export const TTSPlayground: React.FC = () => {
   const [text, setText] = useState(
@@ -33,7 +26,7 @@ export const TTSPlayground: React.FC = () => {
   const fetchTTSOptions = async () => {
     try {
       // 1. Fetch TTS models
-      const modelsRes = await fetch(`${API_BASE}/v1/tts/models`, { headers: AUTH_HEADERS });
+      const modelsRes = await fetchWithAuth('/v1/tts/models');
       if (modelsRes.ok) {
         const mData = await modelsRes.json();
         if (mData.models && mData.models.length > 0) {
@@ -43,7 +36,7 @@ export const TTSPlayground: React.FC = () => {
       }
 
       // 2. Fetch extended voices with gender
-      const voicesRes = await fetch(`${API_BASE}/v1/voices`, { headers: AUTH_HEADERS });
+      const voicesRes = await fetchWithAuth('/v1/voices');
       if (voicesRes.ok) {
         const vData = await voicesRes.json();
         const vList: Voice[] = vData.voices || [];
@@ -61,9 +54,8 @@ export const TTSPlayground: React.FC = () => {
     try {
       setPreviewingId(vId);
       setError(null);
-      const res = await fetch(`${API_BASE}/v1/voices/${vId}/preview`, {
+      const res = await fetchWithAuth(`/v1/voices/${vId}/preview`, {
         method: 'POST',
-        headers: AUTH_HEADERS,
       });
       if (!res.ok) throw new Error('Preview synthesis failed');
       const rawPcm = await res.arrayBuffer();
@@ -83,12 +75,8 @@ export const TTSPlayground: React.FC = () => {
       setLoading(true);
       setError(null);
 
-      const res = await fetch(`${API_BASE}/v1/text-to-speech/${voiceId}/stream`, {
+      const res = await fetchWithAuth(`/v1/text-to-speech/${voiceId}/stream`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...AUTH_HEADERS,
-        },
         body: JSON.stringify({
           text,
           voice_settings: { speed },

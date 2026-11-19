@@ -176,16 +176,23 @@ async def voice_turn(
         )
 
     user = key_record.name or key_record.role
-    return await orchestrator.execute_turn(
-        audio_bytes=audio_content,
-        session_id=session_id,
-        owner=user,
-        filename=file.filename or "utterance.wav",
-        content_type=file.content_type or "audio/wav",
-        llm_model=llm_model,
-        voice_id=voice_id,
-        tts_model=tts_model,
-    )
+    from app.core.limits import voice_limiter
+
+    async with voice_limiter.acquire(
+        key_id=key_record.id,
+        backend="voice_turn",
+        max_concurrent=key_record.max_concurrent,
+    ):
+        return await orchestrator.execute_turn(
+            audio_bytes=audio_content,
+            session_id=session_id,
+            owner=user,
+            filename=file.filename or "utterance.wav",
+            content_type=file.content_type or "audio/wav",
+            llm_model=llm_model,
+            voice_id=voice_id,
+            tts_model=tts_model,
+        )
 
 
 @router.websocket("/stream")

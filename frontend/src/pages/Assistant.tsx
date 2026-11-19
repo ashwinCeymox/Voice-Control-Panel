@@ -14,13 +14,7 @@ import { AudioOrb, OrbState } from '../components/AudioOrb';
 import { StreamingPCMPlayer } from '../audio/pcmPlayer';
 import { VadController } from '../audio/vadController';
 import { ServerEvent, Agent } from '../types/api';
-import { getApiKey, getApiBase, getWsBase } from '../api/client';
-
-const AUTH_HEADERS = {
-  get Authorization() {
-    return `Bearer ${getApiKey()}`;
-  },
-};
+import { fetchWithAuth, getWebSocketUrl } from '../api/client';
 
 type AssistantState = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
 
@@ -126,9 +120,7 @@ export const AssistantView: React.FC = () => {
 
   const fetchActiveAgent = async () => {
     try {
-      const res = await fetch(`${getApiBase()}/v1/agents/active`, {
-        headers: AUTH_HEADERS,
-      });
+      const res = await fetchWithAuth('/v1/agents/active');
       if (res.ok) {
         const data = await res.json();
         if (data.active_agent) {
@@ -143,9 +135,7 @@ export const AssistantView: React.FC = () => {
 
   const fetchAllAgents = async () => {
     try {
-      const res = await fetch(`${getApiBase()}/v1/agents`, {
-        headers: AUTH_HEADERS,
-      });
+      const res = await fetchWithAuth('/v1/agents');
       if (res.ok) {
         const data = await res.json();
         const list: Agent[] = data.agents || [];
@@ -160,9 +150,8 @@ export const AssistantView: React.FC = () => {
     try {
       setIsSwitchingAgent(true);
       setErrorMsg(null);
-      const res = await fetch(`${getApiBase()}/v1/agents/${agentId}/load`, {
+      const res = await fetchWithAuth(`/v1/agents/${agentId}/load`, {
         method: 'POST',
-        headers: AUTH_HEADERS,
       });
       if (!res.ok) {
         const err = await res.json();
@@ -235,16 +224,11 @@ export const AssistantView: React.FC = () => {
 
   // Connect WebSocket
   const connectWebSocket = async (): Promise<WebSocket> => {
-    const ticketRes = await fetch(`${getApiBase()}/v1/auth/ticket`, {
-      method: 'POST',
-      headers: AUTH_HEADERS,
-    });
-    if (!ticketRes.ok) throw new Error('Failed to acquire WebSocket ticket');
-    const { ticket } = await ticketRes.json();
+    const wsUrl = await getWebSocketUrl('/v1/voice/stream');
 
     return new Promise((resolve, reject) => {
       let settled = false;
-      const ws = new WebSocket(`${getWsBase()}/v1/voice/stream?ticket=${ticket}`);
+      const ws = new WebSocket(wsUrl);
       ws.binaryType = 'arraybuffer';
 
       const timeout = setTimeout(() => {

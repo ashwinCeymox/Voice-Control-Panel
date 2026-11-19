@@ -80,12 +80,15 @@ class VoiceOrchestrator:
         # Save assistant message to history
         await SessionRepository.add_message(sid, "assistant", response_text)
 
-        # 3. Text-to-Speech
+        # 3. Text-to-Speech (strictly Kokoro)
         tts_start = time.perf_counter()
+        effective_tts_model = tts_model or settings.LOCAL_TTS_MODEL or "kokoro"
+        if "kokoro" not in effective_tts_model.lower():
+            effective_tts_model = "kokoro"
         pcm_bytes = await self.tts.synthesize_http(
             text=response_text,
             voice_id=voice_id or settings.LOCAL_TTS_VOICE_ID,
-            model_id=tts_model or settings.LOCAL_TTS_MODEL,
+            model_id=effective_tts_model,
         )
         tts_ms = int((time.perf_counter() - tts_start) * 1000)
         total_ms = int((time.perf_counter() - start_total) * 1000)

@@ -56,6 +56,25 @@ class LocalTTSClient:
                     resp = await client.post(url, json=payload)
                     if resp.status_code == 200:
                         return resp.content
+                    elif resp.status_code == 404:
+                        # Fallback for OpenAI-compatible Kokoro server (e.g. Kokoro-FastAPI / kokoro-onnx on Linux)
+                        openai_url = f"{self.http_base_url}/v1/audio/speech"
+                        openai_payload = {
+                            "model": target_model,
+                            "input": text,
+                            "voice": target_voice,
+                            "speed": speed,
+                            "response_format": "pcm",
+                        }
+                        oa_resp = await client.post(openai_url, json=openai_payload)
+                        if oa_resp.status_code == 200:
+                            return oa_resp.content
+                        logger.error(
+                            "local-tts OpenAI fallback error %d: %s",
+                            oa_resp.status_code,
+                            oa_resp.text,
+                        )
+                        raise ProviderUnavailableError("local-tts", details=oa_resp.text)
                     else:
                         logger.error(
                             "local-tts HTTP error %d: %s", resp.status_code, resp.text
@@ -185,7 +204,10 @@ class LocalTTSClient:
 
     async def list_voices(self, model_id: Optional[str] = None) -> List[Voice]:
         """Fetch available voices with retry and fallback cache."""
-        target_model = model_id or settings.LOCAL_TTS_MODEL
+        target_model = model_id or settings.LOCAL_TTS_MODEL or "kokoro"
+        if target_model.lower() not in ("kokoro", "kokoro-82m", "default"):
+            return []
+
         url = f"{self.http_base_url}/v1/voices?model_id={target_model}"
         for attempt in range(2):
             try:
@@ -230,10 +252,49 @@ class LocalTTSClient:
             )
             return LocalTTSClient._cached_voices
 
-        return []
+        # Fallback to OpenAI-style /v1/audio/voices if available
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                oa_resp = await client.get(f"{self.http_base_url}/v1/audio/voices")
+                if oa_resp.status_code == 200:
+                    oa_data = oa_resp.json()
+                    voices_data = (
+                        oa_data if isinstance(oa_data, list) else oa_data.get("voices", [])
+                    )
+                    oa_voices = [
+                        Voice(
+                            voice_id=v.get("voice_id", v.get("id")),
+                            name=v.get("name", "Unknown"),
+                            category="premade",
+                            settings=VoiceSettings(speed=1.0),
+                        )
+                        for v in voices_data
+                        if v.get("voice_id") or v.get("id")
+                    ]
+                    if oa_voices:
+                        LocalTTSClient._cached_voices = oa_voices
+                        return oa_voices
+        except Exception:
+            pass
+
+        # Built-in standard Kokoro voice catalog fallback
+        standard_voices = [
+            Voice(voice_id="af_heart", name="Heart (American Female)", category="premade", settings=VoiceSettings(speed=1.0)),
+            Voice(voice_id="af_bella", name="Bella (American Female)", category="premade", settings=VoiceSettings(speed=1.0)),
+            Voice(voice_id="af_nicole", name="Nicole (American Female)", category="premade", settings=VoiceSettings(speed=1.0)),
+            Voice(voice_id="af_sarah", name="Sarah (American Female)", category="premade", settings=VoiceSettings(speed=1.0)),
+            Voice(voice_id="am_adam", name="Adam (American Male)", category="premade", settings=VoiceSettings(speed=1.0)),
+            Voice(voice_id="am_michael", name="Michael (American Male)", category="premade", settings=VoiceSettings(speed=1.0)),
+            Voice(voice_id="bf_emma", name="Emma (British Female)", category="premade", settings=VoiceSettings(speed=1.0)),
+            Voice(voice_id="bf_isabella", name="Isabella (British Female)", category="premade", settings=VoiceSettings(speed=1.0)),
+            Voice(voice_id="bm_george", name="George (British Male)", category="premade", settings=VoiceSettings(speed=1.0)),
+            Voice(voice_id="bm_lewis", name="Lewis (British Male)", category="premade", settings=VoiceSettings(speed=1.0)),
+        ]
+        LocalTTSClient._cached_voices = standard_voices
+        return standard_voices
 
     async def list_models(self) -> List[Dict[str, str]]:
-        """Fetch available TTS engine models."""
+        """Fetch available TTS engine models (restricted to Kokoro)."""
         url = f"{self.http_base_url}/v1/models"
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -243,14 +304,17 @@ class LocalTTSClient:
                     raw_models = (
                         data if isinstance(data, list) else data.get("models", [])
                     )
-                    return [
+                    filtered = [
                         {
                             "id": m.get("model_id") or m.get("id"),
                             "name": m.get("name") or m.get("model_id") or m.get("id"),
                         }
                         for m in raw_models
                         if (m.get("model_id") or m.get("id"))
+                        and "kokoro" in (m.get("model_id") or m.get("id")).lower()
                     ]
+                    if filtered:
+                        return filtered
         except Exception:
             pass
-        return []
+        return [{"id": "kokoro", "name": "Kokoro (Default)"}]

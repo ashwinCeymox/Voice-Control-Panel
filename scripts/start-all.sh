@@ -38,23 +38,16 @@ LOGS_DIR="${ROOT_DIR}/logs"
 PID_DIR="${ROOT_DIR}/.pids"
 mkdir -p "${LOGS_DIR}" "${PID_DIR}"
 
-is_port_in_use() {
-    local port=$1
-    lsof -i :"$port" -sTCP:LISTEN >/dev/null 2>&1
-}
-
-kill_port_process() {
-    local port=$1
-    local name=$2
-    if is_port_in_use "$port"; then
-        local pids=$(lsof -ti :"$port" 2>/dev/null || true)
-        if [ -n "$pids" ]; then
-            log_warn "Stopping existing process on port $port ($name, PID: $pids)..."
-            kill $pids 2>/dev/null || true
-            sleep 1
-            kill -9 $pids 2>/dev/null || true
+is_service_running() {
+    local pid_file=$1
+    if [ -f "${pid_file}" ]; then
+        local pid
+        pid=$(cat "${pid_file}" 2>/dev/null || true)
+        if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+            return 0
         fi
     fi
+    return 1
 }
 
 echo -e "${BOLD}${SKY}====================================================================${RESET}"

@@ -19,6 +19,7 @@ from app.api.admin_usage import router as admin_usage_router
 from app.api.metrics import router as metrics_router
 from app.api.stream_stt import router as stream_stt_router
 from app.api.admin_auth import router as panel_auth_router
+from app.api.api_testing import router as api_testing_router
 from app.core.config import settings
 from app.core.errors import AppError, app_error_handler
 from app.core.logging import setup_logging
@@ -95,18 +96,18 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(
             f"Invalid ENVIRONMENT '{settings.ENVIRONMENT}'. Allowed values: development, staging, production."
         )
-    if env in ("production", "staging"):
+    if env in ("production", "staging") or settings.GATEWAY_HOST not in ("127.0.0.1", "localhost"):
         if (
             settings.ADMIN_API_KEY == "dev-voice-key-12345"
             or not settings.ADMIN_API_KEY
         ):
             raise RuntimeError(
-                f"CRITICAL SECURITY CONFIGURATION ERROR: Running in {env} mode with default or empty ADMIN_API_KEY! "
+                f"CRITICAL SECURITY CONFIGURATION ERROR: Running with GATEWAY_HOST='{settings.GATEWAY_HOST}' (mode: {env}) with default or empty ADMIN_API_KEY! "
                 "Generate a 256-bit random key with 'openssl rand -hex 32' and set ADMIN_API_KEY in .env before starting."
             )
         if "dev-secret-key" in settings.API_KEY_HASH_SECRET:
             raise RuntimeError(
-                f"CRITICAL SECURITY CONFIGURATION ERROR: Running in {env} mode with default API_KEY_HASH_SECRET! "
+                f"CRITICAL SECURITY CONFIGURATION ERROR: Running with GATEWAY_HOST='{settings.GATEWAY_HOST}' (mode: {env}) with default API_KEY_HASH_SECRET! "
                 "Generate a high-entropy secret with 'openssl rand -hex 32' and set API_KEY_HASH_SECRET in .env."
             )
     await init_db()
@@ -185,6 +186,32 @@ app.include_router(admin_usage_router)
 app.include_router(stream_stt_router)
 app.include_router(metrics_router)
 app.include_router(panel_auth_router)
+app.include_router(api_testing_router)
+
+# Mount Control Panel static SPA if built (supports single-port / single-origin RunPod & Hetzner deployment)
+frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if frontend_dist.is_dir():
+    from starlette.staticfiles import StaticFiles
+    from starlette.responses import FileResponse
+
+    assets_dir = frontend_dist / "assets"
+    if assets_dir.is_dir():
+        app.mount(
+            "/voicecontrolpanel/assets",
+            StaticFiles(directory=str(assets_dir)),
+            name="controlpanel_assets",
+        )
+
+    @app.get("/voicecontrolpanel")
+    async def serve_controlpanel_root():
+        return FileResponse(frontend_dist / "index.html")
+
+    @app.get("/voicecontrolpanel/{full_path:path}")
+    async def serve_controlpanel(full_path: str = ""):
+        target = frontend_dist / full_path
+        if full_path and target.is_file():
+            return FileResponse(target)
+        return FileResponse(frontend_dist / "index.html")
 
 
 @app.get("/")

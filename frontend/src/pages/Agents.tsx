@@ -18,14 +18,7 @@ import {
 } from 'lucide-react';
 import { Agent, Voice } from '../types/api';
 import { VAD_PRESETS } from '../audio/vadController';
-import { getApiBase, getApiKey } from '../api/client';
-
-const API_BASE = getApiBase();
-const AUTH_HEADERS = {
-  get Authorization() {
-    return `Bearer ${getApiKey()}`;
-  },
-};
+import { fetchWithAuth } from '../api/client';
 
 const SYSTEM_PROMPT_PRESETS = [
   {
@@ -143,14 +136,14 @@ export const AgentsPage: React.FC = () => {
       setLoading(true);
       let initialSelected: Agent | null = null;
       // Fetch agents
-      const res = await fetch(`${API_BASE}/v1/agents`, { headers: AUTH_HEADERS });
+      const res = await fetchWithAuth('/v1/agents');
       if (res.ok) {
         const data = await res.json();
         const list: Agent[] = data.agents || [];
         setAgents(list);
 
         // Fetch active agent state
-        const actRes = await fetch(`${API_BASE}/v1/agents/active`, { headers: AUTH_HEADERS });
+        const actRes = await fetchWithAuth('/v1/agents/active');
         if (actRes.ok) {
           const actData = await actRes.json();
           const actId = actData.active_agent_id || (list[0] ? list[0].id : '');
@@ -164,7 +157,7 @@ export const AgentsPage: React.FC = () => {
 
       // Fetch installed models
       try {
-        const modRes = await fetch(`${API_BASE}/v1/models/installed`, { headers: AUTH_HEADERS });
+        const modRes = await fetchWithAuth('/v1/models/installed');
         if (modRes.ok) {
           const modData = await modRes.json();
           const llms = Array.isArray(modData.llm) ? modData.llm.map((m: any) => ({ id: m.id, name: m.name || m.id, kind: m.kind, provider: m.provider })) : [];
@@ -193,7 +186,7 @@ export const AgentsPage: React.FC = () => {
 
       // Fetch voices
       try {
-        const vRes = await fetch(`${API_BASE}/v1/voices`, { headers: AUTH_HEADERS });
+        const vRes = await fetchWithAuth('/v1/voices');
         if (vRes.ok) {
           const vData = await vRes.json();
           setVoices(vData.voices || []);
@@ -240,9 +233,8 @@ export const AgentsPage: React.FC = () => {
     setErrorMsg(null);
     setSuccessMsg(null);
     try {
-      const res = await fetch(`${API_BASE}/v1/agents/${agentId}/load`, {
+      const res = await fetchWithAuth(`/v1/agents/${agentId}/load`, {
         method: 'POST',
-        headers: AUTH_HEADERS,
       });
       if (!res.ok) {
         const err = await res.json();
@@ -269,12 +261,11 @@ export const AgentsPage: React.FC = () => {
     setSuccessMsg(null);
     try {
       const isNew = !agents.some((a) => a.id === selectedAgent.id);
-      const url = isNew ? `${API_BASE}/v1/agents` : `${API_BASE}/v1/agents/${selectedAgent.id}`;
+      const url = isNew ? '/v1/agents' : `/v1/agents/${selectedAgent.id}`;
       const method = isNew ? 'POST' : 'PUT';
 
-      const res = await fetch(url, {
+      const res = await fetchWithAuth(url, {
         method,
-        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
         body: JSON.stringify(selectedAgent),
       });
 
@@ -288,7 +279,7 @@ export const AgentsPage: React.FC = () => {
       setTimeout(() => setSuccessMsg(null), 3000);
 
       // Refresh list
-      const listRes = await fetch(`${API_BASE}/v1/agents`, { headers: AUTH_HEADERS });
+      const listRes = await fetchWithAuth('/v1/agents');
       if (listRes.ok) {
         const listData = await listRes.json();
         setAgents(listData.agents || []);
@@ -303,9 +294,8 @@ export const AgentsPage: React.FC = () => {
 
   const handleDuplicate = async (agentId: string) => {
     try {
-      const res = await fetch(`${API_BASE}/v1/agents/${agentId}/duplicate`, {
+      const res = await fetchWithAuth(`/v1/agents/${agentId}/duplicate`, {
         method: 'POST',
-        headers: AUTH_HEADERS,
       });
       if (!res.ok) throw new Error('Duplicate failed');
       const duplicated = await res.json();
@@ -326,9 +316,8 @@ export const AgentsPage: React.FC = () => {
         stt: prev.stt.map((m) => (m.id === modelId ? { ...m, kind: newKind } : m)),
       }));
 
-      const res = await fetch(`${API_BASE}/v1/models/${encodeURIComponent(modelId)}/classification`, {
+      const res = await fetchWithAuth(`/v1/models/${encodeURIComponent(modelId)}/classification`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
         body: JSON.stringify({
           task: 'stt',
           kind: newKind,
@@ -363,9 +352,8 @@ export const AgentsPage: React.FC = () => {
     }
     if (!confirm('Are you sure you want to delete this agent?')) return;
     try {
-      const res = await fetch(`${API_BASE}/v1/agents/${agentId}`, {
+      const res = await fetchWithAuth(`/v1/agents/${agentId}`, {
         method: 'DELETE',
-        headers: AUTH_HEADERS,
       });
       if (!res.ok) {
         const err = await res.json();
@@ -424,9 +412,8 @@ export const AgentsPage: React.FC = () => {
     setIsChatStreaming(true);
 
     try {
-      const res = await fetch(`${API_BASE}/v1/agents/${selectedAgent.id}/test-chat`, {
+      const res = await fetchWithAuth(`/v1/agents/${selectedAgent.id}/test-chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
         body: JSON.stringify({ message: userText }),
       });
 

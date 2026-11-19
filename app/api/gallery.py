@@ -56,9 +56,35 @@ GALLERY_CATALOG: List[Dict[str, Any]] = [
         "size_mb": 500,
         "ram_required_mb": 420,
         "description": "NVIDIA Parakeet C++ 120M transducer with End-Of-Utterance (EOU) detection. Batch audio transcription via LocalAI Metal GPU.",
-        "license": "CC-BY-4.0",
+        "license": "NVIDIA Open Model License",
         "quantization": "Q4_0",
         "tags": ["batch", "parakeet", "eou", "metal"],
+    },
+    {
+        "id": "parakeet-cpp-realtime-scene",
+        "name": "Parakeet Cpp Realtime Scene",
+        "category": "stt",
+        "provider": "localai",
+        "kind": "streaming",
+        "size_mb": 500,
+        "ram_required_mb": 450,
+        "description": "NVIDIA Parakeet C++ Realtime streaming transducer with acoustic scene and EOU support via LocalAI Metal GPU.",
+        "license": "NVIDIA Open Model License",
+        "quantization": "FP16",
+        "tags": ["streaming", "parakeet", "realtime", "eou", "metal"],
+    },
+    {
+        "id": "nemo-speech-cpp-nemotron-3.5-asr-streaming-diarized",
+        "name": "Nemotron 3.5 ASR Streaming Diarized",
+        "category": "stt",
+        "provider": "localai",
+        "kind": "streaming",
+        "size_mb": 500,
+        "ram_required_mb": 550,
+        "description": "NVIDIA Nemotron 3.5 ASR streaming speech-to-text with live diarization via nemo-speech-cpp on LocalAI Metal GPU.",
+        "license": "NVIDIA Open Model License",
+        "quantization": "Q8_0",
+        "tags": ["streaming", "nemo", "diarized", "realtime", "metal"],
     },
     {
         "id": "whisper-base",
@@ -341,14 +367,22 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
 
     # 1. Query LocalAI on 8080
     installed_backends: set = set()
+    model_backend_map: Dict[str, str] = {}
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             sys_resp = await client.get(
                 f"{settings.LOCALAI_BASE_URL}/system", headers=_localai_headers()
             )
             if sys_resp.status_code == 200:
-                for b in sys_resp.json().get("backends", []):
+                sys_json = sys_resp.json()
+                for b in sys_json.get("backends", []):
                     installed_backends.add(b.lower())
+                for lm in sys_json.get("loaded_models", []):
+                    mid = lm.get("id")
+                    b = lm.get("backend")
+                    if mid and b:
+                        model_backend_map[mid.lower()] = b.lower()
+                        model_backend_map[mid.lower().split(":")[0]] = b.lower()
     except Exception:
         pass
 
@@ -415,25 +449,51 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                         cat = "llm"
 
                     if cat == "stt":
-                        is_streaming = any(
-                            k in lower_id
-                            for k in ("realtime_eou", "eou", "zipformer", "sherpa")
-                        ) or (
-                            catalog_match
-                            and catalog_match.get("kind") == "streaming"
-                            and not any(
+                        model_backend = model_backend_map.get(raw_id.lower()) or model_backend_map.get(base_id.lower())
+                        is_streaming = (
+                            (catalog_match and catalog_match.get("kind") == "streaming")
+                            or (model_backend and any(b in model_backend for b in ("nemo", "parakeet", "sherpa")))
+                            or any(
                                 k in lower_id
-                                for k in ("parakeet", "whisper", "nemotron")
+                                for k in (
+                                    "realtime",
+                                    "stream",
+                                    "streaming",
+                                    "online",
+                                    "eou",
+                                    "zipformer",
+                                    "sherpa",
+                                )
                             )
                         )
                         entry["kind"] = "streaming" if is_streaming else "batch"
-                        if "parakeet" in lower_id:
+                        if "parakeet" in lower_id or (model_backend and "parakeet" in model_backend):
                             if installed_backends and not any(
                                 "parakeet" in b for b in installed_backends
                             ):
                                 entry["available"] = False
                                 entry["unavailable_reason"] = (
                                     "Missing backend: parakeet-cpp backend not installed in LocalAI"
+                                )
+                            else:
+                                entry["available"] = True
+                        elif "nemo" in lower_id or (model_backend and "nemo" in model_backend):
+                            if installed_backends and not any(
+                                "nemo" in b for b in installed_backends
+                            ):
+                                entry["available"] = False
+                                entry["unavailable_reason"] = (
+                                    "Missing backend: nemo-speech-cpp backend not installed in LocalAI"
+                                )
+                            else:
+                                entry["available"] = True
+                        elif "whisper" in lower_id or (model_backend and "whisper" in model_backend):
+                            if installed_backends and not any(
+                                "whisper" in b for b in installed_backends
+                            ):
+                                entry["available"] = False
+                                entry["unavailable_reason"] = (
+                                    "Missing backend: whisper backend not installed in LocalAI"
                                 )
                             else:
                                 entry["available"] = True
@@ -515,10 +575,13 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                             )
                         )
                         entry["kind"] = "streaming" if is_streaming else "batch"
+                        entry["available"] = True
                         stt_models.append(entry)
                     elif cat == "tts":
+                        entry["available"] = True
                         tts_models.append(entry)
                     else:
+                        entry["available"] = True
                         llm_models.append(entry)
     except Exception:
         pass
@@ -599,6 +662,16 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
             )
         )
         m["kind"] = "streaming" if is_streaming else "batch"
+        if m.get("available") is None:
+            m["available"] = True
+
+    for m in tts_models:
+        if m.get("available") is None:
+            m["available"] = True
+
+    for m in llm_models:
+        if m.get("available") is None:
+            m["available"] = True
 
     # 5. Apply manual classification overrides from SQLite model_overrides
     try:
@@ -666,6 +739,18 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
     except Exception:
         pass
 
+    # Kokoro-only policy: restrict installed TTS models strictly to Kokoro
+    tts_models = [m for m in tts_models if "kokoro" in m.get("id", "").lower()]
+    if not any("kokoro" in m.get("id", "").lower() for m in tts_models):
+        tts_models.append(
+            {
+                "id": "kokoro",
+                "name": "Kokoro (Default)",
+                "provider": "local-tts",
+                "size_mb": 350,
+            }
+        )
+
     res = {
         "stt": stt_models,
         "llm": llm_models,
@@ -686,6 +771,21 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                     if m.get("id"):
                         seen[m["id"].lower()] = dict(m)
                 merged_res[cat] = list(seen.values())
+
+            # Ensure manifest tts bucket is strictly Kokoro only
+            merged_res["tts"] = [
+                m for m in merged_res.get("tts", []) if "kokoro" in m.get("id", "").lower()
+            ]
+            if not any("kokoro" in m.get("id", "").lower() for m in merged_res["tts"]):
+                merged_res["tts"].append(
+                    {
+                        "id": "kokoro",
+                        "name": "Kokoro (Default)",
+                        "category": "tts",
+                        "provider": "local-tts",
+                        "size_mb": 350,
+                    }
+                )
 
             model_manifest.save_to_file_sync(
                 {
@@ -1035,6 +1135,12 @@ async def list_gallery_models(
         is_inst = 1 if x.get("installed") else 0
         return (is_inst, is_rec, x.get("fit_score", 0))
 
+    # Kokoro-only restriction: temporarily filter out all non-Kokoro TTS models from gallery listing
+    results = [
+        r for r in results
+        if r.get("category") != "tts" or "kokoro" in r.get("id", "").lower()
+    ]
+
     results.sort(key=sort_key, reverse=True)
     return {"models": results}
 
@@ -1091,12 +1197,64 @@ async def start_install_job(
     else:
         category = "llm"
 
+    # Enforce policy: disable download & installation of any TTS models
+    if category == "tts" or any(
+        k in lower_id
+        for k in (
+            "vits",
+            "piper",
+            "kokoro",
+            "tts",
+            "kitten",
+            "pocket",
+            "bark",
+            "neutts",
+        )
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="TTS model installation is currently disabled. Only the resident Kokoro TTS engine is supported.",
+        )
+
     provider = payload.get("provider") or (
         catalog_model["provider"] if catalog_model else "localai"
     )
     size_mb = payload.get("size_mb") or (
         catalog_model["size_mb"] if catalog_model else 500
     )
+
+    # Dynamically detect streaming capability from payload, gallery definition, backend, and tags
+    detected_kind: Optional[str] = None
+    if category == "stt":
+        localai_available = await fetch_localai_available_models()
+        gal_match = next(
+            (
+                m
+                for m in localai_available
+                if (m.get("id") == model_id or m.get("name") == model_id)
+            ),
+            None,
+        )
+        tags = [str(t).lower() for t in (gal_match.get("tags", []) if gal_match else [])]
+        backend = (gal_match.get("backend") if gal_match else None) or payload.get("backend")
+        is_streaming = (
+            payload.get("kind") == "streaming"
+            or (catalog_model and catalog_model.get("kind") == "streaming")
+            or any(t in ("streaming", "realtime", "live", "stream", "online") for t in tags)
+            or (backend and any(b in str(backend).lower() for b in ("nemo", "parakeet", "sherpa")))
+            or any(
+                k in lower_id
+                for k in (
+                    "streaming",
+                    "realtime",
+                    "stream",
+                    "online",
+                    "eou",
+                    "zipformer",
+                )
+            )
+        )
+        detected_kind = "streaming" if is_streaming else "batch"
 
     job_id = f"job-{uuid.uuid4()}"[:14]
     _INSTALL_JOBS[job_id] = {
@@ -1112,7 +1270,7 @@ async def start_install_job(
     }
 
     async def run_install(
-        jid: str, mid: str, m_name: str, cat: str, prov: str, sz: int
+        jid: str, mid: str, m_name: str, cat: str, prov: str, sz: int, m_kind: Optional[str] = None
     ):
         job = _INSTALL_JOBS[jid]
         job["status"] = "downloading"
@@ -1203,6 +1361,14 @@ async def start_install_job(
                                 "Backend missing: parakeet-cpp backend not installed in LocalAI"
                             )
                             return
+                        elif ("nemo" in mid.lower() or "nemotron" in mid.lower()) and not any(
+                            "nemo" in b for b in installed_backends
+                        ):
+                            job["status"] = "failed"
+                            job["error_message"] = (
+                                "Backend missing: nemo-speech-cpp backend not installed in LocalAI"
+                            )
+                            return
             except Exception as e:
                 logger.warning("LocalAI backend verification warning: %s", e)
 
@@ -1222,7 +1388,7 @@ async def start_install_job(
                 await db.commit()
             from app.services.model_manifest import model_manifest
 
-            await model_manifest.record_install(mid, m_name, cat, prov, sz)
+            await model_manifest.record_install(mid, m_name, cat, prov, sz, kind=m_kind)
             from app.services.model_registry import model_registry
 
             model_registry.invalidate_cache()
@@ -1236,7 +1402,7 @@ async def start_install_job(
         job["eta_seconds"] = 0
 
     background_tasks.add_task(
-        run_install, job_id, model_id, model_name, category, provider, size_mb
+        run_install, job_id, model_id, model_name, category, provider, size_mb, detected_kind
     )
     return {"job_id": job_id, "status": "queued"}
 
@@ -1398,7 +1564,10 @@ async def uninstall_model(
     )
 
     for base_dir in candidate_dirs:
-        if not base_dir.is_dir():
+        try:
+            if not base_dir.is_dir():
+                continue
+        except (OSError, PermissionError):
             continue
         try:
             # Check if this is a directory matching model_id (e.g. models/streaming-stt/<model_id>)

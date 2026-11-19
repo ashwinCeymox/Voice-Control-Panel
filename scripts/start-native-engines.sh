@@ -49,6 +49,7 @@ else
     STREAMING_STT_CHUNK_MS="${STREAMING_STT_CHUNK_MS:-560}" \
     STREAMING_STT_LANGUAGE="${STREAMING_STT_LANGUAGE:-en}" \
     nohup "$VOICE_AGENT_DIR/.venv/bin/python" "$VOICE_AGENT_DIR/services/streaming_stt/server.py" \
+        --host 127.0.0.1 \
         --port 8088 \
         --provider "${STREAMING_STT_PROVIDER:-cpu}" \
         --precision "${STREAMING_STT_PRECISION:-fp32}" \

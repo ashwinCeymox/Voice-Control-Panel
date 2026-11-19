@@ -12,7 +12,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { GalleryModel, SystemResources, InstallJob } from '../types/api';
-import { getApiBase, getAuthHeaders } from '../api/client';
+import { fetchWithAuth } from '../api/client';
 
 export const ModelsRegistry: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'explore' | 'installed'>('explore');
@@ -32,12 +32,10 @@ export const ModelsRegistry: React.FC = () => {
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      const base = getApiBase();
-      const headers = getAuthHeaders(false);
 
       // Fetch system resources
       try {
-        const resRes = await fetch(`${base}/v1/system/resources`, { headers });
+        const resRes = await fetchWithAuth('/v1/system/resources');
         if (resRes.ok) {
           const resData: SystemResources = await resRes.json();
           setResources(resData);
@@ -57,7 +55,7 @@ export const ModelsRegistry: React.FC = () => {
       }
       const qs = params.toString() ? `?${params.toString()}` : '';
 
-      const galRes = await fetch(`${base}/v1/gallery/models${qs}`, { headers });
+      const galRes = await fetchWithAuth(`/v1/gallery/models${qs}`);
       if (!galRes.ok) {
         const errData = await galRes.json().catch(() => ({}));
         const errMsg =
@@ -94,10 +92,8 @@ export const ModelsRegistry: React.FC = () => {
   const executeInstall = async (modelId: string) => {
     setWarningModel(null);
     try {
-      const base = getApiBase();
-      const res = await fetch(`${base}/v1/models/install`, {
+      const res = await fetchWithAuth('/v1/models/install', {
         method: 'POST',
-        headers: getAuthHeaders(true),
         body: JSON.stringify({ model_id: modelId }),
       });
       if (!res.ok) {
@@ -120,10 +116,7 @@ export const ModelsRegistry: React.FC = () => {
   const pollJob = (jobId: string, modelId: string) => {
     const interval = setInterval(async () => {
       try {
-        const base = getApiBase();
-        const res = await fetch(`${base}/v1/models/install/${jobId}`, {
-          headers: getAuthHeaders(false),
-        });
+        const res = await fetchWithAuth(`/v1/models/install/${jobId}`);
         if (!res.ok) {
           clearInterval(interval);
           const errData = await res.json().catch(() => ({}));
@@ -181,10 +174,8 @@ export const ModelsRegistry: React.FC = () => {
     if (!confirm(`Are you sure you want to uninstall ${modelId}?`)) return;
     setUninstallingId(modelId);
     try {
-      const base = getApiBase();
-      const res = await fetch(`${base}/v1/models/${encodeURIComponent(modelId)}`, {
+      const res = await fetchWithAuth(`/v1/models/${encodeURIComponent(modelId)}`, {
         method: 'DELETE',
-        headers: getAuthHeaders(false),
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
@@ -216,10 +207,8 @@ export const ModelsRegistry: React.FC = () => {
         prev.map((m) => (m.id === modelId ? { ...m, kind: newKind } : m))
       );
 
-      const base = getApiBase();
-      const res = await fetch(`${base}/v1/models/${encodeURIComponent(modelId)}/classification`, {
+      const res = await fetchWithAuth(`/v1/models/${encodeURIComponent(modelId)}/classification`, {
         method: 'PATCH',
-        headers: getAuthHeaders(true),
         body: JSON.stringify({
           task: 'stt',
           kind: newKind,

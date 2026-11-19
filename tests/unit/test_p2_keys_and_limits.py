@@ -72,9 +72,10 @@ async def test_admin_can_create_list_and_revoke_keys():
         )
         assert forbidden_resp.status_code == 403
 
-        forbidden_agents = await client.get(
+        forbidden_agents = await client.post(
             "/v1/agents",
             headers={"Authorization": f"Bearer {plain_key}"},
+            json={"name": "forbidden-agent"},
         )
         assert forbidden_agents.status_code == 403
 

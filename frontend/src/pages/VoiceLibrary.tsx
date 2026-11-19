@@ -2,14 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Play, RefreshCw, Library, Edit2, Check } from 'lucide-react';
 import { Voice } from '../types/api';
 import { StreamingPCMPlayer } from '../audio/pcmPlayer';
-import { getApiBase, getApiKey } from '../api/client';
-
-const API_BASE = getApiBase();
-const AUTH_HEADERS = {
-  get Authorization() {
-    return `Bearer ${getApiKey()}`;
-  },
-};
+import { fetchWithAuth } from '../api/client';
 
 export const VoiceLibrary: React.FC = () => {
   const [voices, setVoices] = useState<Voice[]>([]);
@@ -30,7 +23,7 @@ export const VoiceLibrary: React.FC = () => {
   const fetchVoices = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`${API_BASE}/v1/voices`, { headers: AUTH_HEADERS });
+      const res = await fetchWithAuth('/v1/voices');
       if (res.ok) {
         const data = await res.json();
         setVoices(data.voices || []);
@@ -47,9 +40,8 @@ export const VoiceLibrary: React.FC = () => {
       setPlayingVoice(voice.voice_id);
       player.stop();
 
-      const res = await fetch(`${API_BASE}/v1/voices/${voice.voice_id}/preview`, {
+      const res = await fetchWithAuth(`/v1/voices/${voice.voice_id}/preview`, {
         method: 'POST',
-        headers: AUTH_HEADERS,
       });
 
       if (res.ok) {
@@ -73,9 +65,8 @@ export const VoiceLibrary: React.FC = () => {
     if (!editingVoice) return;
     try {
       setSavingMeta(true);
-      const res = await fetch(`${API_BASE}/v1/voices/${editingVoice.voice_id}/meta`, {
+      const res = await fetchWithAuth(`/v1/voices/${editingVoice.voice_id}/meta`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
         body: JSON.stringify({
           name: editName,
           gender: editGender,

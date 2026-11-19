@@ -104,7 +104,10 @@ def _normalize_stt(stt_raw: Dict[str, Any]) -> Dict[str, Any]:
     from app.services.model_manifest import model_manifest
 
     kind = stt_raw.get("kind", "batch") if isinstance(stt_raw, dict) else "batch"
-    default_stt = model_manifest.get_default_model("stt", kind=kind) or "whisper-base"
+    default_stt = (
+        model_manifest.get_default_model("stt", kind=kind)
+        or (settings.STREAMING_STT_DEFAULT_MODEL if kind == "streaming" else "whisper-base")
+    )
     merged = {
         "model": default_stt,
         "kind": "batch",

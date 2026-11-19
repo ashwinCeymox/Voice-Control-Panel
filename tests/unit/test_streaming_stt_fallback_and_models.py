@@ -80,6 +80,49 @@ def test_streaming_stt_unavailable_runtime_model_rejected(sync_client):
         assert msg.get("code") == "STT_MODEL_UNAVAILABLE"
 
 
+def test_streaming_stt_parakeet_realtime_scene_accepted(sync_client):
+    """parakeet-cpp-realtime-scene must be accepted by streaming STT and not rejected with STT_MODEL_UNAVAILABLE."""
+    ticket = create_websocket_ticket("admin")
+    with sync_client.websocket_connect(
+        f"/v1/audio/transcriptions/stream?ticket={ticket}"
+    ) as ws:
+        ws.send_json(
+            {
+                "type": "stream.start",
+                "model": "parakeet-cpp-realtime-scene",
+                "sample_rate": 16000,
+                "format": "pcm_s16le",
+                "language": "en",
+            }
+        )
+
+        dummy_pcm = b"\x00\x00" * 1600
+        ws.send_bytes(dummy_pcm)
+        ws.send_json({"type": "audio.commit"})
+
+        events = []
+        while True:
+            msg = ws.receive_json()
+            events.append(msg)
+            if msg.get("type") in ("transcript.completed", "transcript.final", "error"):
+                break
+
+        # Must not be rejected with STT_MODEL_UNAVAILABLE
+        for e in events:
+            assert e.get("code") != "STT_MODEL_UNAVAILABLE"
+
+        completed = next(
+            (
+                e
+                for e in events
+                if e.get("type") in ("transcript.completed", "transcript.final")
+            ),
+            None,
+        )
+        assert completed is not None, f"Expected transcript.completed but got: {events}"
+        assert completed.get("model") == "parakeet-cpp-realtime-scene"
+
+
 def test_streaming_stt_valid_model_returns_telemetry_fields(sync_client):
     """Valid streaming request must return transcript.completed containing model_used, runtime, fallback=False."""
     ticket = create_websocket_ticket("admin")
@@ -154,15 +197,15 @@ def test_model_manifest_filters_unavailable_streaming_runtimes():
         "stt", kind="streaming", available_only=True
     )
     model_ids = [m["id"] for m in models]
-    # Parakeet models without a live parakeet-cpp server should not be listed as available streaming models
+    # Unavailable models and batch-only models should not be listed as available streaming models
     assert "parakeet-cpp-realtime_eou_120m-v1" not in model_ids
-    assert "parakeet-cpp-nemotron-3.5-asr-streaming-0.6b" not in model_ids
+    assert "whisper-tiny" not in model_ids
 
 
 def test_model_manifest_resolve_model_id_heals_unavailable_model():
-    """resolve_model_id must dynamically heal unavailable model requests (e.g. Parakeet on macOS) to installed default."""
+    """resolve_model_id must dynamically heal unavailable model requests (e.g. batch-only models in streaming mode) to installed default."""
     resolved = model_manifest.resolve_model_id(
-        "stt", "parakeet-cpp-realtime-scene", kind="streaming"
+        "stt", "parakeet-cpp-realtime_eou_120m-v1", kind="streaming"
     )
     assert "zipformer" in resolved.lower() or "sherpa" in resolved.lower()
 
@@ -175,12 +218,20 @@ def test_model_manifest_resolve_model_id_resolves_parakeet_for_batch():
     assert resolved == "parakeet-cpp-realtime-scene"
 
 
+def test_model_manifest_resolve_model_id_resolves_parakeet_scene_for_streaming():
+    """resolve_model_id must resolve parakeet-cpp-realtime-scene when streaming mode is requested."""
+    resolved = model_manifest.resolve_model_id(
+        "stt", "parakeet-cpp-realtime-scene", kind="streaming"
+    )
+    assert resolved == "parakeet-cpp-realtime-scene"
+
+
 def test_agent_manager_normalize_stt_heals_unavailable_model():
     """_normalize_stt must heal any agent configured with an unavailable model on macOS to sherpa-onnx."""
     from app.services.agent_manager import _normalize_stt
 
     stt_cfg = _normalize_stt(
-        {"model": "parakeet-cpp-realtime-scene", "kind": "streaming"}
+        {"model": "parakeet-cpp-realtime_eou_120m-v1", "kind": "streaming"}
     )
     assert (
         "zipformer" in stt_cfg["model"].lower() or "sherpa" in stt_cfg["model"].lower()
@@ -207,3 +258,22 @@ async def test_streaming_client_handshake_rejection_raises_404():
     assert "nonexistent-model-xyz" in str(
         exc_info.value.message
     ) or "nonexistent-model-xyz" in str(exc_info.value.details)
+
+
+def test_streaming_stt_never_falls_back_to_batch_model():
+    """Streaming STT resolution must never fall back or heal to a batch model."""
+    default_streaming = model_manifest.get_default_model("stt", kind="streaming")
+    if default_streaming:
+        # If any default streaming model exists, its kind in manifest must be 'streaming'
+        model_info = next(
+            (m for m in model_manifest.get_models_by_category("stt") if m["id"] == default_streaming),
+            None,
+        )
+        assert model_info is not None
+        assert model_info.get("kind") == "streaming"
+        assert "whisper" not in default_streaming.lower()
+
+    # Resolving a missing model in streaming mode must NEVER return a batch model like whisper
+    resolved = model_manifest.resolve_model_id("stt", "totally-unknown-model", kind="streaming")
+    assert "whisper" not in resolved.lower()
+

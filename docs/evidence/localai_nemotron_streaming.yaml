@@ -1,0 +1,11 @@
+backend: parakeet-cpp
+known_usecases:
+    - transcript
+name: parakeet-cpp-nemotron-3.5-asr-streaming-0.6b
+parameters:
+    min_p: 0.01
+    model: parakeet-cpp/nemotron-3.5-asr-streaming-0.6b-q8_0.gguf
+    repeat_penalty: 1
+    temperature: 1
+    top_k: -1
+    top_p: 0.95
