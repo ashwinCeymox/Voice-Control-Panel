@@ -94,7 +94,9 @@ class Settings(BaseSettings):
     ADMIN_API_KEY: Optional[str] = os.environ.get(
         "ADMIN_API_KEY", "dev-voice-key-12345"
     )
-    API_KEY_HASH_SECRET: str = "dev-secret-key-change-me-in-production-use-high-entropy"
+    API_KEY_HASH_SECRET: str = os.environ.get(
+        "API_KEY_HASH_SECRET", "dev-secret-key-change-me-in-production-use-high-entropy"
+    )
     CORS_ALLOWED_ORIGINS: List[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     ENABLE_DOCS: bool = False
     LOG_TRANSCRIPTS: bool = False

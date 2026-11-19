@@ -153,7 +153,10 @@ init_env() {
     # Generate secrets ONLY if missing, empty, or placeholder
     local cur_hash_secret
     cur_hash_secret="$(get_env_val "API_KEY_HASH_SECRET")"
-    if [ -z "${cur_hash_secret}" ] || [ "${cur_hash_secret}" = "dev-secret-key-change-me-in-production-use-high-entropy" ]; then
+    if [ -z "${cur_hash_secret}" ] \
+        || [ "${cur_hash_secret}" = "dev-secret-key-change-me-in-production-use-high-entropy" ] \
+        || [ "${cur_hash_secret}" = "generate-a-32-byte-hex-or-base64-random-secret" ] \
+        || [[ "${cur_hash_secret}" == *"change-me"* ]]; then
         local new_secret
         new_secret="$(generate_secret 48)"
         set_env_val "API_KEY_HASH_SECRET" "${new_secret}"
