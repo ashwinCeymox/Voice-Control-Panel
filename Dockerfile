@@ -24,8 +24,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-venv \
-    nodejs \
-    npm \
     file \
     && rm -rf /var/lib/apt/lists/*
 
@@ -39,12 +37,8 @@ RUN python3 -m venv /app/.venv && \
     /app/.venv/bin/pip install --upgrade pip setuptools wheel && \
     /app/.venv/bin/pip install -r requirements.txt
 
-# 4. Copy frontend source and pre-compile production assets
-COPY frontend/package*.json ./frontend/
-RUN cd frontend && npm ci --prefer-offline --no-audit || npm install --no-audit
-
+# 4. Copy frontend (pre-compiled production assets included in frontend/dist)
 COPY frontend/ ./frontend/
-RUN cd frontend && npm run build
 
 # 5. Pre-download default Sherpa-ONNX streaming STT model
 RUN mkdir -p /app/models/streaming-stt && \
