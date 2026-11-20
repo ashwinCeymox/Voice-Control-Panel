@@ -280,8 +280,14 @@ install_localai_engine() {
 
         if [ "${success}" != "true" ]; then
             if curl -sSLf https://localai.io/install.sh | INSTALL_DIR="${TOOLS_DIR}/localai" LOCALAI_NO_SUDO=1 bash >/dev/null 2>&1; then
-                if is_valid_binary "${TOOLS_DIR}/localai/local-ai"; then
+                if [ -x "${TOOLS_DIR}/localai/local-ai" ] && is_valid_binary "${TOOLS_DIR}/localai/local-ai"; then
                     LOCALAI_EXEC="${TOOLS_DIR}/localai/local-ai"
+                    success="true"
+                elif [ -x "${HOME}/.local/bin/local-ai" ] && is_valid_binary "${HOME}/.local/bin/local-ai"; then
+                    LOCALAI_EXEC="${HOME}/.local/bin/local-ai"
+                    success="true"
+                elif [ -x "/usr/local/bin/local-ai" ] && is_valid_binary "/usr/local/bin/local-ai"; then
+                    LOCALAI_EXEC="/usr/local/bin/local-ai"
                     success="true"
                 fi
             fi

@@ -1,5 +1,6 @@
 """Health checks, provider status, and WebSocket ticket generation."""
 
+import sys
 import httpx
 from fastapi import APIRouter, Depends
 from app.core.config import settings
@@ -54,7 +55,12 @@ async def health_ready():
             except Exception:
                 streaming_stt_ok = False
 
-    status = "ready" if (localai_ok and localtts_ok) else "degraded"
+    is_linux = sys.platform.startswith("linux")
+    if is_linux:
+        # On Linux/Cloud, localtts (Apple MLX) is in standby; gateway is ready when localai and stt are operational
+        status = "ready" if (localai_ok and (streaming_stt_ok or not settings.STT_STREAM_ENABLED)) else "degraded"
+    else:
+        status = "ready" if (localai_ok and localtts_ok) else "degraded"
     return {
         "status": status,
         "providers": {

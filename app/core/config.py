@@ -51,25 +51,25 @@ class Settings(BaseSettings):
             localai_port = data.get("LOCALAI_PORT") or os.environ.get("LOCALAI_PORT")
             if localai_port:
                 base_url = data.get("LOCALAI_BASE_URL") or os.environ.get("LOCALAI_BASE_URL", "")
-                if not base_url or base_url.startswith("http://127.0.0.1:") or base_url.startswith("http://localhost:"):
+                if not base_url or base_url.startswith("http://127.0.0.1:") or base_url.startswith("http://localhost:") or "localai:" in base_url:
                     data["LOCALAI_BASE_URL"] = f"http://127.0.0.1:{localai_port}"
 
             tts_port = data.get("TTS_PORT") or os.environ.get("TTS_PORT")
             if tts_port:
                 base_http = data.get("LOCAL_TTS_HTTP_BASE_URL") or os.environ.get("LOCAL_TTS_HTTP_BASE_URL", "")
-                if not base_http or base_http.startswith("http://127.0.0.1:") or base_http.startswith("http://localhost:"):
+                if not base_http or base_http.startswith("http://127.0.0.1:") or base_http.startswith("http://localhost:") or "tts:" in base_http:
                     data["LOCAL_TTS_HTTP_BASE_URL"] = f"http://127.0.0.1:{tts_port}"
                 base_ws = data.get("LOCAL_TTS_WS_BASE_URL") or os.environ.get("LOCAL_TTS_WS_BASE_URL", "")
-                if not base_ws or base_ws.startswith("ws://127.0.0.1:") or base_ws.startswith("ws://localhost:"):
+                if not base_ws or base_ws.startswith("ws://127.0.0.1:") or base_ws.startswith("ws://localhost:") or "tts:" in base_ws:
                     data["LOCAL_TTS_WS_BASE_URL"] = f"ws://127.0.0.1:{tts_port}"
 
             stt_port = data.get("STT_PORT") or os.environ.get("STT_PORT")
             if stt_port:
                 stt_url = data.get("STREAMING_STT_URL") or os.environ.get("STREAMING_STT_URL", "")
-                if not stt_url or stt_url.startswith("http://127.0.0.1:") or stt_url.startswith("http://localhost:"):
+                if not stt_url or stt_url.startswith("http://127.0.0.1:") or stt_url.startswith("http://localhost:") or "streaming-stt:" in stt_url:
                     data["STREAMING_STT_URL"] = f"http://127.0.0.1:{stt_port}"
                 stt_ws = data.get("STREAMING_STT_WS_URL") or os.environ.get("STREAMING_STT_WS_URL", "")
-                if not stt_ws or stt_ws.startswith("ws://127.0.0.1:") or stt_ws.startswith("ws://localhost:"):
+                if not stt_ws or stt_ws.startswith("ws://127.0.0.1:") or stt_ws.startswith("ws://localhost:") or "streaming-stt:" in stt_ws:
                     data["STREAMING_STT_WS_URL"] = f"ws://127.0.0.1:{stt_port}/ws"
         return data
     STT_STREAM_ENABLED: bool = True
