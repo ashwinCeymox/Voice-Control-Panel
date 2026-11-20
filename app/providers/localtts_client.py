@@ -52,7 +52,9 @@ class LocalTTSClient:
 
         async with _tts_gate:
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
+                # 120s read timeout allows initial Hugging Face Kokoro-82M weight download on first synthesis
+                timeout_cfg = httpx.Timeout(connect=15.0, read=120.0, write=15.0, pool=15.0)
+                async with httpx.AsyncClient(timeout=timeout_cfg) as client:
                     resp = await client.post(url, json=payload)
                     if resp.status_code == 200:
                         return resp.content

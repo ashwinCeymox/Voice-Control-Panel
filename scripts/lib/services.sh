@@ -212,17 +212,24 @@ start_local_tts() {
         export HF_HUB_OFFLINE=1
     fi
 
+    local tts_dir
+    tts_dir="$(cd "$(dirname "$(dirname "${tts_bin}")")" 2>/dev/null && pwd || echo "${ROOT_DIR}")"
+
     # Disable pocket, kitten, and qwen per localtts.md Section 6 to dedicate memory strictly to Kokoro
     # Do NOT pass --preload: lazy-load on first synthesis to allow instant server boot and port binding
-    nohup "${tts_bin}" server \
-        --host 127.0.0.1 \
-        --port "${TTS_PORT}" \
-        --disable-pocket \
-        --disable-kitten \
-        --disable-qwen \
-        >> "${LOGS_DIR}/local-tts.log" 2>&1 &
-    local pid=$!
-    echo "${pid}" > "${RUN_DIR}/local-tts.pid"
+    (
+        cd "${tts_dir}"
+        nohup "${tts_bin}" server \
+            --host 127.0.0.1 \
+            --port "${TTS_PORT}" \
+            --disable-pocket \
+            --disable-kitten \
+            --disable-qwen \
+            >> "${LOGS_DIR}/local-tts.log" 2>&1 &
+        echo $! > "${RUN_DIR}/local-tts.pid"
+    )
+    local pid
+    pid="$(cat "${RUN_DIR}/local-tts.pid" 2>/dev/null || true)"
 
     log_info "Waiting for local-tts (Kokoro) to be ready on port ${TTS_PORT}..."
     local count=0
