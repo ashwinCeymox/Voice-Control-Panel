@@ -66,17 +66,25 @@ start_localai() {
 
     log_info "Starting LocalAI on 127.0.0.1:${LOCALAI_PORT}..."
     local localai_bin="${LOCALAI_EXEC:-}"
+    if [ -n "${localai_bin}" ] && [ -f "${localai_bin}" ] && ! is_valid_binary "${localai_bin}"; then
+        log_warn "Configured LocalAI binary '${localai_bin}' failed validation. Re-checking known locations..."
+        localai_bin=""
+    fi
+
     if [ -z "${localai_bin}" ] || [ ! -x "${localai_bin}" ]; then
-        if [ -x "${TOOLS_DIR}/localai/local-ai" ]; then
+        if [ -x "${TOOLS_DIR}/localai/local-ai" ] && is_valid_binary "${TOOLS_DIR}/localai/local-ai"; then
             localai_bin="${TOOLS_DIR}/localai/local-ai"
-        elif [ -x "${ROOT_DIR}/../LocalAI/local-ai" ]; then
+        elif [ -x "${ROOT_DIR}/../LocalAI/local-ai" ] && is_valid_binary "${ROOT_DIR}/../LocalAI/local-ai"; then
             localai_bin="${ROOT_DIR}/../LocalAI/local-ai"
+        elif [ -f "${TOOLS_DIR}/localai/local-ai" ]; then
+            log_warn "Corrupted file found at ${TOOLS_DIR}/localai/local-ai (e.g. 404 text). Removing."
+            rm -f "${TOOLS_DIR}/localai/local-ai"
         fi
     fi
     local models_path="${LOCALAI_MODELS_PATH:-${ROOT_DIR}/models}"
 
-    if [ -z "${localai_bin}" ] || [ ! -x "${localai_bin}" ]; then
-        log_warn "LocalAI executable not found; skipping LocalAI start."
+    if [ -z "${localai_bin}" ] || [ ! -x "${localai_bin}" ] || ! is_valid_binary "${localai_bin}"; then
+        log_warn "LocalAI executable not found or invalid; skipping LocalAI start (service remains in STANDBY)."
         return 0
     fi
 

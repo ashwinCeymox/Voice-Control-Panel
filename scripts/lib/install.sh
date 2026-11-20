@@ -214,36 +214,84 @@ install_node_and_frontend() {
 
 # 5. Setup LocalAI binary
 install_localai_engine() {
-    # Check if LocalAI binary is already present
-    if [ -x "${ROOT_DIR}/../LocalAI/local-ai" ]; then
+    # Check if resident LocalAI binary is already present and valid
+    if [ -x "${ROOT_DIR}/../LocalAI/local-ai" ] && is_valid_binary "${ROOT_DIR}/../LocalAI/local-ai"; then
         LOCALAI_EXEC="${ROOT_DIR}/../LocalAI/local-ai"
         LOCALAI_MODELS_PATH="${ROOT_DIR}/../LocalAI/models"
         log_ok "Using resident LocalAI binary at ${LOCALAI_EXEC}"
         return 0
-    elif [ -x "${TOOLS_DIR}/localai/local-ai" ]; then
-        LOCALAI_EXEC="${TOOLS_DIR}/localai/local-ai"
-        LOCALAI_MODELS_PATH="${ROOT_DIR}/models"
-        log_ok "Using installed LocalAI binary at ${LOCALAI_EXEC}"
-        return 0
+    fi
+
+    # Check installed LocalAI binary in .tools/localai/local-ai
+    if [ -f "${TOOLS_DIR}/localai/local-ai" ]; then
+        if is_valid_binary "${TOOLS_DIR}/localai/local-ai"; then
+            LOCALAI_EXEC="${TOOLS_DIR}/localai/local-ai"
+            LOCALAI_MODELS_PATH="${ROOT_DIR}/models"
+            log_ok "Using installed LocalAI binary at ${LOCALAI_EXEC}"
+            return 0
+        else
+            log_warn "Existing file at ${TOOLS_DIR}/localai/local-ai failed binary validation (e.g. 404 HTML text). Removing corrupted file..."
+            rm -f "${TOOLS_DIR}/localai/local-ai"
+        fi
     fi
 
     if [ "${PLATFORM}" = "linux" ] && [ "${ARCH}" = "x86_64" ]; then
-        local download_url="${LOCALAI_LINUX_X64_URL}"
-        if [ "${HAS_NVIDIA_GPU:-false}" = "true" ]; then
-            download_url="${LOCALAI_LINUX_CUDA12_URL}"
-            log_info "Selected CUDA12-accelerated LocalAI binary"
+        mkdir -p "${TOOLS_DIR}/localai"
+        local success="false"
+
+        # Strategy A: Official install script targeting .tools/localai
+        log_info "Attempting LocalAI installation via official install wrapper..."
+        if curl -sSLf https://localai.io/install.sh | INSTALL_DIR="${TOOLS_DIR}/localai" LOCALAI_NO_SUDO=1 bash >/dev/null 2>&1; then
+            if is_valid_binary "${TOOLS_DIR}/localai/local-ai"; then
+                success="true"
+                log_ok "LocalAI engine installed via official installer."
+            fi
         fi
 
-        log_info "Downloading LocalAI ${LOCALAI_VERSION} from ${download_url}..."
-        mkdir -p "${TOOLS_DIR}/localai"
-        curl -sSL -o "${TOOLS_DIR}/localai/local-ai" "${download_url}"
-        chmod +x "${TOOLS_DIR}/localai/local-ai"
-        LOCALAI_EXEC="${TOOLS_DIR}/localai/local-ai"
-        LOCALAI_MODELS_PATH="${ROOT_DIR}/models"
-        log_ok "LocalAI engine installed into ${LOCALAI_EXEC}"
+        # Strategy B: Fallback direct download with curl -f (fails if HTTP status >= 400)
+        if [ "${success}" != "true" ]; then
+            local download_url="${LOCALAI_LINUX_X64_URL}"
+            if [ "${HAS_NVIDIA_GPU:-false}" = "true" ] && [ -n "${LOCALAI_LINUX_CUDA12_URL:-}" ]; then
+                download_url="${LOCALAI_LINUX_CUDA12_URL}"
+                log_info "Selected CUDA12-accelerated LocalAI binary URL"
+            fi
+
+            log_info "Downloading LocalAI binary from ${download_url}..."
+            local tmp_bin="${TOOLS_DIR}/localai/local-ai.tmp"
+            rm -f "${tmp_bin}"
+            if curl -sSLf -o "${tmp_bin}" "${download_url}"; then
+                chmod +x "${tmp_bin}"
+                if is_valid_binary "${tmp_bin}"; then
+                    mv "${tmp_bin}" "${TOOLS_DIR}/localai/local-ai"
+                    success="true"
+                    log_ok "LocalAI binary downloaded and verified."
+                else
+                    rm -f "${tmp_bin}"
+                    log_warn "Downloaded LocalAI file failed binary validation."
+                fi
+            else
+                rm -f "${tmp_bin}"
+                log_warn "Could not download LocalAI binary from ${download_url}."
+            fi
+        fi
+
+        if [ "${success}" = "true" ] && is_valid_binary "${TOOLS_DIR}/localai/local-ai"; then
+            chmod +x "${TOOLS_DIR}/localai/local-ai"
+            LOCALAI_EXEC="${TOOLS_DIR}/localai/local-ai"
+            LOCALAI_MODELS_PATH="${ROOT_DIR}/models"
+            log_ok "LocalAI engine installed into ${LOCALAI_EXEC}"
+            return 0
+        fi
+
+        log_warn "LocalAI installation could not be completed automatically. LocalAI will remain in STANDBY."
+        return 0
     else
-        log_err "LocalAI binary not found. On macOS, run within the project workspace with ../LocalAI present."
-        exit 1
+        if [ "${PLATFORM}" = "macos" ]; then
+            log_warn "Resident LocalAI binary not found in ../LocalAI/local-ai. LocalAI will remain in STANDBY on macOS."
+            return 0
+        fi
+        log_warn "Unsupported platform for automated LocalAI binary: ${PLATFORM} (${ARCH}). LocalAI will remain in STANDBY."
+        return 0
     fi
 }
 

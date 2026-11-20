@@ -89,3 +89,34 @@ detect_platform() {
 }
 
 detect_platform
+
+# Verify if a target file is an actual native executable binary and not an HTML/text error page
+is_valid_binary() {
+    local target="$1"
+    [ -f "${target}" ] || return 1
+    [ -s "${target}" ] || return 1
+
+    # Check if first lines contain HTML, 404, or "Not Found" error strings
+    if head -n 5 "${target}" 2>/dev/null | grep -qiE "Not Found|<html|<!doctype|404: Not Found"; then
+        return 1
+    fi
+
+    # Check via `file` utility if available
+    if command -v file >/dev/null 2>&1; then
+        local desc
+        desc="$(file -b "${target}" 2>/dev/null || true)"
+        if echo "${desc}" | grep -qiE "ELF|Mach-O|executable"; then
+            return 0
+        fi
+        return 1
+    fi
+
+    # Direct magic byte check (Linux ELF starts with \x7fELF)
+    local magic
+    magic="$(head -c 4 "${target}" 2>/dev/null || true)"
+    if [ "${magic}" = "$(printf '\x7fELF')" ]; then
+        return 0
+    fi
+
+    [ -x "${target}" ]
+}
