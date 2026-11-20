@@ -83,7 +83,14 @@ class LocalTTSClient:
             except httpx.TimeoutException:
                 raise ProviderTimeoutError("local-tts")
             except httpx.RequestError as exc:
-                raise ProviderUnavailableError("local-tts", details=str(exc))
+                err_msg = str(exc)
+                if "incomplete chunked read" in err_msg or "peer closed connection" in err_msg:
+                    err_msg = (
+                        f"{err_msg}. Kokoro synthesis aborted by engine. "
+                        "On Linux, Kokoro requires 'espeak-ng' ('apt-get install -y espeak-ng') "
+                        "and model weights in ~/.cache/huggingface. Check logs/local-tts.log for the engine traceback."
+                    )
+                raise ProviderUnavailableError("local-tts", details=err_msg)
 
     async def stream_synthesis_ws(
         self,

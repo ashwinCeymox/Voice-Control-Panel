@@ -88,7 +88,7 @@ install_system_packages() {
     fi
 
     local missing_pkgs=()
-    local needed=("ffmpeg" "curl" "ca-certificates" "git" "lsof" "build-essential" "python3-venv" "libsndfile1" "xz-utils")
+    local needed=("ffmpeg" "curl" "ca-certificates" "git" "lsof" "build-essential" "python3-venv" "libsndfile1" "xz-utils" "espeak-ng" "libespeak-ng-dev" "sox")
 
     for pkg in "${needed[@]}"; do
         if ! dpkg -s "${pkg}" >/dev/null 2>&1; then
@@ -313,6 +313,19 @@ install_localai_engine() {
 
 # 6. Setup local-tts engine (Kokoro via saghul/local-tts per localtts.md)
 install_local_tts_engine() {
+    # On Linux, ensure audio phonemizer libraries (espeak-ng) are installed first
+    if [ "${PLATFORM}" = "linux" ]; then
+        if [ "${IS_ROOT:-false}" = "true" ] || [ "$(id -u)" -eq 0 ]; then
+            if command -v apt-get >/dev/null 2>&1; then
+                if ! command -v espeak-ng >/dev/null 2>&1; then
+                    log_info "Installing espeak-ng and audio system packages for Kokoro TTS..."
+                    apt-get update -qq && apt-get install -y --no-install-recommends \
+                        ffmpeg sox espeak-ng libespeak-ng-dev >/dev/null 2>&1 || true
+                fi
+            fi
+        fi
+    fi
+
     # Check if local-tts is already installed and executable
     for candidate in "${ROOT_DIR}/../local-tts/.venv/bin/local-tts" \
                      "${ROOT_DIR}/local-tts/.venv/bin/local-tts" \

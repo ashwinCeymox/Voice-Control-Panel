@@ -154,6 +154,16 @@ start_local_tts() {
 
     log_info "Starting resident local-tts (Kokoro) on 127.0.0.1:${TTS_PORT}..."
 
+    # On Linux, verify and auto-install espeak-ng if missing (required by Kokoro text phonemizer)
+    if [ "${PLATFORM}" = "linux" ] && ! command -v espeak-ng >/dev/null 2>&1; then
+        if [ "${IS_ROOT:-false}" = "true" ] || [ "$(id -u)" -eq 0 ]; then
+            log_info "Installing missing espeak-ng system library required for Kokoro TTS..."
+            apt-get update -qq && apt-get install -y --no-install-recommends espeak-ng libespeak-ng-dev sox >/dev/null 2>&1 || true
+        else
+            log_warn "espeak-ng is not installed! Kokoro TTS on Linux requires espeak-ng. Run: apt-get install -y espeak-ng"
+        fi
+    fi
+
     # On macOS Apple Silicon with existing MLX cache, offline mode is safe.
     # On Linux, allow online download of Kokoro weights to ~/.cache/huggingface on first run.
     if [ "${PLATFORM}" = "macos" ] && [ -d "${HOME}/.cache/huggingface/hub/models--mlx-community--Kokoro-82M" ]; then
@@ -161,19 +171,21 @@ start_local_tts() {
     fi
 
     # Disable pocket, kitten, and qwen per localtts.md Section 6 to dedicate memory strictly to Kokoro
+    # Add --preload to warm up model pipeline and weights at startup
     nohup "${tts_bin}" server \
         --host 127.0.0.1 \
         --port "${TTS_PORT}" \
         --disable-pocket \
         --disable-kitten \
         --disable-qwen \
+        --preload \
         >> "${LOGS_DIR}/local-tts.log" 2>&1 &
     local pid=$!
     echo "${pid}" > "${RUN_DIR}/local-tts.pid"
 
     log_info "Waiting for local-tts (Kokoro) to be ready on port ${TTS_PORT}..."
     local count=0
-    while [ "${count}" -lt 60 ]; do
+    while [ "${count}" -lt 120 ]; do
         if curl -s "http://127.0.0.1:${TTS_PORT}/v1/models" >/dev/null 2>&1; then
             log_ok "local-tts (Kokoro) is ready on port ${TTS_PORT} (PID: ${pid})"
             TTS_AVAILABLE="true"
