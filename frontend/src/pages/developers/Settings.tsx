@@ -30,7 +30,20 @@ export const Settings: React.FC = () => {
       setError(null);
       try {
         const data = await fetchAdminJson<DashboardSettings>('/v1/admin/settings/dashboard');
-        if (data.base_url) setBaseUrl(data.base_url);
+        if (data.base_url) {
+          const isRemoteClient =
+            typeof window !== 'undefined' &&
+            window.location.hostname &&
+            window.location.hostname !== 'localhost' &&
+            window.location.hostname !== '127.0.0.1';
+          const isLoopback =
+            data.base_url.includes('127.0.0.1') || data.base_url.includes('localhost');
+          if (isRemoteClient && isLoopback) {
+            setBaseUrl(window.location.origin);
+          } else {
+            setBaseUrl(data.base_url);
+          }
+        }
         if (data.default_rate_limit) setDefaultRateLimit(data.default_rate_limit);
         if (data.default_max_concurrent) setDefaultMaxConcurrent(data.default_max_concurrent);
         if (data.usage_retention_days) setRetentionDays(data.usage_retention_days);

@@ -20,10 +20,15 @@ interface VoiceItem {
 export const DocsSnippets: React.FC = () => {
   const [endpoint, setEndpoint] = useState<EndpointId>('llm_chat');
   const [lang, setLang] = useState<LangId>('python');
-  const defaultUrl = typeof window !== 'undefined' && window.location.hostname && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
-    ? window.location.origin
-    : 'http://127.0.0.1:8000';
-  const [baseUrl, setBaseUrl] = useState<string>(defaultUrl);
+  const getInitialBaseUrl = (): string => {
+    if (typeof window !== 'undefined' && window.location.hostname) {
+      if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        return window.location.origin;
+      }
+    }
+    return 'http://127.0.0.1:8000';
+  };
+  const [baseUrl, setBaseUrl] = useState<string>(getInitialBaseUrl());
   const [apiKey, setApiKey] = useState<string>('va_live_your_api_key_here');
 
   const [models, setModels] = useState<InstalledModel[]>([]);
@@ -36,10 +41,25 @@ export const DocsSnippets: React.FC = () => {
   const [testOutput, setTestOutput] = useState<string | null>(null);
 
   useEffect(() => {
-    // Load dashboard base url
+    // Load dashboard base url from server
     fetchAdminJson<any>('/v1/admin/settings/dashboard')
       .then((data) => {
-        if (data.base_url) setBaseUrl(data.base_url);
+        if (data.base_url) {
+          const isRemoteClient =
+            typeof window !== 'undefined' &&
+            window.location.hostname &&
+            window.location.hostname !== 'localhost' &&
+            window.location.hostname !== '127.0.0.1';
+          const isLoopback =
+            data.base_url.includes('127.0.0.1') || data.base_url.includes('localhost');
+
+          // If browser is accessing remotely (e.g. RunPod / cloud proxy), prioritize the real browser origin
+          if (isRemoteClient && isLoopback) {
+            setBaseUrl(window.location.origin);
+          } else {
+            setBaseUrl(data.base_url);
+          }
+        }
       })
       .catch(() => {});
   }, []);
@@ -100,6 +120,14 @@ export const DocsSnippets: React.FC = () => {
       })
       .catch(() => {});
   }, [endpoint, selectedModel]);
+
+  const toWsUrl = (httpUrl: string): string => {
+    const clean = httpUrl.replace(/\/+$/, '');
+    if (clean.startsWith('https://')) {
+      return clean.replace(/^https:\/\//, 'wss://');
+    }
+    return clean.replace(/^http:\/\//, 'ws://');
+  };
 
   // Generate code snippet text
   const renderSnippet = (): string => {
@@ -283,7 +311,7 @@ console.log("Received PCM bytes:", audioData.byteLength);`;
 import websockets
 import json
 
-ws_url = "${bUrl.replace(/^http/, 'ws')}/v1/audio/transcriptions/stream?model=${mod}"
+ws_url = "${toWsUrl(bUrl)}/v1/audio/transcriptions/stream?model=${mod}"
 headers = {"Authorization": f"Bearer ${key}"}
 
 async def stream_audio():
@@ -312,7 +340,7 @@ asyncio.run(stream_audio())`;
 
     if (endpoint === 'voice_stream') {
       return `// Connect to bidirectional conversational voice WebSocket
-const wsUrl = "${bUrl.replace(/^http/, 'ws')}/v1/voice/stream";
+const wsUrl = "${toWsUrl(bUrl)}/v1/voice/stream";
 const ws = new WebSocket(wsUrl);
 
 ws.onopen = () => {
@@ -397,8 +425,11 @@ ws.onmessage = (event) => {
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-slate-100">API Documentation & Code Snippets</h1>
-        <p className="text-sm text-slate-400">
-          Copy production-ready integration code pointing to your local gateway on port 8000
+        <p className="text-sm text-slate-400 mt-1 flex items-center gap-2">
+          <span>Copy production-ready integration code pointing to your gateway at</span>
+          <span className="font-mono text-indigo-300 bg-slate-900 border border-slate-800 rounded px-2 py-0.5 text-xs">
+            {baseUrl}
+          </span>
         </p>
       </div>
 
@@ -498,6 +529,19 @@ ws.onmessage = (event) => {
               onChange={(e) => setApiKey(e.target.value)}
               placeholder="va_live_••••••"
               className="bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-300 font-mono text-[11px] w-36 outline-none"
+            />
+          </div>
+
+          {/* Gateway Base URL input */}
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 font-medium">Gateway URL:</span>
+            <input
+              type="text"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder="http://127.0.0.1:8000"
+              className="bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-300 font-mono text-[11px] w-56 outline-none focus:border-indigo-500"
+              title="Gateway URL used across all code snippets"
             />
           </div>
         </div>

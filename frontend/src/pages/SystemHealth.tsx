@@ -27,7 +27,11 @@ export const SystemHealth: React.FC = () => {
           </div>
           <div>
             <h3 className="font-semibold text-slate-200">FastAPI Gateway</h3>
-            <p className="text-xs text-slate-500 font-mono">http://127.0.0.1:8000</p>
+            <p className="text-xs text-slate-500 font-mono">
+              {typeof window !== 'undefined' && window.location.origin
+                ? window.location.origin
+                : 'http://127.0.0.1:8000'}
+            </p>
           </div>
           <p className="text-xs text-slate-400">
             Handles API-key authentication, WebSocket connection tickets, session management, and voice turn streaming.

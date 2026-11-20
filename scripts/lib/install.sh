@@ -203,12 +203,19 @@ install_node_and_frontend() {
     fi
 
     # Build production panel (dist)
+    local needs_build="false"
     if [ ! -f "${frontend_dir}/dist/index.html" ]; then
+        needs_build="true"
+    elif [ -n "$(find "${frontend_dir}/src" -newer "${frontend_dir}/dist/index.html" 2>/dev/null | head -n 1)" ]; then
+        needs_build="true"
+    fi
+
+    if [ "${needs_build}" = "true" ]; then
         log_info "Building production frontend web application (${frontend_dir}/dist)..."
         npm --prefix "${frontend_dir}" run build
         log_ok "Frontend production assets built successfully."
     else
-        log_ok "Production frontend assets present in frontend/dist."
+        log_ok "Production frontend assets up to date in frontend/dist."
     fi
 }
 

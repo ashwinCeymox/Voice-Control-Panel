@@ -198,6 +198,11 @@ with open(path, 'w') as f:
     SERVE_FRONTEND="$(get_env_val "SERVE_FRONTEND" "true")"
     AUTO_RESTART="$(get_env_val "AUTO_RESTART" "true")"
     PUBLIC_BASE_URL="$(get_env_val "PUBLIC_BASE_URL" "")"
+    if [ -z "${PUBLIC_BASE_URL}" ] && [ "${IS_RUNPOD}" = "true" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then
+        local runpod_url="https://${RUNPOD_POD_ID}-${GATEWAY_PORT}.proxy.runpod.net"
+        set_env_val "PUBLIC_BASE_URL" "${runpod_url}"
+        PUBLIC_BASE_URL="${runpod_url}"
+    fi
     TRUSTED_PROXY_IPS="$(get_env_val "TRUSTED_PROXY_IPS" "")"
 
     chmod 600 "${ENV_FILE}"

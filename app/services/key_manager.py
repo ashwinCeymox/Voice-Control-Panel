@@ -641,7 +641,10 @@ class KeyManager:
     # Dashboard Settings
     # ---------------------------------------------------------
     @staticmethod
-    async def get_dashboard_settings() -> Dict[str, Any]:
+    async def get_dashboard_settings(
+        request_host: Optional[str] = None,
+        request_scheme: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Fetch dashboard configuration settings."""
         async with get_db() as db:
             async with db.execute(
@@ -649,7 +652,10 @@ class KeyManager:
             ) as cursor:
                 row = await cursor.fetchone()
 
-        resolved_base = settings.get_public_base_url()
+        resolved_base = settings.get_public_base_url(
+            request_host=request_host,
+            request_scheme=request_scheme,
+        )
         if not row:
             return {
                 "base_url": resolved_base,
@@ -660,10 +666,17 @@ class KeyManager:
             }
 
         db_base = row[1]
-        # If DB still has local loopback default, adapt dynamically to public configured base
-        if db_base in ("http://127.0.0.1:8000", "http://localhost:8000") and (
-            settings.PUBLIC_BASE_URL or settings.GATEWAY_HOST not in ("127.0.0.1", "localhost")
-        ):
+        # If DB still has local loopback default, adapt dynamically to public configured, RunPod, or requested base
+        is_loopback = db_base in ("http://127.0.0.1:8000", "http://localhost:8000") or (
+            db_base.startswith("http://127.0.0.1") or db_base.startswith("http://localhost")
+        )
+        has_public_target = bool(
+            settings.PUBLIC_BASE_URL
+            or os.environ.get("RUNPOD_POD_ID")
+            or (request_host and request_host not in ("127.0.0.1", "localhost", "127.0.0.1:8000", "localhost:8000"))
+            or settings.GATEWAY_HOST not in ("127.0.0.1", "localhost")
+        )
+        if is_loopback and has_public_target:
             db_base = resolved_base
 
         return {

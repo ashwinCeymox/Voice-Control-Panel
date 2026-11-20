@@ -218,12 +218,19 @@ start_gateway() {
 
     # Ensure frontend production assets (frontend/dist/index.html) exist
     local frontend_dir="${ROOT_DIR}/frontend"
+    local needs_build="false"
     if [ ! -f "${frontend_dir}/dist/index.html" ]; then
+        needs_build="true"
+    elif [ -n "$(find "${frontend_dir}/src" -newer "${frontend_dir}/dist/index.html" 2>/dev/null | head -n 1)" ]; then
+        needs_build="true"
+    fi
+
+    if [ "${needs_build}" = "true" ]; then
         if ! command -v npm >/dev/null 2>&1 && [ -x "${TOOLS_DIR}/node/bin/npm" ]; then
             export PATH="${TOOLS_DIR}/node/bin:${PATH}"
         fi
         if command -v npm >/dev/null 2>&1; then
-            log_info "Production frontend assets missing. Building web control panel (${frontend_dir}/dist)..."
+            log_info "Frontend assets need compilation. Building web control panel (${frontend_dir}/dist)..."
             (
                 cd "${frontend_dir}"
                 if [ ! -d "node_modules" ]; then

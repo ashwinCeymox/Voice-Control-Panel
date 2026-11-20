@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 from typing import Any, Dict, List, Optional
 import aiosqlite
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from app.core.security import require_admin_key
 from app.services.key_manager import KeyManager, ApiKeyRecord
@@ -217,10 +217,16 @@ async def get_usage(
 # -------------------------------------------------------------------
 @router.get("/settings/dashboard")
 async def get_dashboard_settings(
+    request: Request,
     admin: ApiKeyRecord = Depends(require_admin_key),
 ) -> Dict[str, Any]:
     """Retrieve developer dashboard settings."""
-    return await KeyManager.get_dashboard_settings()
+    req_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    req_scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    return await KeyManager.get_dashboard_settings(
+        request_host=req_host,
+        request_scheme=req_scheme,
+    )
 
 
 @router.put("/settings/dashboard")

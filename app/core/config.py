@@ -159,6 +159,10 @@ class Settings(BaseSettings):
         """Resolve dynamic public base URL for clients, documentation, and external proxies."""
         if self.PUBLIC_BASE_URL and self.PUBLIC_BASE_URL.strip():
             return self.PUBLIC_BASE_URL.strip().rstrip("/")
+        # Auto-detect RunPod cloud pod URL from container environment
+        runpod_id = os.environ.get("RUNPOD_POD_ID", "").strip()
+        if runpod_id:
+            return f"https://{runpod_id}-{self.GATEWAY_PORT}.proxy.runpod.net"
         if request_host and request_host.strip():
             scheme = request_scheme or ("https" if self.cookie_secure else "http")
             return f"{scheme}://{request_host.strip()}".rstrip("/")
