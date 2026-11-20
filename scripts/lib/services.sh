@@ -212,6 +212,18 @@ start_local_tts() {
         export HF_HUB_OFFLINE=1
     fi
 
+    # RunPod and cloud Linux images often set HF_HUB_ENABLE_HF_TRANSFER=1 globally.
+    # If hf_transfer package is not installed in the local-tts virtualenv, disable it
+    # so huggingface_hub uses standard HTTP download without raising a fatal ValueError.
+    local py_bin="${tts_bin%/*}/python"
+    if [ -x "${py_bin}" ]; then
+        if ! "${py_bin}" -c "import hf_transfer" >/dev/null 2>&1; then
+            export HF_HUB_ENABLE_HF_TRANSFER=0
+        fi
+    else
+        export HF_HUB_ENABLE_HF_TRANSFER=0
+    fi
+
     local tts_dir
     tts_dir="$(cd "$(dirname "$(dirname "${tts_bin}")")" 2>/dev/null && pwd || echo "${ROOT_DIR}")"
 

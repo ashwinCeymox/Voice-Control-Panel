@@ -415,6 +415,8 @@ install_local_tts_engine() {
                 log_info "CUDA extra sync unavailable; syncing standard backend..."
                 "${uv_bin}" sync >/dev/null 2>&1 || true
             fi
+            # Install hf_transfer to support fast Hugging Face downloads on RunPod
+            "${uv_bin}" pip install hf_transfer >/dev/null 2>&1 || true
         )
 
         if [ -x "${target_tts_dir}/.venv/bin/local-tts" ]; then
