@@ -127,42 +127,65 @@ start_local_tts() {
         return 0
     fi
 
-    # Check for Apple MLX local-tts binary on macOS
-    local tts_bin="${ROOT_DIR}/../local-tts/.venv/bin/local-tts"
-    if [ -x "${tts_bin}" ]; then
-        log_info "Starting resident local-tts (MLX Kokoro) on 127.0.0.1:${TTS_PORT}..."
-        export HF_HUB_OFFLINE=1
-        nohup "${tts_bin}" server \
-            --host 127.0.0.1 \
-            --port "${TTS_PORT}" \
-            --disable-qwen \
-            >> "${LOGS_DIR}/local-tts.log" 2>&1 &
-        local pid=$!
-        echo "${pid}" > "${RUN_DIR}/local-tts.pid"
+    local tts_bin=""
+    for candidate in "${ROOT_DIR}/../local-tts/.venv/bin/local-tts" \
+                     "${ROOT_DIR}/local-tts/.venv/bin/local-tts" \
+                     "${TOOLS_DIR}/local-tts/.venv/bin/local-tts" \
+                     "${ARCH_DIR}/local-tts/.venv/bin/local-tts"; do
+        if [ -x "${candidate}" ]; then
+            tts_bin="${candidate}"
+            break
+        fi
+    done
 
-        local count=0
-        while [ "${count}" -lt 30 ]; do
-            if curl -s "http://127.0.0.1:${TTS_PORT}/v1/models" >/dev/null 2>&1; then
-                log_ok "local-tts is ready on port ${TTS_PORT} (PID: ${pid})"
-                TTS_AVAILABLE="true"
-                return 0
-            fi
-            sleep 1
-            count=$((count + 1))
-        done
-        TTS_AVAILABLE="true"
-        return 0
+    if [ -z "${tts_bin}" ]; then
+        if command -v local-tts >/dev/null 2>&1; then
+            tts_bin="$(command -v local-tts)"
+        elif [ -x "${HOME}/.local/bin/local-tts" ]; then
+            tts_bin="${HOME}/.local/bin/local-tts"
+        fi
     fi
 
-    # Linux fallback check
-    if [ "${PLATFORM}" = "linux" ]; then
-        log_info "Linux TTS engine: MLX is not supported on Linux. Gateway will handle TTS requests with clean 503 fallback."
+    if [ -z "${tts_bin}" ] || [ ! -x "${tts_bin}" ]; then
+        log_warn "No resident local-tts executable found; TTS service will remain in STANDBY."
         TTS_AVAILABLE="false"
         return 0
     fi
 
-    log_warn "No resident TTS engine executable found; TTS will report unavailable."
-    TTS_AVAILABLE="false"
+    log_info "Starting resident local-tts (Kokoro) on 127.0.0.1:${TTS_PORT}..."
+
+    # On macOS Apple Silicon with existing MLX cache, offline mode is safe.
+    # On Linux, allow online download of Kokoro weights to ~/.cache/huggingface on first run.
+    if [ "${PLATFORM}" = "macos" ] && [ -d "${HOME}/.cache/huggingface/hub/models--mlx-community--Kokoro-82M" ]; then
+        export HF_HUB_OFFLINE=1
+    fi
+
+    # Disable pocket, kitten, and qwen per localtts.md Section 6 to dedicate memory strictly to Kokoro
+    nohup "${tts_bin}" server \
+        --host 127.0.0.1 \
+        --port "${TTS_PORT}" \
+        --disable-pocket \
+        --disable-kitten \
+        --disable-qwen \
+        >> "${LOGS_DIR}/local-tts.log" 2>&1 &
+    local pid=$!
+    echo "${pid}" > "${RUN_DIR}/local-tts.pid"
+
+    log_info "Waiting for local-tts (Kokoro) to be ready on port ${TTS_PORT}..."
+    local count=0
+    while [ "${count}" -lt 60 ]; do
+        if curl -s "http://127.0.0.1:${TTS_PORT}/v1/models" >/dev/null 2>&1; then
+            log_ok "local-tts (Kokoro) is ready on port ${TTS_PORT} (PID: ${pid})"
+            TTS_AVAILABLE="true"
+            return 0
+        fi
+        sleep 1
+        count=$((count + 1))
+    done
+
+    log_warn "local-tts started (PID: ${pid}) but health probe timed out (model weights may still be downloading); continuing..."
+    TTS_AVAILABLE="true"
+    return 0
 }
 
 # Start Sherpa-ONNX streaming STT

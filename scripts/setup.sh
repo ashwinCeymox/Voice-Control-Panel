@@ -119,8 +119,26 @@ if [ "${ACCEL}" = "metal" ]; then
         }
     fi
 else
-    log_warn "NOTICE: Kokoro on Apple MLX is macOS-exclusive. local-tts will NOT be installed on Linux."
-    log_warn "The gateway will cleanly report Text-to-Speech as unavailable (HTTP 503) without crashing."
+    # Linux setup per localtts.md using uv
+    LOCAL_TTS_DIR="${ROOT_DIR}/../local-tts"
+    [ ! -d "${LOCAL_TTS_DIR}" ] && LOCAL_TTS_DIR="${ARCH_DIR}/local-tts"
+    if [ -x "${LOCAL_TTS_DIR}/.venv/bin/local-tts" ]; then
+        log_ok "local-tts engine verified at ${LOCAL_TTS_DIR}/.venv/bin/local-tts"
+    else
+        log_info "Setting up local-tts on Linux per localtts.md..."
+        if ! command -v uv >/dev/null 2>&1 && [ ! -x "${HOME}/.local/bin/uv" ]; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || true
+        fi
+        export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:/usr/local/bin:${PATH}"
+        if command -v uv >/dev/null 2>&1; then
+            if [ ! -d "${LOCAL_TTS_DIR}/.git" ]; then
+                git clone --depth 1 https://github.com/saghul/local-tts.git "${LOCAL_TTS_DIR}" || true
+            fi
+            if [ -d "${LOCAL_TTS_DIR}" ]; then
+                (cd "${LOCAL_TTS_DIR}" && uv sync --extra cuda >/dev/null 2>&1 || uv sync >/dev/null 2>&1 || true)
+            fi
+        fi
+    fi
 fi
 
 # 5. Default Models Download

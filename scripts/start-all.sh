@@ -57,24 +57,37 @@ echo -e "${BOLD}${SKY}==========================================================
 # Stop any running instances first
 "${SCRIPT_DIR}/stop-all.sh" || true
 
-# 2. Start local-tts (macOS Metal only) on 127.0.0.1:8880
-LOCAL_TTS_BIN="${ROOT_DIR}/arch/local-tts/.venv/bin/local-tts"
-if [ ! -f "${LOCAL_TTS_BIN}" ] && [ -f "${ROOT_DIR}/../local-tts/.venv/bin/local-tts" ]; then
-    LOCAL_TTS_BIN="${ROOT_DIR}/../local-tts/.venv/bin/local-tts"
+# 2. Start local-tts (Kokoro) on 127.0.0.1:8880
+LOCAL_TTS_BIN=""
+for candidate in "${ROOT_DIR}/../local-tts/.venv/bin/local-tts" \
+                 "${ROOT_DIR}/local-tts/.venv/bin/local-tts" \
+                 "${ROOT_DIR}/arch/local-tts/.venv/bin/local-tts" \
+                 "${ROOT_DIR}/.tools/local-tts/.venv/bin/local-tts"; do
+    if [ -x "${candidate}" ]; then
+        LOCAL_TTS_BIN="${candidate}"
+        break
+    fi
+done
+if [ -z "${LOCAL_TTS_BIN}" ] && command -v local-tts >/dev/null 2>&1; then
+    LOCAL_TTS_BIN="$(command -v local-tts)"
 fi
 
-if [ -f "${LOCAL_TTS_BIN}" ]; then
-    log_info "Starting local-tts (Kokoro MLX) on 127.0.0.1:8880..."
-    export HF_HUB_OFFLINE=1
+if [ -x "${LOCAL_TTS_BIN}" ]; then
+    log_info "Starting local-tts (Kokoro) on 127.0.0.1:8880..."
+    if [ "$(uname -s)" = "Darwin" ] && [ -d "${HOME}/.cache/huggingface/hub/models--mlx-community--Kokoro-82M" ]; then
+        export HF_HUB_OFFLINE=1
+    fi
     nohup "${LOCAL_TTS_BIN}" server \
         --host 127.0.0.1 \
         --port 8880 \
+        --disable-pocket \
+        --disable-kitten \
         --disable-qwen \
         > "${LOGS_DIR}/local-tts.log" 2>&1 &
     echo $! > "${PID_DIR}/local-tts.pid"
     log_ok "local-tts started (PID $(cat "${PID_DIR}/local-tts.pid"))"
 else
-    log_warn "local-tts not installed or unsupported on this OS. Gateway will handle TTS with 503 fallback."
+    log_warn "local-tts not installed. Gateway will handle TTS with 503 fallback."
 fi
 
 # 3. Start LocalAI strictly on 127.0.0.1:8080

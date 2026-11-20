@@ -311,7 +311,115 @@ install_localai_engine() {
     fi
 }
 
-# 6. Setup default Streaming STT model (Sherpa ONNX)
+# 6. Setup local-tts engine (Kokoro via saghul/local-tts per localtts.md)
+install_local_tts_engine() {
+    # Check if local-tts is already installed and executable
+    for candidate in "${ROOT_DIR}/../local-tts/.venv/bin/local-tts" \
+                     "${ROOT_DIR}/local-tts/.venv/bin/local-tts" \
+                     "${TOOLS_DIR}/local-tts/.venv/bin/local-tts" \
+                     "${ARCH_DIR}/local-tts/.venv/bin/local-tts"; do
+        if [ -x "${candidate}" ]; then
+            log_ok "Using resident local-tts engine at ${candidate}"
+            return 0
+        fi
+    done
+
+    if command -v local-tts >/dev/null 2>&1; then
+        log_ok "Using system local-tts binary at $(command -v local-tts)"
+        return 0
+    elif [ -x "${HOME}/.local/bin/local-tts" ]; then
+        log_ok "Using user local-tts binary at ${HOME}/.local/bin/local-tts"
+        return 0
+    fi
+
+    if [ "${PLATFORM}" = "linux" ]; then
+        log_info "Installing local-tts (Kokoro PyTorch/CUDA engine for Linux per localtts.md)..."
+
+        # 1. Install optional system audio libraries if root
+        if [ "${IS_ROOT:-false}" = "true" ] || [ "$(id -u)" -eq 0 ]; then
+            if command -v apt-get >/dev/null 2>&1; then
+                apt-get update -qq && apt-get install -y --no-install-recommends \
+                    ffmpeg sox espeak-ng >/dev/null 2>&1 || true
+            fi
+        fi
+
+        # 2. Ensure uv package manager is available
+        export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:/usr/local/bin:${PATH}"
+        local uv_bin=""
+        if command -v uv >/dev/null 2>&1; then
+            uv_bin="$(command -v uv)"
+        elif [ -x "${HOME}/.local/bin/uv" ]; then
+            uv_bin="${HOME}/.local/bin/uv"
+        elif [ -x "/usr/local/bin/uv" ]; then
+            uv_bin="/usr/local/bin/uv"
+        fi
+
+        if [ -z "${uv_bin}" ] || [ ! -x "${uv_bin}" ]; then
+            log_info "Installing uv package manager..."
+            curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || true
+            export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:/usr/local/bin:${PATH}"
+            if command -v uv >/dev/null 2>&1; then
+                uv_bin="$(command -v uv)"
+            elif [ -x "${HOME}/.local/bin/uv" ]; then
+                uv_bin="${HOME}/.local/bin/uv"
+            fi
+        fi
+
+        if [ -z "${uv_bin}" ] || [ ! -x "${uv_bin}" ]; then
+            log_warn "uv package manager could not be installed; skipping local-tts automated install."
+            return 0
+        fi
+        log_ok "uv package manager verified"
+
+        # 3. Determine target directory for local-tts clone
+        local target_tts_dir="${ROOT_DIR}/../local-tts"
+        if [ ! -d "${target_tts_dir}" ]; then
+            if [ -w "${ROOT_DIR}/.." ]; then
+                target_tts_dir="${ROOT_DIR}/../local-tts"
+            else
+                target_tts_dir="${TOOLS_DIR}/local-tts"
+            fi
+        fi
+
+        # 4. Clone repository if not present
+        if [ ! -d "${target_tts_dir}/.git" ]; then
+            log_info "Cloning local-tts from https://github.com/saghul/local-tts.git into ${target_tts_dir}..."
+            mkdir -p "$(dirname "${target_tts_dir}")"
+            git clone --depth 1 https://github.com/saghul/local-tts.git "${target_tts_dir}" || {
+                log_warn "git clone failed for saghul/local-tts; local-tts will remain in STANDBY."
+                return 0
+            }
+        fi
+
+        # 5. Install dependencies via uv sync
+        log_info "Installing local-tts dependencies via uv (per localtts.md)..."
+        (
+            cd "${target_tts_dir}"
+            # Try with CUDA extra first for GPU acceleration, fallback to standard sync for CPU
+            if "${uv_bin}" sync --extra cuda >/dev/null 2>&1; then
+                log_ok "local-tts dependencies synced with CUDA extra."
+            else
+                log_info "CUDA extra sync unavailable; syncing standard backend..."
+                "${uv_bin}" sync >/dev/null 2>&1 || true
+            fi
+        )
+
+        if [ -x "${target_tts_dir}/.venv/bin/local-tts" ]; then
+            log_ok "local-tts engine installed and verified at ${target_tts_dir}/.venv/bin/local-tts"
+            return 0
+        fi
+
+        log_warn "local-tts virtualenv build did not produce executable; service will remain in STANDBY."
+        return 0
+    else
+        if [ "${PLATFORM}" = "macos" ]; then
+            log_warn "Resident local-tts binary not found in ../local-tts/.venv/bin/local-tts on macOS. LocalTTS will remain in STANDBY."
+            return 0
+        fi
+    fi
+}
+
+# 7. Setup default Streaming STT model (Sherpa ONNX)
 install_streaming_stt_model() {
     local target_dir="${ROOT_DIR}/models/streaming-stt/${STREAMING_STT_DEFAULT_MODEL}"
     if [ -d "${target_dir}" ] && [ -f "${target_dir}/tokens.txt" ]; then
@@ -336,6 +444,7 @@ run_installer() {
     install_python_env
     install_node_and_frontend
     install_localai_engine
+    install_local_tts_engine
     install_streaming_stt_model
     log_ok "=== Installation Complete and Fully Verified ==="
 }
