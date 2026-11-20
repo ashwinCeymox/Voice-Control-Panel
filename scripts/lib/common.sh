@@ -39,8 +39,9 @@ RUN_DIR="${ROOT_DIR}/.run"
 LOGS_DIR="${ROOT_DIR}/logs"
 TOOLS_DIR="${ROOT_DIR}/.tools"
 STAMPS_DIR="${ROOT_DIR}/.install-stamps"
+ARCH_DIR="${ARCH_DIR:-${ROOT_DIR}/arch}"
 
-mkdir -p "${RUN_DIR}" "${LOGS_DIR}" "${TOOLS_DIR}" "${STAMPS_DIR}"
+mkdir -p "${RUN_DIR}" "${LOGS_DIR}" "${TOOLS_DIR}" "${STAMPS_DIR}" "${ARCH_DIR}"
 
 if [ -d "${TOOLS_DIR}/node/bin" ]; then
     export PATH="${TOOLS_DIR}/node/bin:${PATH}"

@@ -131,7 +131,7 @@ start_local_tts() {
     for candidate in "${ROOT_DIR}/../local-tts/.venv/bin/local-tts" \
                      "${ROOT_DIR}/local-tts/.venv/bin/local-tts" \
                      "${TOOLS_DIR}/local-tts/.venv/bin/local-tts" \
-                     "${ARCH_DIR}/local-tts/.venv/bin/local-tts"; do
+                     "${ARCH_DIR:-${ROOT_DIR}/arch}/local-tts/.venv/bin/local-tts"; do
         if [ -x "${candidate}" ]; then
             tts_bin="${candidate}"
             break
