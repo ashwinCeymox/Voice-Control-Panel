@@ -23,20 +23,38 @@ file_sha256() {
     fi
 }
 
+# Helper to find the newest/best Python binary (prefers 3.12, 3.11, 3.10 over 3.8)
+resolve_best_python() {
+    for candidate in python3.12 python3.11 python3.10 /opt/conda/bin/python3 /usr/local/bin/python3 python3 python; do
+        if command -v "${candidate}" >/dev/null 2>&1 || [ -x "${candidate}" ]; then
+            local ver
+            ver="$("${candidate}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0.0")"
+            local major="${ver%%.*}"
+            local minor="${ver##*.}"
+            if [ "${major}" -eq 3 ] && [ "${minor}" -ge 10 ]; then
+                echo "${candidate}"
+                return 0
+            fi
+        fi
+    done
+    echo "python3"
+}
+
 # 1. Preflight system check
 run_preflight() {
     log_info "Running system preflight checks..."
     log_ok "Platform: ${PLATFORM} (${ARCH}), Root: ${IS_ROOT}, RunPod: ${IS_RUNPOD}"
 
     # Python version check
-    if ! command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="$(resolve_best_python)"
+    if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1 && [ ! -x "${PYTHON_BIN}" ]; then
         log_err "Python 3 is not installed. Python >= ${REQUIRED_PYTHON_MIN_VERSION} is required."
         exit 1
     fi
 
     local py_ver
-    py_ver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")')"
-    log_ok "Detected Python ${py_ver} (Minimum required: ${REQUIRED_PYTHON_MIN_VERSION})"
+    py_ver="$("${PYTHON_BIN}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")')"
+    log_ok "Detected Python ${py_ver} using ${PYTHON_BIN} (Minimum required: ${REQUIRED_PYTHON_MIN_VERSION})"
 
     # Check GPU
     if command -v nvidia-smi >/dev/null 2>&1; then
@@ -106,9 +124,10 @@ install_python_env() {
     local req_file="${ROOT_DIR}/requirements.txt"
     local stamp_file="${STAMPS_DIR}/requirements.sha256"
 
+    local py_bin="${PYTHON_BIN:-$(resolve_best_python)}"
     if [ ! -d "${venv_dir}" ] || [ ! -f "${venv_dir}/bin/python" ]; then
-        log_info "Creating Python virtual environment in ${venv_dir}..."
-        python3 -m venv "${venv_dir}"
+        log_info "Creating Python virtual environment in ${venv_dir} using ${py_bin}..."
+        "${py_bin}" -m venv "${venv_dir}"
         "${venv_dir}/bin/pip" install --upgrade pip setuptools wheel
         log_ok "Virtual environment created."
     fi
