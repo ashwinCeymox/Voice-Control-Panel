@@ -1,50 +1,74 @@
-# Multi-stage Dockerfile for FastAPI Gateway
-FROM python:3.12-slim AS builder
+# ==============================================================================
+# Production All-In-One Container for Self-Hosted Local Voice AI Platform
+# Runs FastAPI Gateway, Sherpa-ONNX STT, LocalAI Engine, and Web Control Panel
+# Compatible with RunPod, Cloud VMs, and Local Docker
+# ==============================================================================
+FROM ubuntu:22.04
+
+# Avoid interactive prompts during apt install
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/root/.local/bin:/usr/local/bin:${PATH}"
 
 WORKDIR /app
 
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
-
+# 1. Install system runtime prerequisites
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
     curl \
+    ca-certificates \
+    git \
+    bzip2 \
+    tar \
+    procps \
+    python3 \
+    python3-pip \
+    python3-venv \
+    nodejs \
+    npm \
+    file \
     && rm -rf /var/lib/apt/lists/*
 
+# 2. Pre-install official LocalAI server binary into /usr/local/bin
+RUN LOCALAI_NO_SUDO=1 curl -sSL https://localai.io/install.sh | bash && \
+    chmod +x /usr/local/bin/local-ai || true
+
+# 3. Copy dependencies and pre-build Python virtual environment
 COPY requirements.txt pyproject.toml ./
-RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+RUN python3 -m venv /app/.venv && \
+    /app/.venv/bin/pip install --upgrade pip setuptools wheel && \
+    /app/.venv/bin/pip install -r requirements.txt
 
-FROM python:3.12-slim AS runner
+# 4. Copy frontend source and pre-compile production assets
+COPY frontend/package*.json ./frontend/
+RUN cd frontend && npm ci --prefer-offline --no-audit || npm install --no-audit
 
-WORKDIR /app
+COPY frontend/ ./frontend/
+RUN cd frontend && npm run build
 
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    APP_ENV=production \
-    APP_HOST=0.0.0.0 \
-    APP_PORT=8000 \
-    APP_DATABASE_PATH=/data/voice_platform.db \
-    LOCALAI_BASE_URL=http://localai:8080 \
-    LOCAL_TTS_HTTP_BASE_URL=http://tts:8880 \
-    LOCAL_TTS_WS_BASE_URL=ws://tts:8880
+# 5. Pre-download default Sherpa-ONNX streaming STT model
+RUN mkdir -p /app/models/streaming-stt && \
+    curl -sSL -o /tmp/zipformer.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2 && \
+    tar -xjf /tmp/zipformer.tar.bz2 -C /app/models/streaming-stt && \
+    rm -f /tmp/zipformer.tar.bz2
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /data /models
-
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
-
+# 6. Copy remaining project files
 COPY app/ ./app/
+COPY scripts/ ./scripts/
+COPY deploy/ ./deploy/
+COPY start.sh ./start.sh
 
-VOLUME ["/data"]
+RUN chmod +x ./start.sh ./scripts/lib/*.sh
 
+# Create persistent runtime data directories
+RUN mkdir -p /app/.run /app/logs /app/models /app/.install-stamps
+
+# Expose FastAPI Gateway port (public gatekeeper)
 EXPOSE 8000
 
-HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+# Health check against FastAPI live endpoint
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -f http://127.0.0.1:8000/health/live || exit 1
 
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Default launch command: starts LocalAI, Sherpa STT, Gateway, and stays foreground
+ENTRYPOINT ["/bin/bash", "-c", "exec ./start.sh up --foreground"]

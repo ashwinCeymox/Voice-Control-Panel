@@ -191,8 +191,9 @@ case "${COMMAND}" in
         check_public_reachability "${PUBLIC_URL}" 20 || true
 
         if [ "${FOREGROUND}" = "true" ]; then
-            log_info "Running in foreground mode. Press Ctrl+C to halt stack."
+            log_info "Running in foreground mode. Press Ctrl+C or send SIGTERM to halt stack."
             trap 'stop_services; exit 0' SIGINT SIGTERM
+            touch "${LOGS_DIR}/backend.log"
             tail -f "${LOGS_DIR}/backend.log"
         fi
         exit 0

@@ -1,136 +1,28 @@
 version: "3.8"
 
 services:
-  gateway:
+  voice-agent:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: voice-gateway
+    container_name: local-voice-agent
     restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
       - APP_ENV=production
-      - APP_HOST=0.0.0.0
-      - APP_PORT=8000
-      - APP_DATABASE_PATH=/data/voice_platform.db
-      - ADMIN_API_KEY=${ADMIN_API_KEY:-admin-secret-change-in-production}
-      - API_KEY_HASH_SECRET=${API_KEY_HASH_SECRET:-generate-a-secure-random-secret-key-32-bytes}
-      - LOCALAI_BASE_URL=http://localai:8080
-      - LOCALAI_LLM_MODEL=${LOCALAI_LLM_MODEL:-llama-3.2-1b-instruct}
-      - LOCALAI_STT_MODEL=${LOCALAI_STT_MODEL:-whisper-base}
-      - LOCALAI_ALLOWED_LLM_MODELS=${LOCALAI_ALLOWED_LLM_MODELS:-llama-3.2-1b-instruct,llama-3.2-3b-instruct}
-      - LOCALAI_ALLOWED_STT_MODELS=${LOCALAI_ALLOWED_STT_MODELS:-whisper-base,whisper-tiny}
-      - LOCAL_TTS_HTTP_BASE_URL=http://tts:8880
-      - LOCAL_TTS_WS_BASE_URL=ws://tts:8880
-      - LOCAL_TTS_MODEL=${LOCAL_TTS_MODEL:-kokoro}
-      - LOCAL_TTS_VOICE_ID=${LOCAL_TTS_VOICE_ID:-af_heart}
-      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:80}
-      - ENABLE_DOCS=${ENABLE_DOCS:-false}
-      - LOG_TRANSCRIPTS=${LOG_TRANSCRIPTS:-false}
-      - STT_ALLOW_FALLBACK=false
-      - TIMEOUT_STT_SECONDS=30.0
-      - TIMEOUT_LLM_SECONDS=60.0
-      - TIMEOUT_TTS_SECONDS=20.0
-      - TIMEOUT_VOICE_TURN_SECONDS=45.0
+      - GATEWAY_HOST=0.0.0.0
+      - GATEWAY_PORT=8000
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
     volumes:
-      - gateway_data:/data
-    networks:
-      - private_internal
-      - public_web
-    depends_on:
-      localai:
-        condition: service_healthy
-      tts:
-        condition: service_healthy
-
-  localai:
-    image: localai/localai:v2.26.0-cpu
-    container_name: voice-localai
-    restart: unless-stopped
-    # NOTICE: No host ports bound! LocalAI remains strictly private inside the internal Docker network.
-    expose:
-      - "8080"
-    environment:
-      - MODELS_PATH=/models
-      - ADDRESS=0.0.0.0:8080
-      - THREADS=${LOCALAI_THREADS:-4}
-      - DEBUG=false
-    volumes:
-      - ./models:/models:ro
-      - localai_cache:/tmp/localai
-    networks:
-      - private_internal
+      - voice_data:/app/data
+      - ./models:/app/models
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/readyz"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-
-  tts:
-    image: ghcr.io/hexgrad/kokoro-fastapi:latest
-    container_name: voice-tts
-    restart: unless-stopped
-    # NOTICE: No host ports bound! Kokoro TTS remains strictly private inside the internal Docker network.
-    expose:
-      - "8880"
-    environment:
-      - PORT=8880
-      - MODEL_DIR=/models
-      - USE_ONNX=true
-      - NUM_THREADS=4
-    volumes:
-      - tts_models:/models
-    networks:
-      - private_internal
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:8880/health"]
-      interval: 10s
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health/live"]
+      interval: 15s
       timeout: 3s
-      retries: 5
-      start_period: 15s
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: voice-frontend
-    restart: unless-stopped
-    ports:
-      - "5173:80"
-    environment:
-      - VITE_API_BASE_URL=http://gateway:8000
-    networks:
-      - public_web
-    depends_on:
-      - gateway
-
-  prometheus:
-    image: prom/prometheus:v2.50.1
-    container_name: voice-prometheus
-    restart: unless-stopped
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
-      - prometheus_data:/prometheus
-    networks:
-      - public_web
-    depends_on:
-      - gateway
-
-networks:
-  # Internal network isolating LocalAI and TTS backends from direct external access
-  private_internal:
-    internal: true
-  # Frontend and Gateway network
-  public_web:
-    driver: bridge
+      retries: 3
+      start_period: 10s
 
 volumes:
-  gateway_data:
-  localai_cache:
-  tts_models:
-  prometheus_data:
+  voice_data:
