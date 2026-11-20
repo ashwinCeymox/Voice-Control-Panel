@@ -21,11 +21,20 @@ async def health_ready():
     streaming_stt_ok = False
     streaming_info = {}
 
-    async with httpx.AsyncClient(timeout=2.0) as client:
+    async with httpx.AsyncClient(timeout=2.5) as client:
         try:
-            r = await client.get(f"{settings.LOCALAI_BASE_URL}/readyz")
-            if r.status_code in [200, 404]:  # Ready or alive
+            # Probe LocalAI via standard models endpoint, healthz liveness, or readyz probe
+            r = await client.get(f"{settings.LOCALAI_BASE_URL}/v1/models")
+            if r.status_code in [200, 401, 404]:
                 localai_ok = True
+            else:
+                r2 = await client.get(f"{settings.LOCALAI_BASE_URL}/healthz")
+                if r2.status_code in [200, 404]:
+                    localai_ok = True
+                else:
+                    r3 = await client.get(f"{settings.LOCALAI_BASE_URL}/readyz")
+                    if r3.status_code in [200, 404, 503]:
+                        localai_ok = True
         except Exception:
             localai_ok = False
 
