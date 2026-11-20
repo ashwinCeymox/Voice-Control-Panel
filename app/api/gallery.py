@@ -1640,12 +1640,26 @@ async def uninstall_model(
                 logger.info("Removed model subfolder: %s", target_subfolder)
 
             # Check for YAML configs to identify referenced weights
-            yaml_candidates = [
-                base_dir / f"{model_id}.yaml",
-                base_dir / f"{localai_target}.yaml",
-                base_dir / f"._gallery_{model_id}.yaml",
-                base_dir / f"._gallery_{localai_target}.yaml",
-            ]
+            base_prefix = model_id.split(":")[0]
+            id_tokens = {
+                model_id.lower(),
+                localai_target.lower(),
+                model_id.lower().replace(":", "-"),
+                model_id.lower().replace(":", "_"),
+                localai_target.lower().replace(":", "-"),
+                localai_target.lower().replace(":", "_"),
+                base_prefix.lower(),
+            }
+
+            yaml_candidates = []
+            for ypath in base_dir.iterdir():
+                if ypath.is_file() and ypath.suffix in (".yaml", ".yml"):
+                    stem_clean = ypath.stem.lower()
+                    if stem_clean.startswith("._gallery_"):
+                        stem_clean = stem_clean[len("._gallery_"):]
+                    if stem_clean in id_tokens or stem_clean.startswith(f"{base_prefix.lower()}-") or stem_clean.startswith(f"{base_prefix.lower()}_"):
+                        yaml_candidates.append(ypath)
+
             referenced_bins = set()
             for ypath in yaml_candidates:
                 if ypath.is_file():
@@ -1704,16 +1718,27 @@ async def uninstall_model(
                     except Exception:
                         pass
 
-            # Also remove any partial downloads or stray files matching model_id
+            # Also remove any direct weight files or partial downloads matching model_id / base_prefix
             for child in base_dir.iterdir():
-                if model_id in child.name and (
-                    child.suffix in (".yaml", ".partial", ".download")
-                ):
-                    try:
-                        if child.is_file():
+                if not child.is_file():
+                    continue
+                c_stem = child.stem.lower()
+                c_suffix = child.suffix.lower()
+                # Direct weight binaries (.gguf, .bin, .safetensors)
+                if c_suffix in (".gguf", ".bin", ".safetensors", ".pt", ".onnx"):
+                    if c_stem in id_tokens or any(c_stem.startswith(f"{t}-") or c_stem.startswith(f"{t}_") for t in id_tokens):
+                        if not is_weight_file_shared(str(base_dir), child.name, excluding_configs=exclude_names):
+                            try:
+                                child.unlink(missing_ok=True)
+                                logger.info("Removed matched model weight file: %s", child)
+                            except Exception:
+                                pass
+                elif c_suffix in (".yaml", ".partial", ".download", ".tmp"):
+                    if any(t in c_stem for t in id_tokens):
+                        try:
                             child.unlink(missing_ok=True)
-                    except Exception:
-                        pass
+                        except Exception:
+                            pass
         except Exception as fs_err:
             logger.warning(
                 "Filesystem cleanup warning for %s in %s: %s",
@@ -1724,22 +1749,27 @@ async def uninstall_model(
 
     # 7. Remove from SQLite installed_models and JSON manifest
     try:
+        base_prefix = model_id.split(":")[0]
         async with get_db() as db:
             await db.execute(
                 """
                 DELETE FROM installed_models
-                WHERE LOWER(id) IN (?, ?)
-                   OR LOWER(name) IN (?, ?)
-                   OR id = ?
-                   OR id = ?
+                WHERE LOWER(id) IN (?, ?, ?, ?)
+                   OR LOWER(name) IN (?, ?, ?, ?)
+                   OR LOWER(id) LIKE ?
+                   OR LOWER(id) LIKE ?
                 """,
                 (
                     model_id.lower(),
                     localai_target.lower(),
+                    model_id.lower().replace(":", "-"),
+                    base_prefix.lower(),
                     model_id.lower(),
                     localai_target.lower(),
-                    model_id,
-                    localai_target,
+                    model_id.lower().replace(":", "-"),
+                    base_prefix.lower(),
+                    f"{base_prefix.lower()}:%",
+                    f"{base_prefix.lower()}-%",
                 ),
             )
             await db.commit()

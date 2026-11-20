@@ -104,9 +104,9 @@ start_localai() {
     ulimit -n 65536 2>/dev/null || ulimit -n 4096 2>/dev/null || true
     if [ "${PLATFORM}" = "linux" ]; then
         if [ "${IS_ROOT:-false}" = "true" ] || [ "$(id -u)" -eq 0 ]; then
-            sysctl -w fs.inotify.max_user_watches=524288 >/dev/null 2>&1 || true
-            sysctl -w fs.inotify.max_user_instances=8192 >/dev/null 2>&1 || true
-            sysctl -w fs.inotify.max_queued_events=16384 >/dev/null 2>&1 || true
+            echo 524288 > /proc/sys/fs/inotify/max_user_watches 2>/dev/null || sysctl -w fs.inotify.max_user_watches=524288 >/dev/null 2>&1 || true
+            echo 8192 > /proc/sys/fs/inotify/max_user_instances 2>/dev/null || sysctl -w fs.inotify.max_user_instances=8192 >/dev/null 2>&1 || true
+            echo 16384 > /proc/sys/fs/inotify/max_queued_events 2>/dev/null || sysctl -w fs.inotify.max_queued_events=16384 >/dev/null 2>&1 || true
         fi
         if ! command -v nvidia-smi >/dev/null 2>&1; then
             export LOCALAI_DISABLE_HARDWARE_DEFAULTS=true
@@ -122,9 +122,17 @@ start_localai() {
 
     # Health poll
     local count=0
-    while [ "${count}" -lt 30 ]; do
-        if curl -s "http://127.0.0.1:${LOCALAI_PORT}/v1/models" >/dev/null 2>&1; then
+    while [ "${count}" -lt 45 ]; do
+        if ! kill -0 "${pid}" 2>/dev/null; then
+            log_err "LocalAI process died unexpectedly (PID: ${pid}). Last 25 lines of log:"
+            tail -n 25 "${LOGS_DIR}/localai.log" >&2 || true
+            LOCALAI_AVAILABLE="false"
+            return 1
+        fi
+        if curl -s "http://127.0.0.1:${LOCALAI_PORT}/v1/models" >/dev/null 2>&1 || \
+           curl -s "http://127.0.0.1:${LOCALAI_PORT}/readyz" >/dev/null 2>&1; then
             log_ok "LocalAI is ready on port ${LOCALAI_PORT} (PID: ${pid})"
+            LOCALAI_AVAILABLE="true"
             return 0
         fi
         sleep 1
@@ -165,15 +173,36 @@ start_local_tts() {
         return 0
     fi
 
+    # Free port if held by an unresponsive lingering process
+    if ! is_port_free "${TTS_PORT}"; then
+        if curl -s "http://127.0.0.1:${TTS_PORT}/v1/models" >/dev/null 2>&1; then
+            log_ok "local-tts is already responding on port ${TTS_PORT}."
+            TTS_AVAILABLE="true"
+            return 0
+        else
+            log_info "Port ${TTS_PORT} busy with unresponsive process; freeing port..."
+            fuser -k "${TTS_PORT}/tcp" >/dev/null 2>&1 || lsof -ti tcp:"${TTS_PORT}" 2>/dev/null | xargs kill -9 2>/dev/null || true
+            sleep 1
+        fi
+    fi
+
     log_info "Starting resident local-tts (Kokoro) on 127.0.0.1:${TTS_PORT}..."
 
     # On Linux, verify and auto-install espeak-ng if missing (required by Kokoro text phonemizer)
-    if [ "${PLATFORM}" = "linux" ] && ! command -v espeak-ng >/dev/null 2>&1; then
-        if [ "${IS_ROOT:-false}" = "true" ] || [ "$(id -u)" -eq 0 ]; then
-            log_info "Installing missing espeak-ng system library required for Kokoro TTS..."
-            apt-get update -qq && apt-get install -y --no-install-recommends espeak-ng libespeak-ng-dev sox >/dev/null 2>&1 || true
-        else
-            log_warn "espeak-ng is not installed! Kokoro TTS on Linux requires espeak-ng. Run: apt-get install -y espeak-ng"
+    if [ "${PLATFORM}" = "linux" ]; then
+        if ! command -v espeak-ng >/dev/null 2>&1; then
+            if [ "${IS_ROOT:-false}" = "true" ] || [ "$(id -u)" -eq 0 ]; then
+                log_info "Installing missing espeak-ng system library required for Kokoro TTS..."
+                apt-get update -qq && apt-get install -y --no-install-recommends espeak-ng libespeak-ng-dev sox >/dev/null 2>&1 || true
+            else
+                log_warn "espeak-ng is not installed! Kokoro TTS on Linux requires espeak-ng. Run: apt-get install -y espeak-ng"
+            fi
+        fi
+        export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/local/lib:${LD_LIBRARY_PATH:-}"
+        if [ -f "/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1" ]; then
+            export PHONEMIZER_ESPEAK_LIBRARY="/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1"
+        elif [ -f "/usr/lib/x86_64-linux-gnu/libespeak-ng.so" ]; then
+            export PHONEMIZER_ESPEAK_LIBRARY="/usr/lib/x86_64-linux-gnu/libespeak-ng.so"
         fi
     fi
 
@@ -184,21 +213,26 @@ start_local_tts() {
     fi
 
     # Disable pocket, kitten, and qwen per localtts.md Section 6 to dedicate memory strictly to Kokoro
-    # Add --preload to warm up model pipeline and weights at startup
+    # Do NOT pass --preload: lazy-load on first synthesis to allow instant server boot and port binding
     nohup "${tts_bin}" server \
         --host 127.0.0.1 \
         --port "${TTS_PORT}" \
         --disable-pocket \
         --disable-kitten \
         --disable-qwen \
-        --preload \
         >> "${LOGS_DIR}/local-tts.log" 2>&1 &
     local pid=$!
     echo "${pid}" > "${RUN_DIR}/local-tts.pid"
 
     log_info "Waiting for local-tts (Kokoro) to be ready on port ${TTS_PORT}..."
     local count=0
-    while [ "${count}" -lt 120 ]; do
+    while [ "${count}" -lt 45 ]; do
+        if ! kill -0 "${pid}" 2>/dev/null; then
+            log_err "local-tts process died unexpectedly (PID: ${pid}). Last 25 lines of log:"
+            tail -n 25 "${LOGS_DIR}/local-tts.log" >&2 || true
+            TTS_AVAILABLE="false"
+            return 1
+        fi
         if curl -s "http://127.0.0.1:${TTS_PORT}/v1/models" >/dev/null 2>&1; then
             log_ok "local-tts (Kokoro) is ready on port ${TTS_PORT} (PID: ${pid})"
             TTS_AVAILABLE="true"
@@ -208,9 +242,10 @@ start_local_tts() {
         count=$((count + 1))
     done
 
-    log_warn "local-tts started (PID: ${pid}) but health probe timed out (model weights may still be downloading); continuing..."
-    TTS_AVAILABLE="true"
-    return 0
+    log_warn "local-tts started (PID: ${pid}) but health probe timed out after 45s. Last 15 lines of log:"
+    tail -n 15 "${LOGS_DIR}/local-tts.log" >&2 || true
+    TTS_AVAILABLE="false"
+    return 1
 }
 
 # Start Sherpa-ONNX streaming STT

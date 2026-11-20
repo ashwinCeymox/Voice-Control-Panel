@@ -48,7 +48,11 @@ async def validate_agent_models(data: Dict[str, Any]):
     llm_cfg = data.get("llm") or {}
     llm_model = (llm_cfg.get("model") or "").lower()
     if llm_model:
-        if not any(llm_model in m or m in llm_model for m in installed_llms):
+        is_default_llm = (
+            llm_model == settings.LOCALAI_LLM_MODEL.lower()
+            or llm_model in ("llama-3.2-1b-instruct", "llama-3.2-1b-instruct:q4_k_m")
+        )
+        if not is_default_llm and not any(llm_model in m or m in llm_model for m in installed_llms):
             missing.append(f"LLM model '{llm_cfg.get('model')}'")
 
     stt_cfg = data.get("stt") or {}
