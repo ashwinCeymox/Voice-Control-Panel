@@ -198,10 +198,14 @@ CREATE TABLE IF NOT EXISTS admin_session (
 
 
 DEFAULT_INSTALLED_MODELS = [
-    ("whisper-base", "Whisper Base (GGUF)", "stt", "localai", 145),
-    ("whisper-tiny", "Whisper Tiny (GGUF)", "stt", "localai", 75),
-    ("llama-3.2-1b-instruct", "Llama 3.2 1B Instruct", "llm", "localai", 820),
     ("kokoro", "Kokoro", "tts", "local-tts", 350),
+    (
+        "sherpa-onnx-streaming-zipformer-en-20M",
+        "Sherpa ONNX Zipformer 20M (Streaming)",
+        "stt",
+        "stream-stt",
+        42,
+    ),
 ]
 
 
@@ -285,6 +289,32 @@ async def init_db():
                 "INSERT OR IGNORE INTO installed_models (id, name, category, provider, size_mb) VALUES (?, ?, ?, ?, ?)",
                 (mid, name, cat, prov, sz),
             )
+
+        # Reconcile uninstalled legacy test seed models that don't exist on disk
+        models_dir = Path("models")
+        for legacy_id in (
+            "llama-3.2-1b-instruct",
+            "whisper-base",
+            "whisper-tiny",
+            "probe-model",
+            "test-model",
+            "talk-model",
+            "kitten",
+            "kitten-tts-micro",
+            "vits-piper-en_GB-alan-medium-sherpa",
+            "qwen3.5-0.8b-artemis-q4",
+        ):
+            has_file = (
+                (models_dir / f"{legacy_id}.gguf").is_file()
+                or (models_dir / f"{legacy_id}.bin").is_file()
+                or (models_dir / f"{legacy_id}.safetensors").is_file()
+                or (models_dir / f"{legacy_id}.yaml").is_file()
+                or (models_dir / f"{legacy_id}").is_dir()
+            )
+            if not has_file:
+                await db.execute(
+                    "DELETE FROM installed_models WHERE id = ?", (legacy_id,)
+                )
         await db.commit()
 
     # Seed initial super-admin account if admin_user is empty

@@ -47,7 +47,7 @@ async def validate_agent_models(data: Dict[str, Any]):
 
     llm_cfg = data.get("llm") or {}
     llm_model = (llm_cfg.get("model") or "").lower()
-    if installed_llms and llm_model:
+    if llm_model:
         if not any(llm_model in m or m in llm_model for m in installed_llms):
             missing.append(f"LLM model '{llm_cfg.get('model')}'")
 

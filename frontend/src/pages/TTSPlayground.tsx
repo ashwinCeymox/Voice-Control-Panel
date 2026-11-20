@@ -11,7 +11,7 @@ export const TTSPlayground: React.FC = () => {
   const [installedModels, setInstalledModels] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [voices, setVoices] = useState<Voice[]>([]);
-  const [voiceId, setVoiceId] = useState<string>('');
+  const [voiceId, setVoiceId] = useState<string>('af_heart');
   const [speed, setSpeed] = useState<number>(1.0);
   const [loading, setLoading] = useState<boolean>(false);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
@@ -40,24 +40,76 @@ export const TTSPlayground: React.FC = () => {
       if (voicesRes.ok) {
         const vData = await voicesRes.json();
         const vList: Voice[] = vData.voices || [];
-        setVoices(vList);
         if (vList.length > 0) {
-          setVoiceId(vList[0].voice_id);
+          setVoices(vList);
+          setVoiceId((prev) => (prev && vList.some((v) => v.voice_id === prev) ? prev : vList[0].voice_id));
+        } else {
+          // Resident fallback default
+          const defaultVoice: Voice = {
+            voice_id: 'af_heart',
+            name: 'Heart (Resident)',
+            category: 'female',
+            gender: 'female',
+            settings: { speed: 1.0 },
+          };
+          setVoices([defaultVoice]);
+          setVoiceId('af_heart');
         }
+      } else {
+        const defaultVoice: Voice = {
+          voice_id: 'af_heart',
+          name: 'Heart (Resident)',
+          category: 'female',
+          gender: 'female',
+          settings: { speed: 1.0 },
+        };
+        setVoices([defaultVoice]);
+        setVoiceId('af_heart');
       }
     } catch (err: any) {
       console.error('Error fetching TTS options:', err);
+      const defaultVoice: Voice = {
+        voice_id: 'af_heart',
+        name: 'Heart (Resident)',
+        category: 'female',
+        gender: 'female',
+        settings: { speed: 1.0 },
+      };
+      setVoices([defaultVoice]);
+      setVoiceId('af_heart');
     }
   };
 
   const handlePreviewVoice = async (vId: string) => {
+    const targetVid = (vId || 'af_heart').trim();
     try {
-      setPreviewingId(vId);
+      setPreviewingId(targetVid);
       setError(null);
-      const res = await fetchWithAuth(`/v1/voices/${vId}/preview`, {
+      const res = await fetchWithAuth(`/v1/voices/${encodeURIComponent(targetVid)}/preview`, {
         method: 'POST',
       });
-      if (!res.ok) throw new Error('Preview synthesis failed');
+      if (!res.ok) {
+        let errMsg = `Preview synthesis failed (HTTP ${res.status})`;
+        try {
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const errJson = await res.json();
+            errMsg = errJson.error?.message || errJson.detail || errJson.message || errMsg;
+          } else {
+            const textResp = await res.text();
+            if (textResp && !textResp.includes('<!DOCTYPE') && !textResp.includes('<html')) {
+              errMsg = textResp.slice(0, 160);
+            } else {
+              errMsg = `LocalTTS engine unreachable (HTTP ${res.status}). Verify local-tts process.`;
+            }
+          }
+        } catch {}
+        throw new Error(errMsg);
+      }
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('text/html')) {
+        throw new Error('Received unexpected HTML response instead of audio stream.');
+      }
       const rawPcm = await res.arrayBuffer();
       player.feed(rawPcm);
     } catch (err: any) {
@@ -71,11 +123,13 @@ export const TTSPlayground: React.FC = () => {
     e.preventDefault();
     if (!text.trim() || loading) return;
 
+    const activeVoice = (voiceId || (voices.length > 0 ? voices[0].voice_id : 'af_heart')).trim() || 'af_heart';
+
     try {
       setLoading(true);
       setError(null);
 
-      const res = await fetchWithAuth(`/v1/text-to-speech/${voiceId}/stream`, {
+      const res = await fetchWithAuth(`/v1/text-to-speech/${encodeURIComponent(activeVoice)}/stream`, {
         method: 'POST',
         body: JSON.stringify({
           text,
@@ -84,8 +138,29 @@ export const TTSPlayground: React.FC = () => {
       });
 
       if (!res.ok) {
-        const errJson = await res.json();
-        throw new Error(errJson.error?.message || 'Synthesis failed');
+        let errMsg = `Synthesis failed (HTTP ${res.status})`;
+        try {
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const errJson = await res.json();
+            errMsg = errJson.error?.message || errJson.detail || errJson.message || errMsg;
+          } else {
+            const textResp = await res.text();
+            if (textResp && !textResp.includes('<!DOCTYPE') && !textResp.includes('<html')) {
+              errMsg = textResp.slice(0, 200);
+            } else {
+              errMsg = `LocalTTS engine unreachable (HTTP ${res.status}). Ensure local-tts is running on port 8880.`;
+            }
+          }
+        } catch {
+          // fallback
+        }
+        throw new Error(errMsg);
+      }
+
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('text/html')) {
+        throw new Error('Received unexpected HTML response instead of audio stream. Check gateway routing.');
       }
 
       const rawPcm = await res.arrayBuffer();

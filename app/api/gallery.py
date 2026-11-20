@@ -474,6 +474,32 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                     continue
 
                 if mid not in seen_ids and lower_mid not in seen_ids:
+                    # If model is LocalAI-backed, verify it is either reported by live LocalAI
+                    # or physically exists on disk in models/
+                    if r["provider"] == "localai":
+                        from pathlib import Path
+                        m_dir = Path("models")
+                        has_file = (
+                            mid in seen_ids
+                            or lower_mid in seen_ids
+                            or (m_dir / f"{mid}.gguf").is_file()
+                            or (m_dir / f"{mid}.bin").is_file()
+                            or (m_dir / f"{mid}.safetensors").is_file()
+                            or (m_dir / f"{mid}.yaml").is_file()
+                            or (m_dir / f"{mid}").is_dir()
+                            or (m_dir / f"{lower_mid}.gguf").is_file()
+                            or (m_dir / f"{lower_mid}.bin").is_file()
+                            or (m_dir / f"{lower_mid}.safetensors").is_file()
+                            or (m_dir / f"{lower_mid}.yaml").is_file()
+                        )
+                        if not has_file and lower_mid in (
+                            "llama-3.2-1b-instruct",
+                            "whisper-base",
+                            "whisper-tiny",
+                            "qwen3.5-0.8b-artemis-q4",
+                        ):
+                            continue
+
                     seen_ids.add(mid)
                     seen_ids.add(lower_mid)
                     entry = {
@@ -694,12 +720,33 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
 
         existing = model_manifest.load_from_file_sync() or {}
         merged_res: Dict[str, List[Dict[str, Any]]] = {}
+        from pathlib import Path
+        m_dir = Path("models")
         for cat in ("stt", "llm", "tts"):
             seen = {}
             for m in existing.get(cat, []):
                 mid = m.get("id")
-                if mid and not any(p in mid.lower() for p in ("probe-model", "test-model", "talk-model", "mock")):
-                    seen[mid.lower()] = dict(m)
+                if not mid:
+                    continue
+                lower_mid = mid.lower()
+                if any(p in lower_mid for p in ("probe-model", "test-model", "talk-model", "mock")):
+                    continue
+                # Prune uninstalled legacy defaults from manifest
+                if lower_mid in ("llama-3.2-1b-instruct", "whisper-base", "whisper-tiny", "qwen3.5-0.8b-artemis-q4"):
+                    has_w = (
+                        (m_dir / f"{mid}.gguf").is_file()
+                        or (m_dir / f"{mid}.bin").is_file()
+                        or (m_dir / f"{mid}.safetensors").is_file()
+                        or (m_dir / f"{mid}.yaml").is_file()
+                        or (m_dir / f"{mid}").is_dir()
+                        or (m_dir / f"{lower_mid}.gguf").is_file()
+                        or (m_dir / f"{lower_mid}.bin").is_file()
+                        or (m_dir / f"{lower_mid}.safetensors").is_file()
+                        or (m_dir / f"{lower_mid}.yaml").is_file()
+                    )
+                    if not has_w:
+                        continue
+                seen[lower_mid] = dict(m)
             for m in res.get(cat, []):
                 mid = m.get("id")
                 if mid and not any(p in mid.lower() for p in ("probe-model", "test-model", "talk-model", "mock")):
@@ -903,7 +950,9 @@ async def list_gallery_models(
         )
         is_inst = (
             raw_name in installed_ids
-            or base_name in installed_ids
+            or raw_name.lower() in installed_ids
+            or (":" not in raw_name and f"{raw_name}:latest" in installed_ids)
+            or (raw_name.endswith(":latest") and base_name in installed_ids)
             or bool(lm.get("installed"))
         )
 

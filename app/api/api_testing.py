@@ -130,6 +130,27 @@ async def get_allotted_models_for_key(key: ApiKeyRecord) -> List[Dict[str, Any]]
         if mid and mid.lower() not in unique_models:
             unique_models[mid.lower()] = m
 
+    # Ensure any explicitly allowlisted models configured on the key are included as candidates
+    if key.model_allowlist and len(key.model_allowlist) > 0:
+        for a_id in key.model_allowlist:
+            clean_id = a_id.strip() if a_id else ""
+            if clean_id and clean_id.lower() not in unique_models:
+                lower = clean_id.lower()
+                cat = (
+                    "stt"
+                    if any(k in lower for k in ("whisper", "stt", "asr"))
+                    else ("tts" if any(k in lower for k in ("tts", "kokoro", "piper")) else "llm")
+                )
+                unique_models[lower] = {
+                    "id": clean_id,
+                    "display_name": clean_id.replace("-", " ").title(),
+                    "task": cat,
+                    "kind": "batch" if cat == "stt" else None,
+                    "engine": "local",
+                    "available": True,
+                    "installed": True,
+                }
+
     candidates = list(unique_models.values())
 
     # Case 1: Admin role

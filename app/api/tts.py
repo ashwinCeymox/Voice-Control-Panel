@@ -45,12 +45,14 @@ def infer_voice_metadata(voice_id: str) -> Dict[str, str]:
     return {"gender": "unknown", "language": "en", "inferred_name": voice_id}
 
 
+@router.post("/v1/text-to-speech/stream")
 @router.post("/v1/text-to-speech/{voice_id}/stream")
 async def text_to_speech_stream(
-    voice_id: str,
     request: TTSRequest,
+    voice_id: Optional[str] = "af_heart",
     key: ApiKeyRecord = Depends(require_scope("tts")),
 ):
+    target_voice = (voice_id or "af_heart").strip() or "af_heart"
     target_engine = request.model_id or settings.LOCAL_TTS_MODEL or "kokoro"
     if target_engine.lower() not in ("kokoro", "kokoro-82m", "default"):
         raise HTTPException(
@@ -83,7 +85,7 @@ async def text_to_speech_stream(
             try:
                 pcm_bytes = await tts_client.synthesize_http(
                     text=request.text,
-                    voice_id=voice_id,
+                    voice_id=target_voice,
                     model_id=target_engine,
                     speed=speed,
                 )
@@ -97,15 +99,19 @@ async def text_to_speech_stream(
                     content=pcm_bytes, media_type="audio/pcm", headers=headers
                 )
             except Exception as e:
-                status_code = getattr(e, "status_code", 500)
-                raise
+                status_code = getattr(e, "status_code", 502)
+                from app.core.errors import AppError
+                if isinstance(e, (AppError, HTTPException)):
+                    raise
+                from app.core.errors import ProviderUnavailableError
+                raise ProviderUnavailableError("local-tts", details=str(e))
             finally:
                 dur_ms = (time.time() - start_t) * 1000.0
                 # 24kHz 16-bit mono = 48,000 bytes/sec
                 audio_sec = round(len(pcm_bytes) / 48000.0, 2)
                 await KeyManager.log_usage(
                     key.id,
-                    f"/v1/text-to-speech/{voice_id}/stream",
+                    f"/v1/text-to-speech/{target_voice}/stream",
                     dur_ms,
                     audio_sec,
                     status_code,
@@ -189,18 +195,24 @@ async def preview_voice(
     key: ApiKeyRecord = Depends(require_scope("tts")),
 ):
     sample_text = "Hello! This is a preview of my synthetic voice."
-    pcm_bytes = await tts_client.synthesize_http(
-        text=sample_text,
-        voice_id=id,
-        model_id="kokoro",
-    )
-    headers = {
-        "Content-Type": "audio/pcm;rate=24000;encoding=signed-int;bits=16",
-        "x-audio-sample-rate": "24000",
-        "x-audio-format": "s16le",
-        "x-audio-channels": "1",
-    }
-    return Response(content=pcm_bytes, media_type="audio/pcm", headers=headers)
+    try:
+        pcm_bytes = await tts_client.synthesize_http(
+            text=sample_text,
+            voice_id=id,
+            model_id="kokoro",
+        )
+        headers = {
+            "Content-Type": "audio/pcm;rate=24000;encoding=signed-int;bits=16",
+            "x-audio-sample-rate": "24000",
+            "x-audio-format": "s16le",
+            "x-audio-channels": "1",
+        }
+        return Response(content=pcm_bytes, media_type="audio/pcm", headers=headers)
+    except Exception as e:
+        from app.core.errors import AppError, ProviderUnavailableError
+        if isinstance(e, (AppError, HTTPException)):
+            raise
+        raise ProviderUnavailableError("local-tts", details=str(e))
 
 
 @router.get("/v1/tts/models", response_model=TTSModelListResponse)
