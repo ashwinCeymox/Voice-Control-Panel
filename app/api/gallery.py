@@ -32,215 +32,147 @@ def _localai_headers() -> Dict[str, str]:
     return {}
 
 
-# Curated Gallery Models catalog vetted for 8GB Mac
+# Curated Gallery Models catalog vetted for local and cloud voice agents
 GALLERY_CATALOG: List[Dict[str, Any]] = [
     {
-        "id": "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17",
+        "id": "sherpa-onnx-streaming-zipformer-en-20M",
         "name": "Sherpa ONNX Zipformer 20M (Streaming)",
         "category": "stt",
         "provider": "stream-stt",
         "kind": "streaming",
         "size_mb": 42,
         "ram_required_mb": 150,
-        "description": "Ultra-low-latency real-time streaming STT (Zipformer 20M). Delivers live partial captions with <50ms delay.",
+        "description": "Ultra-low-latency real-time streaming speech-to-text (Sherpa Zipformer). Delivers live partial transcription chunks in under 50ms.",
         "license": "Apache 2.0",
         "quantization": "INT8",
         "tags": ["streaming", "recommended", "realtime", "ultra-light"],
-    },
-    {
-        "id": "parakeet-cpp-realtime_eou_120m-v1",
-        "name": "Parakeet Cpp Realtime Eou 120M (Batch)",
-        "category": "stt",
-        "provider": "localai",
-        "kind": "batch",
-        "size_mb": 500,
-        "ram_required_mb": 420,
-        "description": "NVIDIA Parakeet C++ 120M transducer with End-Of-Utterance (EOU) detection. Batch audio transcription via LocalAI Metal GPU.",
-        "license": "NVIDIA Open Model License",
-        "quantization": "Q4_0",
-        "tags": ["batch", "parakeet", "eou", "metal"],
-    },
-    {
-        "id": "parakeet-cpp-realtime-scene",
-        "name": "Parakeet Cpp Realtime Scene",
-        "category": "stt",
-        "provider": "localai",
-        "kind": "streaming",
-        "size_mb": 500,
-        "ram_required_mb": 450,
-        "description": "NVIDIA Parakeet C++ Realtime streaming transducer with acoustic scene and EOU support via LocalAI Metal GPU.",
-        "license": "NVIDIA Open Model License",
-        "quantization": "FP16",
-        "tags": ["streaming", "parakeet", "realtime", "eou", "metal"],
-    },
-    {
-        "id": "nemo-speech-cpp-nemotron-3.5-asr-streaming-diarized",
-        "name": "Nemotron 3.5 ASR Streaming Diarized",
-        "category": "stt",
-        "provider": "localai",
-        "kind": "streaming",
-        "size_mb": 500,
-        "ram_required_mb": 550,
-        "description": "NVIDIA Nemotron 3.5 ASR streaming speech-to-text with live diarization via nemo-speech-cpp on LocalAI Metal GPU.",
-        "license": "NVIDIA Open Model License",
-        "quantization": "Q8_0",
-        "tags": ["streaming", "nemo", "diarized", "realtime", "metal"],
-    },
-    {
-        "id": "whisper-base",
-        "name": "Whisper Base (Multilingual)",
-        "category": "stt",
-        "provider": "localai",
-        "size_mb": 145,
-        "ram_required_mb": 210,
-        "description": "Fast multilingual speech-to-text. High accuracy, RTF 0.07 on Apple Silicon Metal.",
-        "license": "MIT",
-        "quantization": "FP16/Metal",
-        "tags": ["recommended", "balanced", "multilingual"],
-    },
-    {
-        "id": "whisper-base-en",
-        "name": "Whisper Base (English)",
-        "category": "stt",
-        "provider": "localai",
-        "size_mb": 145,
-        "ram_required_mb": 210,
-        "description": "English-optimized balanced STT. High precision for conversational English dialogue.",
-        "license": "MIT",
-        "quantization": "FP16/Metal",
-        "tags": ["recommended", "english", "balanced"],
-    },
-    {
-        "id": "whisper-small",
-        "name": "Whisper Small (Multilingual)",
-        "category": "stt",
-        "provider": "localai",
-        "size_mb": 480,
-        "ram_required_mb": 650,
-        "description": "High-accuracy multilingual STT. Major leap in recognition quality, noisy audio, and accent tolerance.",
-        "license": "MIT",
-        "quantization": "FP16/Metal",
-        "tags": ["recommended", "high-accuracy", "multilingual"],
-    },
-    {
-        "id": "whisper-small-en",
-        "name": "Whisper Small (English)",
-        "category": "stt",
-        "provider": "localai",
-        "size_mb": 480,
-        "ram_required_mb": 650,
-        "description": "Specialized high-accuracy English STT (244M params). Exceptional word error rate.",
-        "license": "MIT",
-        "quantization": "FP16/Metal",
-        "tags": ["high-accuracy", "english"],
-    },
-    {
-        "id": "whisper-large-turbo",
-        "name": "Whisper Large v3 Turbo",
-        "category": "stt",
-        "provider": "localai",
-        "size_mb": 1600,
-        "ram_required_mb": 2200,
-        "description": "OpenAI's latest flagship Whisper model (809M params). 4x faster decoding with large-v3 accuracy.",
-        "license": "MIT",
-        "quantization": "FP16/Metal",
-        "tags": ["flagship", "turbo", "high-accuracy"],
-    },
-    {
-        "id": "whisper-medium",
-        "name": "Whisper Medium (Multilingual)",
-        "category": "stt",
-        "provider": "localai",
-        "size_mb": 1500,
-        "ram_required_mb": 2100,
-        "description": "Advanced multilingual speech recognition (769M params). Near-human transcription accuracy.",
-        "license": "MIT",
-        "quantization": "FP16/Metal",
-        "tags": ["studio-accuracy", "multilingual"],
+        "download_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2",
     },
     {
         "id": "whisper-tiny",
         "name": "Whisper Tiny (Multilingual)",
         "category": "stt",
         "provider": "localai",
+        "kind": "batch",
         "size_mb": 75,
         "ram_required_mb": 110,
-        "description": "Ultra-lightweight STT for minimum memory overhead. English & Multilingual.",
+        "description": "Ultra-lightweight STT model for low-latency batch audio transcription with minimal memory usage.",
         "license": "MIT",
-        "quantization": "FP16/Metal",
-        "tags": ["ultra-light", "multilingual"],
+        "quantization": "FP16/GGUF",
+        "tags": ["ultra-light", "multilingual", "batch"],
+        "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
     },
     {
         "id": "whisper-tiny-en",
         "name": "Whisper Tiny (English)",
         "category": "stt",
         "provider": "localai",
+        "kind": "batch",
         "size_mb": 75,
         "ram_required_mb": 110,
-        "description": "Ultra-fast English-specialized STT with lower hallucination rate than multilingual tiny.",
+        "description": "Ultra-lightweight English-optimized speech-to-text model.",
         "license": "MIT",
-        "quantization": "FP16/Metal",
-        "tags": ["ultra-light", "english", "fast"],
+        "quantization": "FP16/GGUF",
+        "tags": ["ultra-light", "english", "batch"],
+        "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
     },
     {
         "id": "whisperx-tiny",
         "name": "WhisperX Tiny",
         "category": "stt",
         "provider": "localai",
+        "kind": "batch",
         "size_mb": 75,
-        "ram_required_mb": 120,
-        "description": "Ultra-fast speech recognition with phoneme-level timestamp alignment.",
-        "license": "BSD-4",
-        "quantization": "FP16/Metal",
-        "tags": ["alignment", "fast"],
+        "ram_required_mb": 110,
+        "description": "Fast word-level aligned lightweight transcription model.",
+        "license": "MIT",
+        "quantization": "FP16/GGUF",
+        "tags": ["ultra-light", "aligned", "batch"],
+        "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
     },
     {
-        "id": "qwen2.5-1.5b-instruct",
-        "name": "Qwen 2.5 1.5B Instruct",
-        "category": "llm",
+        "id": "whisper-base",
+        "name": "Whisper Base (Multilingual)",
+        "category": "stt",
         "provider": "localai",
-        "size_mb": 980,
-        "ram_required_mb": 1400,
-        "description": "High-efficiency conversational LLM. 54 tokens/sec on M2 Metal. Best conversational voice flow.",
-        "license": "Apache 2.0",
-        "quantization": "Q4_K_M",
-        "tags": ["recommended", "default", "voice-tuned"],
+        "kind": "batch",
+        "size_mb": 145,
+        "ram_required_mb": 210,
+        "description": "Fast multilingual speech-to-text for audio recording transcription. High accuracy and balanced memory footprint.",
+        "license": "MIT",
+        "quantization": "FP16/GGUF",
+        "tags": ["recommended", "balanced", "multilingual", "batch"],
+        "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
     },
     {
-        "id": "gemma-3-270m-it-qat",
-        "name": "Gemma 3 270M Instruct (QAT)",
-        "category": "llm",
+        "id": "whisper-base-en",
+        "name": "Whisper Base (English)",
+        "category": "stt",
         "provider": "localai",
-        "size_mb": 200,
-        "ram_required_mb": 320,
-        "description": "Google's 270M parameter ultra-compact open model. Sub-second conversational responses, 4-bit QAT precision.",
-        "license": "Gemma Terms",
-        "quantization": "QAT-4bit",
-        "tags": ["sub-1b", "ultra-light", "google"],
+        "kind": "batch",
+        "size_mb": 145,
+        "ram_required_mb": 210,
+        "description": "English-optimized balanced STT for conversational dialogue.",
+        "license": "MIT",
+        "quantization": "FP16/GGUF",
+        "tags": ["recommended", "english", "balanced", "batch"],
+        "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
     },
     {
-        "id": "qwen3.5-0.8b-artemis-q4",
-        "name": "Qwen 3.5 0.8B Instruct (Artemis)",
-        "category": "llm",
+        "id": "whisper-small",
+        "name": "Whisper Small (Multilingual)",
+        "category": "stt",
         "provider": "localai",
-        "size_mb": 550,
-        "ram_required_mb": 780,
-        "description": "0.8B parameter text chat, reasoning, and conversational LLM. 70+ tokens/sec on Apple Silicon Metal.",
-        "license": "Apache 2.0",
-        "quantization": "Q4_K_M",
-        "tags": ["sub-1b", "fast", "voice-tuned"],
+        "kind": "batch",
+        "size_mb": 480,
+        "ram_required_mb": 650,
+        "description": "High-accuracy multilingual STT. Major leap in recognition quality, noisy audio, and accent tolerance.",
+        "license": "MIT",
+        "quantization": "FP16/GGUF",
+        "tags": ["high-accuracy", "multilingual", "batch"],
+        "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
     },
     {
-        "id": "supra2-100m-instruct",
-        "name": "Supra2 100M Instruct",
-        "category": "llm",
+        "id": "whisper-small-en",
+        "name": "Whisper Small (English)",
+        "category": "stt",
         "provider": "localai",
-        "size_mb": 110,
-        "ram_required_mb": 180,
-        "description": "100M parameter ultra-compact conversational model. Instant inference for edge voice assistants.",
-        "license": "Apache 2.0",
-        "quantization": "F16/Metal",
-        "tags": ["sub-1b", "ultra-light"],
+        "kind": "batch",
+        "size_mb": 480,
+        "ram_required_mb": 650,
+        "description": "High-accuracy English-optimized speech-to-text model.",
+        "license": "MIT",
+        "quantization": "FP16/GGUF",
+        "tags": ["high-accuracy", "english", "batch"],
+        "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
+    },
+    {
+        "id": "whisper-medium",
+        "name": "Whisper Medium",
+        "category": "stt",
+        "provider": "localai",
+        "kind": "batch",
+        "size_mb": 1500,
+        "ram_required_mb": 2000,
+        "description": "Deep recognition accuracy across dialects and heavy background noise.",
+        "license": "MIT",
+        "quantization": "FP16/GGUF",
+        "tags": ["deep-accuracy", "multilingual", "batch"],
+        "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
+    },
+    {
+        "id": "whisper-large-turbo",
+        "name": "Whisper Large v3 Turbo",
+        "category": "stt",
+        "provider": "localai",
+        "kind": "batch",
+        "size_mb": 1600,
+        "ram_required_mb": 2200,
+        "description": "Flagship Whisper model (809M params). Fast decoding with near-human transcription accuracy.",
+        "license": "MIT",
+        "quantization": "FP16/GGUF",
+        "tags": ["flagship", "turbo", "high-accuracy", "batch"],
+        "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
     },
     {
         "id": "llama-3.2-1b-instruct",
@@ -249,10 +181,37 @@ GALLERY_CATALOG: List[Dict[str, Any]] = [
         "provider": "localai",
         "size_mb": 820,
         "ram_required_mb": 1200,
-        "description": "Meta's ultra-compact instruct model. Crisp 1-2 sentence replies, low RAM.",
+        "description": "Meta's official lightweight instruct LLM. Fast 1-2 sentence conversational responses optimized for voice dialog.",
         "license": "Llama 3.2 Community",
         "quantization": "Q4_K_M",
-        "tags": ["ultra-light"],
+        "tags": ["recommended", "default", "voice-tuned"],
+        "download_url": "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+    },
+    {
+        "id": "llama-3.2-3b-instruct",
+        "name": "Llama 3.2 3B Instruct",
+        "category": "llm",
+        "provider": "localai",
+        "size_mb": 1950,
+        "ram_required_mb": 2550,
+        "description": "Advanced conversational reasoning and tool calling. High quality voice dialogues with deep context.",
+        "license": "Llama 3.2 Community",
+        "quantization": "Q4_K_M",
+        "tags": ["advanced", "reasoning"],
+        "download_url": "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    },
+    {
+        "id": "qwen2.5-1.5b-instruct",
+        "name": "Qwen 2.5 1.5B Instruct",
+        "category": "llm",
+        "provider": "localai",
+        "size_mb": 980,
+        "ram_required_mb": 1400,
+        "description": "High-efficiency multilingual conversational LLM. Fast token generation and concise voice replies.",
+        "license": "Apache 2.0",
+        "quantization": "Q4_K_M",
+        "tags": ["voice-tuned", "multilingual"],
+        "download_url": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
     },
     {
         "id": "qwen2.5-3b-instruct",
@@ -261,10 +220,11 @@ GALLERY_CATALOG: List[Dict[str, Any]] = [
         "provider": "localai",
         "size_mb": 1950,
         "ram_required_mb": 2550,
-        "description": "Advanced reasoning voice assistant. Tight fit on 8GB when paired with Kokoro.",
+        "description": "Strong reasoning, instruction-following, and natural dialogue capabilities for voice agents.",
         "license": "Apache 2.0",
         "quantization": "Q4_K_M",
-        "tags": ["high-iq"],
+        "tags": ["advanced", "multilingual"],
+        "download_url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
     },
     {
         "id": "phi-2-chat",
@@ -273,10 +233,11 @@ GALLERY_CATALOG: List[Dict[str, Any]] = [
         "provider": "localai",
         "size_mb": 1800,
         "ram_required_mb": 2200,
-        "description": "Microsoft's 2.7B compact language model pre-loaded in LocalAI. Fast, structured voice replies.",
+        "description": "Microsoft's compact 2.7B reasoning model. Structured, articulate voice replies.",
         "license": "MIT",
         "quantization": "Q4_K_M",
-        "tags": ["default", "compact", "preloaded"],
+        "tags": ["compact", "structured"],
+        "download_url": "https://huggingface.co/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q4_K_M.gguf",
     },
     {
         "id": "kokoro",
@@ -285,58 +246,10 @@ GALLERY_CATALOG: List[Dict[str, Any]] = [
         "provider": "local-tts",
         "size_mb": 350,
         "ram_required_mb": 380,
-        "description": "Studio-grade 24kHz American and British voices via local-tts engine.",
+        "description": "Studio-grade 24kHz American and British voices via resident Kokoro engine (PyTorch on Linux, MLX on macOS).",
         "license": "Apache 2.0",
-        "quantization": "BF16",
+        "quantization": "FP32/BF16",
         "tags": ["recommended", "default", "studio-quality"],
-    },
-    {
-        "id": "kokoro-82m",
-        "name": "Kokoro 82M TTS (Catalog)",
-        "category": "tts",
-        "provider": "local-tts",
-        "size_mb": 350,
-        "ram_required_mb": 380,
-        "description": "Studio-grade 24kHz American and British voices via MLX / PyTorch.",
-        "license": "Apache 2.0",
-        "quantization": "BF16",
-        "tags": ["recommended", "default", "studio-quality"],
-    },
-    {
-        "id": "kitten",
-        "name": "KittenTTS (15M)",
-        "category": "tts",
-        "provider": "local-tts",
-        "size_mb": 60,
-        "ram_required_mb": 150,
-        "description": "Ultra-low-latency speech synthesis engine in local-tts.",
-        "license": "Apache 2.0",
-        "quantization": "BF16",
-        "tags": ["ultra-light"],
-    },
-    {
-        "id": "pocket",
-        "name": "Pocket TTS",
-        "category": "tts",
-        "provider": "local-tts",
-        "size_mb": 120,
-        "ram_required_mb": 200,
-        "description": "Lightweight, responsive speech synthesis engine in local-tts.",
-        "license": "Apache 2.0",
-        "quantization": "BF16",
-        "tags": ["fast", "lightweight"],
-    },
-    {
-        "id": "kitten-tts-micro",
-        "name": "KittenTTS Micro (15M)",
-        "category": "tts",
-        "provider": "local-tts",
-        "size_mb": 60,
-        "ram_required_mb": 150,
-        "description": "Instant synthesis with near-zero latency. Lower acoustic prosody than Kokoro.",
-        "license": "Apache 2.0",
-        "quantization": "BF16",
-        "tags": ["ultra-light"],
     },
 ]
 
@@ -536,7 +449,7 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
     except Exception:
         pass
 
-    # 3. Query SQLite installed_models table for models installed through the UI/API
+    # 3. Query SQLite installed_models table for verified installed models
     try:
         async with get_db() as db:
             db.row_factory = aiosqlite.Row
@@ -546,16 +459,31 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
             rows = await cursor.fetchall()
             for r in rows:
                 mid = r["id"]
-                if mid not in seen_ids:
+                lower_mid = mid.lower()
+                # Exclude phantom test fixtures and non-existent models
+                if any(
+                    k in lower_mid
+                    for k in (
+                        "probe-model",
+                        "test-model",
+                        "talk-model",
+                        "kitten",
+                        "vits-piper",
+                    )
+                ):
+                    continue
+
+                if mid not in seen_ids and lower_mid not in seen_ids:
                     seen_ids.add(mid)
+                    seen_ids.add(lower_mid)
                     entry = {
                         "id": mid,
                         "name": r["name"],
                         "provider": r["provider"],
                         "size_mb": r["size_mb"],
+                        "available": True,
                     }
                     cat = r["category"]
-                    lower_mid = mid.lower()
                     catalog_match = next(
                         (c for c in GALLERY_CATALOG if c["id"].lower() == lower_mid),
                         None,
@@ -569,46 +497,20 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                                 "realtime",
                                 "stream",
                                 "streaming",
-                                "eou",
                                 "zipformer",
-                                "online",
                             )
                         )
                         entry["kind"] = "streaming" if is_streaming else "batch"
-                        entry["available"] = True
                         stt_models.append(entry)
                     elif cat == "tts":
-                        entry["available"] = True
                         tts_models.append(entry)
                     else:
-                        entry["available"] = True
                         llm_models.append(entry)
     except Exception:
         pass
 
-    # 4. Check for streaming STT models (via service and local directory)
-    try:
-        from app.providers.streaming_stt_client import StreamingSTTClient
-
-        stt_client = StreamingSTTClient()
-        models_data = await stt_client.list_models()
-        if models_data:
-            for sm in models_data:
-                mid = sm.get("id")
-                if mid and mid not in seen_ids:
-                    seen_ids.add(mid)
-                    stt_models.append(
-                        {
-                            "id": mid,
-                            "name": sm.get("name", mid),
-                            "provider": "stream-stt",
-                            "kind": "streaming",
-                            "size_mb": sm.get("size_mb", 42),
-                        }
-                    )
-    except Exception:
-        pass
-
+    # 4. Check for streaming STT models in models/streaming-stt
+    canonical_streaming_id = "sherpa-onnx-streaming-zipformer-en-20M"
     try:
         from pathlib import Path
 
@@ -616,30 +518,62 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
         if streaming_base.exists():
             for folder in streaming_base.iterdir():
                 if folder.is_dir() and (folder / "tokens.txt").exists():
-                    mid = folder.name
-                    if mid not in seen_ids:
-                        seen_ids.add(mid)
+                    if canonical_streaming_id not in seen_ids:
+                        seen_ids.add(canonical_streaming_id)
+                        seen_ids.add(canonical_streaming_id.lower())
+                        seen_ids.add(folder.name)
                         stt_models.append(
                             {
-                                "id": mid,
+                                "id": canonical_streaming_id,
                                 "name": "Sherpa ONNX Zipformer 20M (Streaming)",
                                 "provider": "stream-stt",
                                 "kind": "streaming",
                                 "size_mb": 42,
+                                "available": True,
                             }
                         )
-                    alias = "sherpa-onnx-streaming-zipformer-en-20M"
-                    if alias not in seen_ids:
-                        seen_ids.add(alias)
-                        stt_models.append(
-                            {
-                                "id": alias,
-                                "name": "Sherpa ONNX Zipformer 20M (Streaming)",
-                                "provider": "stream-stt",
-                                "kind": "streaming",
-                                "size_mb": 42,
-                            }
+                    break
+    except Exception:
+        pass
+
+    # 5. Direct disk inspection of models directory for GGUF and BIN weights
+    try:
+        from pathlib import Path
+
+        models_dir = Path("models")
+        if models_dir.is_dir():
+            for mf in models_dir.iterdir():
+                if mf.is_file() and mf.suffix in (".gguf", ".bin", ".safetensors"):
+                    stem = mf.stem
+                    lower_stem = stem.lower()
+                    if any(p in lower_stem for p in ("part", "download", "tmp", "temp")):
+                        continue
+                    if stem not in seen_ids and lower_stem not in seen_ids:
+                        seen_ids.add(stem)
+                        seen_ids.add(lower_stem)
+                        sz_mb = max(1, int(mf.stat().st_size / (1024 * 1024)))
+                        catalog_match = next(
+                            (c for c in GALLERY_CATALOG if c["id"].lower() == lower_stem),
+                            None,
                         )
+                        display = catalog_match["name"] if catalog_match else stem.replace("-", " ").title()
+                        if any(k in lower_stem for k in ("whisper", "stt", "asr")):
+                            stt_models.append({
+                                "id": stem,
+                                "name": display,
+                                "provider": "localai",
+                                "kind": "batch",
+                                "size_mb": sz_mb,
+                                "available": True,
+                            })
+                        else:
+                            llm_models.append({
+                                "id": stem,
+                                "name": display,
+                                "provider": "localai",
+                                "size_mb": sz_mb,
+                                "available": True,
+                            })
     except Exception:
         pass
 
@@ -655,9 +589,7 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                     "realtime",
                     "stream",
                     "streaming",
-                    "eou",
                     "zipformer",
-                    "online",
                 )
             )
         )
@@ -673,7 +605,7 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
         if m.get("available") is None:
             m["available"] = True
 
-    # 5. Apply manual classification overrides from SQLite model_overrides
+    # 6. Apply manual classification overrides from SQLite model_overrides
     try:
         from app.services.model_registry import model_registry
 
@@ -748,6 +680,7 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                 "name": "Kokoro (Default)",
                 "provider": "local-tts",
                 "size_mb": 350,
+                "available": True,
             }
         )
 
@@ -757,46 +690,47 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
         "tts": tts_models,
     }
     try:
-        if res.get("stt") or res.get("llm") or res.get("tts"):
-            from app.services.model_manifest import model_manifest
+        from app.services.model_manifest import model_manifest
 
-            existing = model_manifest.load_from_file_sync() or {}
-            merged_res: Dict[str, List[Dict[str, Any]]] = {}
-            for cat in ("stt", "llm", "tts"):
-                seen = {}
-                for m in existing.get(cat, []):
-                    if m.get("id"):
-                        seen[m["id"].lower()] = dict(m)
-                for m in res.get(cat, []):
-                    if m.get("id"):
-                        seen[m["id"].lower()] = dict(m)
-                merged_res[cat] = list(seen.values())
+        existing = model_manifest.load_from_file_sync() or {}
+        merged_res: Dict[str, List[Dict[str, Any]]] = {}
+        for cat in ("stt", "llm", "tts"):
+            seen = {}
+            for m in existing.get(cat, []):
+                mid = m.get("id")
+                if mid and not any(p in mid.lower() for p in ("probe-model", "test-model", "talk-model", "mock")):
+                    seen[mid.lower()] = dict(m)
+            for m in res.get(cat, []):
+                mid = m.get("id")
+                if mid and not any(p in mid.lower() for p in ("probe-model", "test-model", "talk-model", "mock")):
+                    seen[mid.lower()] = dict(m)
+            merged_res[cat] = list(seen.values())
 
-            # Ensure manifest tts bucket is strictly Kokoro only
-            merged_res["tts"] = [
-                m for m in merged_res.get("tts", []) if "kokoro" in m.get("id", "").lower()
-            ]
-            if not any("kokoro" in m.get("id", "").lower() for m in merged_res["tts"]):
-                merged_res["tts"].append(
-                    {
-                        "id": "kokoro",
-                        "name": "Kokoro (Default)",
-                        "category": "tts",
-                        "provider": "local-tts",
-                        "size_mb": 350,
-                    }
-                )
-
-            model_manifest.save_to_file_sync(
+        merged_res["tts"] = [
+            m for m in merged_res.get("tts", []) if "kokoro" in m.get("id", "").lower()
+        ]
+        if not any("kokoro" in m.get("id", "").lower() for m in merged_res["tts"]):
+            merged_res["tts"].append(
                 {
-                    "version": 1,
-                    "updated_at": time.time(),
-                    "stt": merged_res["stt"],
-                    "llm": merged_res["llm"],
-                    "tts": merged_res["tts"],
+                    "id": "kokoro",
+                    "name": "Kokoro (Default)",
+                    "category": "tts",
+                    "provider": "local-tts",
+                    "size_mb": 350,
+                    "available": True,
                 }
             )
-            res = merged_res
+
+        model_manifest.save_to_file_sync(
+            {
+                "version": 1,
+                "updated_at": time.time(),
+                "stt": merged_res["stt"],
+                "llm": merged_res["llm"],
+                "tts": merged_res["tts"],
+            }
+        )
+        res = merged_res
     except Exception:
         pass
     return res
@@ -858,6 +792,20 @@ async def list_gallery_models(
     for lm in localai_models:
         raw_name = lm.get("name") or lm.get("id")
         if not raw_name or raw_name in seen_ids:
+            continue
+
+        lower_raw = raw_name.lower()
+        if any(
+            p in lower_raw
+            for p in (
+                "probe-model",
+                "test-model",
+                "talk-model",
+                "mock",
+                "kitten",
+                "vits-piper",
+            )
+        ):
             continue
 
         base_name = raw_name.split(":")[0] if ":" in raw_name else raw_name
@@ -1064,6 +1012,19 @@ async def list_gallery_models(
             continue
         for im in cat_models:
             imid = im["id"]
+            lower_imid = imid.lower()
+            if any(
+                p in lower_imid
+                for p in (
+                    "probe-model",
+                    "test-model",
+                    "talk-model",
+                    "mock",
+                    "kitten",
+                    "vits-piper",
+                )
+            ):
+                continue
             if imid not in seen_ids:
                 if (
                     q
@@ -1222,6 +1183,11 @@ async def start_install_job(
     size_mb = payload.get("size_mb") or (
         catalog_model["size_mb"] if catalog_model else 500
     )
+    download_url = (
+        payload.get("url")
+        or payload.get("download_url")
+        or (catalog_model.get("download_url") if catalog_model else None)
+    )
 
     # Dynamically detect streaming capability from payload, gallery definition, backend, and tags
     detected_kind: Optional[str] = None
@@ -1269,114 +1235,153 @@ async def start_install_job(
         "created_at": time.time(),
     }
 
+    async def stream_download(url: str, dest_path: Path, job: dict, total_expected: int):
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = dest_path.with_name(f"{dest_path.name}.part")
+        start_t = time.time()
+        downloaded = 0
+        if temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0),
+        ) as client:
+            async with client.stream("GET", url) as response:
+                if response.status_code >= 400:
+                    raise RuntimeError(f"Download from {url} returned HTTP {response.status_code}")
+                content_len = response.headers.get("Content-Length")
+                total = int(content_len) if content_len and content_len.isdigit() else total_expected
+                job["total_bytes"] = total
+
+                with open(temp_path, "wb") as f:
+                    async for chunk in response.aiter_bytes(chunk_size=1024 * 512):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        job["downloaded_bytes"] = downloaded
+                        elapsed = max(0.1, time.time() - start_t)
+                        speed_bytes_sec = downloaded / elapsed
+                        job["speed_mbps"] = round((speed_bytes_sec * 8) / (1024 * 1024), 2)
+                        pct = min(85, int((downloaded / total) * 85)) if total > 0 else 50
+                        job["progress_percent"] = max(job.get("progress_percent", 5), pct)
+                        if speed_bytes_sec > 0 and total > downloaded:
+                            job["eta_seconds"] = int((total - downloaded) / speed_bytes_sec)
+
+        temp_path.replace(dest_path)
+
     async def run_install(
-        jid: str, mid: str, m_name: str, cat: str, prov: str, sz: int, m_kind: Optional[str] = None
+        jid: str,
+        mid: str,
+        m_name: str,
+        cat: str,
+        prov: str,
+        sz: int,
+        m_kind: Optional[str] = None,
+        dl_url: Optional[str] = None,
     ):
         job = _INSTALL_JOBS[jid]
         job["status"] = "downloading"
+        job["progress_percent"] = 5
 
-        # 1. Trigger real LocalAI model apply if provider is localai
-        if prov == "localai":
-            gallery_id_map = {
-                "llama-3.2-1b-instruct": "llama-3.2-1b-instruct:q4_k_m",
-                "llama-3.2-3b-instruct": "llama-3.2-3b-instruct:q4_k_m",
-                "phi-2-chat": "phi-2-chat",
-            }
-            localai_target = gallery_id_map.get(mid, mid)
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    apply_resp = await client.post(
-                        f"{settings.LOCALAI_BASE_URL}/models/apply",
-                        json={"id": localai_target},
-                        headers=_localai_headers(),
-                    )
-                    if apply_resp.status_code == 200:
-                        apply_data = apply_resp.json()
-                        job_uuid = apply_data.get("uuid")
-                        if job_uuid:
-                            # Poll real LocalAI job
-                            for _ in range(120):  # up to ~2 minutes
-                                await asyncio.sleep(1.0)
-                                job_resp = await client.get(
-                                    f"{settings.LOCALAI_BASE_URL}/models/jobs/{job_uuid}",
-                                    headers=_localai_headers(),
-                                )
-                                if job_resp.status_code == 200:
-                                    r_job = job_resp.json()
-                                    if r_job.get("error"):
-                                        job["status"] = "failed"
-                                        job["error_message"] = (
-                                            f"LocalAI install error: {r_job.get('error')}"
-                                        )
-                                        logger.error(
-                                            "LocalAI job %s failed: %s",
-                                            job_uuid,
-                                            r_job.get("error"),
-                                        )
-                                        return
-                                    pct = int(r_job.get("progress", 0))
-                                    job["progress_percent"] = max(10, min(95, pct))
-                                    job["downloaded_bytes"] = r_job.get(
-                                        "current_bytes",
-                                        int(sz * 1024 * 1024 * (pct / 100.0)),
-                                    )
-                                    if r_job.get("processed"):
-                                        break
-                    else:
-                        job["status"] = "failed"
-                        job["error_message"] = (
-                            f"LocalAI returned HTTP {apply_resp.status_code}: {apply_resp.text}"
-                        )
-                        return
-            except Exception as e:
-                logger.warning("LocalAI model apply warning: %s", e)
-
-        # Fallback smooth progression for visual feedback if local-tts or rapid finish
-        if job["progress_percent"] < 80:
-            for step in range(job["progress_percent"], 85, 15):
-                await asyncio.sleep(0.3)
-                job["progress_percent"] = step
-
-        job["status"] = "verifying"
-        job["progress_percent"] = 90
-        await asyncio.sleep(0.3)
-
-        # Verify backend presence in LocalAI
-        if prov == "localai":
-            try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    sys_resp = await client.get(
-                        f"{settings.LOCALAI_BASE_URL}/system",
-                        headers=_localai_headers(),
-                    )
-                    if sys_resp.status_code == 200:
-                        installed_backends = {
-                            b.lower() for b in sys_resp.json().get("backends", [])
-                        }
-                        if "parakeet" in mid.lower() and not any(
-                            "parakeet" in b for b in installed_backends
-                        ):
-                            job["status"] = "failed"
-                            job["error_message"] = (
-                                "Backend missing: parakeet-cpp backend not installed in LocalAI"
-                            )
-                            return
-                        elif ("nemo" in mid.lower() or "nemotron" in mid.lower()) and not any(
-                            "nemo" in b for b in installed_backends
-                        ):
-                            job["status"] = "failed"
-                            job["error_message"] = (
-                                "Backend missing: nemo-speech-cpp backend not installed in LocalAI"
-                            )
-                            return
-            except Exception as e:
-                logger.warning("LocalAI backend verification warning: %s", e)
-
-        job["status"] = "registering"
-        job["progress_percent"] = 95
-
-        # Persist model to SQLite installed_models and JSON manifest
         try:
+            # 1. Streaming STT (Sherpa ONNX Zipformer)
+            if prov == "stream-stt" or "sherpa-onnx-streaming-zipformer" in mid.lower():
+                base_dir = Path("models/streaming-stt")
+                base_dir.mkdir(parents=True, exist_ok=True)
+                target_folder = base_dir / "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"
+                if (target_folder / "tokens.txt").exists():
+                    job["progress_percent"] = 85
+                    await asyncio.sleep(0.3)
+                else:
+                    archive_path = base_dir / "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2"
+                    archive_url = (
+                        dl_url
+                        or "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2"
+                    )
+                    await stream_download(archive_url, archive_path, job, sz * 1024 * 1024)
+                    job["status"] = "verifying"
+                    job["progress_percent"] = 88
+                    import tarfile
+                    import sys
+                    with tarfile.open(archive_path, "r:bz2") as tar:
+                        if sys.version_info >= (3, 12):
+                            tar.extractall(path=base_dir, filter="data")
+                        else:
+                            tar.extractall(path=base_dir)
+                    archive_path.unlink(missing_ok=True)
+
+            # 2. LocalAI LLM or Batch STT
+            elif prov == "localai":
+                models_dir = Path(settings.LOCALAI_MODELS_PATH if settings.LOCALAI_MODELS_PATH else "models")
+                models_dir.mkdir(parents=True, exist_ok=True)
+                ext = "bin" if cat == "stt" else "gguf"
+                weight_file = models_dir / f"{mid}.{ext}"
+                config_file = models_dir / f"{mid}.yaml"
+
+                if weight_file.is_file() and weight_file.stat().st_size > 1024 * 1024:
+                    job["progress_percent"] = 85
+                    await asyncio.sleep(0.3)
+                elif dl_url:
+                    await stream_download(dl_url, weight_file, job, sz * 1024 * 1024)
+                else:
+                    # Fallback to LocalAI /models/apply
+                    gallery_id_map = {
+                        "llama-3.2-1b-instruct": "llama-3.2-1b-instruct:q4_k_m",
+                        "llama-3.2-3b-instruct": "llama-3.2-3b-instruct:q4_k_m",
+                        "phi-2-chat": "phi-2-chat",
+                    }
+                    localai_target = gallery_id_map.get(mid, mid)
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        apply_resp = await client.post(
+                            f"{settings.LOCALAI_BASE_URL}/models/apply",
+                            json={"id": localai_target},
+                            headers=_localai_headers(),
+                        )
+                        if apply_resp.status_code == 200:
+                            apply_data = apply_resp.json()
+                            job_uuid = apply_data.get("uuid")
+                            if job_uuid:
+                                for _ in range(120):
+                                    await asyncio.sleep(1.0)
+                                    job_resp = await client.get(
+                                        f"{settings.LOCALAI_BASE_URL}/models/jobs/{job_uuid}",
+                                        headers=_localai_headers(),
+                                    )
+                                    if job_resp.status_code == 200:
+                                        r_job = job_resp.json()
+                                        if r_job.get("error"):
+                                            raise RuntimeError(f"LocalAI install error: {r_job.get('error')}")
+                                        pct = int(r_job.get("progress", 0))
+                                        job["progress_percent"] = max(10, min(85, pct))
+                                        if r_job.get("processed"):
+                                            break
+                        else:
+                            raise RuntimeError(f"LocalAI returned HTTP {apply_resp.status_code}: {apply_resp.text}")
+
+                # Ensure LocalAI YAML config exists so LocalAI serves model under canonical mid
+                if not config_file.exists() and weight_file.exists():
+                    if cat == "stt":
+                        yaml_content = f"name: {mid}\nbackend: whisper\nparameters:\n  model: {weight_file.name}\n"
+                    else:
+                        yaml_content = f"name: {mid}\nbackend: llama-cpp\nparameters:\n  model: {weight_file.name}\ncontext_size: 4096\nf16: true\n"
+                    config_file.write_text(yaml_content, encoding="utf-8")
+
+            # 3. Resident Kokoro TTS
+            elif cat == "tts" or "kokoro" in mid.lower():
+                for step in range(job["progress_percent"], 85, 20):
+                    await asyncio.sleep(0.15)
+                    job["progress_percent"] = step
+
+            job["status"] = "verifying"
+            job["progress_percent"] = 90
+            await asyncio.sleep(0.3)
+
+            job["status"] = "registering"
+            job["progress_percent"] = 95
+
+            # Persist model to SQLite installed_models and JSON manifest
             async with get_db() as db:
                 await db.execute(
                     """
@@ -1386,23 +1391,32 @@ async def start_install_job(
                     (mid, m_name, cat, prov, sz),
                 )
                 await db.commit()
+
             from app.services.model_manifest import model_manifest
-
             await model_manifest.record_install(mid, m_name, cat, prov, sz, kind=m_kind)
-            from app.services.model_registry import model_registry
 
+            from app.services.model_registry import model_registry
             model_registry.invalidate_cache()
+
+            job["status"] = "completed"
+            job["progress_percent"] = 100
+            job["eta_seconds"] = 0
+
         except Exception as exc:
+            logger.exception("Model install failed for %s: %s", mid, exc)
             job["status"] = "failed"
             job["error_message"] = str(exc)
-            return
-
-        job["status"] = "completed"
-        job["progress_percent"] = 100
-        job["eta_seconds"] = 0
 
     background_tasks.add_task(
-        run_install, job_id, model_id, model_name, category, provider, size_mb, detected_kind
+        run_install,
+        job_id,
+        model_id,
+        model_name,
+        category,
+        provider,
+        size_mb,
+        detected_kind,
+        download_url,
     )
     return {"job_id": job_id, "status": "queued"}
 

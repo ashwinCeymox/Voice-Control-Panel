@@ -54,7 +54,10 @@ async def validate_agent_models(data: Dict[str, Any]):
     stt_cfg = data.get("stt") or {}
     stt_model = (stt_cfg.get("model") or "").lower()
     if installed_stts and stt_model:
-        is_whisper_alias = stt_model in ("whisper-1", "whisper") and any(
+        is_whisper_alias = (
+            stt_model in ("whisper-1", "whisper")
+            or "whisper" in stt_model
+        ) and any(
             "whisper" in m for m in installed_stts
         )
         if not is_whisper_alias and not any(

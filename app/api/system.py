@@ -53,8 +53,8 @@ def get_mac_memory_info() -> Dict[str, float]:
 
 
 def compute_fit_score(req_ram_mb: int, avail_ram_mb: float) -> int:
-    """Compute 0-100 fit score based on R3 piecewise mathematical formula."""
-    safe_budget_mb = min(avail_ram_mb, 4500.0)
+    """Compute 0-100 fit score based on available system memory."""
+    safe_budget_mb = avail_ram_mb * 0.85 if avail_ram_mb > 4500.0 else min(avail_ram_mb, 4500.0)
 
     if req_ram_mb <= safe_budget_mb * 0.55:
         # Well within budget
@@ -102,6 +102,6 @@ async def get_system_resources(user: str = Depends(require_api_key)):
             "platform": platform.system(),
             "architecture": platform.machine(),
             "has_metal_gpu": has_metal,
-            "target": "MacBook Air M2 8GB",
+            "target": "Apple Silicon Mac" if has_metal else f"{platform.system()} {platform.machine()}",
         },
     }

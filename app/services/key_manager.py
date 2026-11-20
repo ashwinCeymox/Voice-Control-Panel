@@ -5,6 +5,7 @@ API Key management, authentication, profiles, role and scope authorization, and 
 import hmac
 import ipaddress
 import json
+import os
 import time
 import uuid
 from typing import Any, Dict, List, Optional

@@ -324,14 +324,10 @@ export const ModelsRegistry: React.FC = () => {
                   {resources.disk.free_gb.toFixed(0)} GB Free
                 </span>
               </div>
-              {resources.hardware?.has_metal_gpu && (
-                <>
-                  <div className="h-3 w-px bg-slate-800" />
-                  <span className="px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20 font-mono">
-                    Metal GPU
-                  </span>
-                </>
-              )}
+              <div className="h-3 w-px bg-slate-800" />
+              <span className="px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20 font-mono">
+                {resources.hardware?.has_metal_gpu ? 'Metal GPU' : 'Accelerated'}
+              </span>
             </div>
           )}
           <button
@@ -472,8 +468,8 @@ export const ModelsRegistry: React.FC = () => {
             <p className="text-xs text-slate-300 leading-relaxed">
               <strong className="text-amber-300">{warningModel.name}</strong> requires approximately{' '}
               <strong className="text-white font-mono">{warningModel.ram_required_mb} MB RAM</strong>
-              . This exceeds the safe resident threshold for your 8 GB Unified Memory configuration
-              and may induce aggressive swapping.
+              . This exceeds the recommended resident threshold for your system memory{' '}
+              {resources ? `(${resources.memory.available_mb} MB available)` : ''} and may induce performance degradation.
             </p>
             <div className="flex justify-end gap-3 pt-2">
               <button

@@ -91,16 +91,25 @@ class ModelManifest:
 
             existing = self.load_from_file_sync() or self._cached_manifest or {}
 
-            # Merge live discovered data with existing manifest so offline engines don't wipe disk models
+            # Helper to filter out dummy probe test models
+            def _is_valid_model(mid: str) -> bool:
+                lower = mid.lower()
+                if any(p in lower for p in ("probe-model", "test-model", "talk-model", "mock")):
+                    return False
+                return True
+
+            # Merge live discovered data with valid disk models
             merged: Dict[str, List[Dict[str, Any]]] = {}
             for cat in ("stt", "llm", "tts"):
                 seen = {}
                 for m in existing.get(cat, []):
-                    if m.get("id"):
-                        seen[m["id"].lower()] = dict(m)
+                    mid = m.get("id")
+                    if mid and _is_valid_model(mid):
+                        seen[mid.lower()] = dict(m)
                 for m in data.get(cat, []):
-                    if m.get("id"):
-                        seen[m["id"].lower()] = dict(m)
+                    mid = m.get("id")
+                    if mid and _is_valid_model(mid):
+                        seen[mid.lower()] = dict(m)
                 merged[cat] = list(seen.values())
 
             # In merged["tts"], restrict strictly to Kokoro models
