@@ -227,6 +227,11 @@ install_localai_engine() {
         LOCALAI_MODELS_PATH="${ROOT_DIR}/models"
         log_ok "Using system LocalAI binary at ${LOCALAI_EXEC}"
         return 0
+    elif [ -x "${HOME}/.local/bin/local-ai" ] && is_valid_binary "${HOME}/.local/bin/local-ai"; then
+        LOCALAI_EXEC="${HOME}/.local/bin/local-ai"
+        LOCALAI_MODELS_PATH="${ROOT_DIR}/models"
+        log_ok "Using user LocalAI binary at ${LOCALAI_EXEC}"
+        return 0
     elif [ -x "/usr/local/bin/local-ai" ] && is_valid_binary "/usr/local/bin/local-ai"; then
         LOCALAI_EXEC="/usr/local/bin/local-ai"
         LOCALAI_MODELS_PATH="${ROOT_DIR}/models"

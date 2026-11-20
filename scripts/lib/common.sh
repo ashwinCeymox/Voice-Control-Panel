@@ -46,6 +46,14 @@ if [ -d "${TOOLS_DIR}/node/bin" ]; then
     export PATH="${TOOLS_DIR}/node/bin:${PATH}"
 fi
 
+if [ -d "${HOME}/.local/bin" ]; then
+    export PATH="${HOME}/.local/bin:${PATH}"
+fi
+
+if [ -d "/usr/local/bin" ]; then
+    export PATH="/usr/local/bin:${PATH}"
+fi
+
 # Detect Platform
 detect_platform() {
     OS_TYPE="$(uname -s | tr '[:upper:]' '[:lower:]')"

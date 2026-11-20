@@ -80,6 +80,8 @@ start_localai() {
     if [ -z "${localai_bin}" ] || [ ! -x "${localai_bin}" ]; then
         if command -v local-ai >/dev/null 2>&1 && is_valid_binary "$(command -v local-ai)"; then
             localai_bin="$(command -v local-ai)"
+        elif [ -x "${HOME}/.local/bin/local-ai" ] && is_valid_binary "${HOME}/.local/bin/local-ai"; then
+            localai_bin="${HOME}/.local/bin/local-ai"
         elif [ -x "/usr/local/bin/local-ai" ] && is_valid_binary "/usr/local/bin/local-ai"; then
             localai_bin="/usr/local/bin/local-ai"
         elif [ -x "${TOOLS_DIR}/localai/local-ai" ] && is_valid_binary "${TOOLS_DIR}/localai/local-ai"; then
