@@ -211,7 +211,10 @@ app.mount(
 async def serve_controlpanel_root():
     index_file = frontend_dist / "index.html"
     if index_file.is_file():
-        return FileResponse(index_file)
+        return FileResponse(
+            index_file,
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
     return HTMLResponse(
         """<!DOCTYPE html>
 <html>
@@ -235,7 +238,10 @@ async def serve_controlpanel(full_path: str = ""):
         return FileResponse(target)
     index_file = frontend_dist / "index.html"
     if index_file.is_file():
-        return FileResponse(index_file)
+        return FileResponse(
+            index_file,
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
     return JSONResponse(
         {"error": "Resource not found or frontend still building"}, status_code=404
     )
