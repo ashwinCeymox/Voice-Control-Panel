@@ -65,6 +65,12 @@ start_localai() {
     fi
 
     log_info "Starting LocalAI on 127.0.0.1:${LOCALAI_PORT}..."
+    # Remove any corrupted non-ELF file sitting in .tools/localai
+    if [ -f "${TOOLS_DIR}/localai/local-ai" ] && ! is_valid_binary "${TOOLS_DIR}/localai/local-ai"; then
+        log_warn "Corrupted non-ELF file found at ${TOOLS_DIR}/localai/local-ai (text/404). Removing."
+        rm -rf "${TOOLS_DIR}/localai"
+    fi
+
     local localai_bin="${LOCALAI_EXEC:-}"
     if [ -n "${localai_bin}" ] && [ -f "${localai_bin}" ] && ! is_valid_binary "${localai_bin}"; then
         log_warn "Configured LocalAI binary '${localai_bin}' failed validation. Re-checking known locations..."
@@ -72,13 +78,14 @@ start_localai() {
     fi
 
     if [ -z "${localai_bin}" ] || [ ! -x "${localai_bin}" ]; then
-        if [ -x "${TOOLS_DIR}/localai/local-ai" ] && is_valid_binary "${TOOLS_DIR}/localai/local-ai"; then
+        if command -v local-ai >/dev/null 2>&1 && is_valid_binary "$(command -v local-ai)"; then
+            localai_bin="$(command -v local-ai)"
+        elif [ -x "/usr/local/bin/local-ai" ] && is_valid_binary "/usr/local/bin/local-ai"; then
+            localai_bin="/usr/local/bin/local-ai"
+        elif [ -x "${TOOLS_DIR}/localai/local-ai" ] && is_valid_binary "${TOOLS_DIR}/localai/local-ai"; then
             localai_bin="${TOOLS_DIR}/localai/local-ai"
         elif [ -x "${ROOT_DIR}/../LocalAI/local-ai" ] && is_valid_binary "${ROOT_DIR}/../LocalAI/local-ai"; then
             localai_bin="${ROOT_DIR}/../LocalAI/local-ai"
-        elif [ -f "${TOOLS_DIR}/localai/local-ai" ]; then
-            log_warn "Corrupted file found at ${TOOLS_DIR}/localai/local-ai (e.g. 404 text). Removing."
-            rm -f "${TOOLS_DIR}/localai/local-ai"
         fi
     fi
     local models_path="${LOCALAI_MODELS_PATH:-${ROOT_DIR}/models}"

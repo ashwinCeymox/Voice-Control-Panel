@@ -90,33 +90,44 @@ detect_platform() {
 
 detect_platform
 
-# Verify if a target file is an actual native executable binary and not an HTML/text error page
+# Verify if a target file is an actual native executable binary (ELF on Linux, Mach-O on macOS)
 is_valid_binary() {
     local target="$1"
     [ -f "${target}" ] || return 1
     [ -s "${target}" ] || return 1
+    [ -x "${target}" ] || return 1
 
-    # Check if first lines contain HTML, 404, or "Not Found" error strings
-    if head -n 5 "${target}" 2>/dev/null | grep -qiE "Not Found|<html|<!doctype|404: Not Found"; then
+    # Python-based foolproof binary check
+    local py_bin=""
+    if [ -x "${ROOT_DIR}/.venv/bin/python" ]; then
+        py_bin="${ROOT_DIR}/.venv/bin/python"
+    elif command -v python3 >/dev/null 2>&1; then
+        py_bin="python3"
+    fi
+
+    if [ -n "${py_bin}" ]; then
+        "${py_bin}" -c "
+import sys
+try:
+    with open(sys.argv[1], 'rb') as f:
+        magic = f.read(4)
+        if magic == b'\x7fELF':
+            sys.exit(0)
+        if magic in (b'\xfe\xed\xfa\xce', b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xcf', b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe'):
+            sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
+" "${target}" 2>/dev/null && return 0
         return 1
     fi
 
-    # Check via `file` utility if available
-    if command -v file >/dev/null 2>&1; then
-        local desc
-        desc="$(file -b "${target}" 2>/dev/null || true)"
-        if echo "${desc}" | grep -qiE "ELF|Mach-O|executable"; then
-            return 0
-        fi
-        return 1
-    fi
-
-    # Direct magic byte check (Linux ELF starts with \x7fELF)
+    # Fallback if Python is unavailable
     local magic
     magic="$(head -c 4 "${target}" 2>/dev/null || true)"
     if [ "${magic}" = "$(printf '\x7fELF')" ]; then
         return 0
     fi
 
-    [ -x "${target}" ]
+    return 1
 }

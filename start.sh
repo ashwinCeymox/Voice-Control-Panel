@@ -144,6 +144,9 @@ case "${COMMAND}" in
         stop_services
         sleep 1
         init_env
+        if [ "${SKIP_INSTALL}" != "true" ]; then
+            install_localai_engine
+        fi
         resolve_all_ports
 
         # Seed initial super admin in SQLite DB if table is empty (never written to .env)

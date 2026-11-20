@@ -221,6 +221,19 @@ install_node_and_frontend() {
 
 # 5. Setup LocalAI binary
 install_localai_engine() {
+    # Check if system-wide local-ai binary is present and valid
+    if command -v local-ai >/dev/null 2>&1 && is_valid_binary "$(command -v local-ai)"; then
+        LOCALAI_EXEC="$(command -v local-ai)"
+        LOCALAI_MODELS_PATH="${ROOT_DIR}/models"
+        log_ok "Using system LocalAI binary at ${LOCALAI_EXEC}"
+        return 0
+    elif [ -x "/usr/local/bin/local-ai" ] && is_valid_binary "/usr/local/bin/local-ai"; then
+        LOCALAI_EXEC="/usr/local/bin/local-ai"
+        LOCALAI_MODELS_PATH="${ROOT_DIR}/models"
+        log_ok "Using system LocalAI binary at ${LOCALAI_EXEC}"
+        return 0
+    fi
+
     # Check if resident LocalAI binary is already present and valid
     if [ -x "${ROOT_DIR}/../LocalAI/local-ai" ] && is_valid_binary "${ROOT_DIR}/../LocalAI/local-ai"; then
         LOCALAI_EXEC="${ROOT_DIR}/../LocalAI/local-ai"
@@ -238,7 +251,7 @@ install_localai_engine() {
             return 0
         else
             log_warn "Existing file at ${TOOLS_DIR}/localai/local-ai failed binary validation (e.g. 404 HTML text). Removing corrupted file..."
-            rm -f "${TOOLS_DIR}/localai/local-ai"
+            rm -rf "${TOOLS_DIR}/localai"
         fi
     fi
 
@@ -246,47 +259,32 @@ install_localai_engine() {
         mkdir -p "${TOOLS_DIR}/localai"
         local success="false"
 
-        # Strategy A: Official install script targeting .tools/localai
+        # Strategy A: Official install script
         log_info "Attempting LocalAI installation via official install wrapper..."
-        if curl -sSLf https://localai.io/install.sh | INSTALL_DIR="${TOOLS_DIR}/localai" LOCALAI_NO_SUDO=1 bash >/dev/null 2>&1; then
-            if is_valid_binary "${TOOLS_DIR}/localai/local-ai"; then
-                success="true"
-                log_ok "LocalAI engine installed via official installer."
-            fi
-        fi
-
-        # Strategy B: Fallback direct download with curl -f (fails if HTTP status >= 400)
-        if [ "${success}" != "true" ]; then
-            local download_url="${LOCALAI_LINUX_X64_URL}"
-            if [ "${HAS_NVIDIA_GPU:-false}" = "true" ] && [ -n "${LOCALAI_LINUX_CUDA12_URL:-}" ]; then
-                download_url="${LOCALAI_LINUX_CUDA12_URL}"
-                log_info "Selected CUDA12-accelerated LocalAI binary URL"
-            fi
-
-            log_info "Downloading LocalAI binary from ${download_url}..."
-            local tmp_bin="${TOOLS_DIR}/localai/local-ai.tmp"
-            rm -f "${tmp_bin}"
-            if curl -sSLf -o "${tmp_bin}" "${download_url}"; then
-                chmod +x "${tmp_bin}"
-                if is_valid_binary "${tmp_bin}"; then
-                    mv "${tmp_bin}" "${TOOLS_DIR}/localai/local-ai"
+        if [ "${IS_ROOT:-false}" = "true" ] || [ "$(id -u)" -eq 0 ]; then
+            if curl -sSLf https://localai.io/install.sh | bash >/dev/null 2>&1; then
+                if command -v local-ai >/dev/null 2>&1 && is_valid_binary "$(command -v local-ai)"; then
+                    LOCALAI_EXEC="$(command -v local-ai)"
                     success="true"
-                    log_ok "LocalAI binary downloaded and verified."
-                else
-                    rm -f "${tmp_bin}"
-                    log_warn "Downloaded LocalAI file failed binary validation."
+                elif [ -x "/usr/local/bin/local-ai" ] && is_valid_binary "/usr/local/bin/local-ai"; then
+                    LOCALAI_EXEC="/usr/local/bin/local-ai"
+                    success="true"
                 fi
-            else
-                rm -f "${tmp_bin}"
-                log_warn "Could not download LocalAI binary from ${download_url}."
             fi
         fi
 
-        if [ "${success}" = "true" ] && is_valid_binary "${TOOLS_DIR}/localai/local-ai"; then
-            chmod +x "${TOOLS_DIR}/localai/local-ai"
-            LOCALAI_EXEC="${TOOLS_DIR}/localai/local-ai"
+        if [ "${success}" != "true" ]; then
+            if curl -sSLf https://localai.io/install.sh | INSTALL_DIR="${TOOLS_DIR}/localai" LOCALAI_NO_SUDO=1 bash >/dev/null 2>&1; then
+                if is_valid_binary "${TOOLS_DIR}/localai/local-ai"; then
+                    LOCALAI_EXEC="${TOOLS_DIR}/localai/local-ai"
+                    success="true"
+                fi
+            fi
+        fi
+
+        if [ "${success}" = "true" ]; then
             LOCALAI_MODELS_PATH="${ROOT_DIR}/models"
-            log_ok "LocalAI engine installed into ${LOCALAI_EXEC}"
+            log_ok "LocalAI engine installed and verified at ${LOCALAI_EXEC}"
             return 0
         fi
 
