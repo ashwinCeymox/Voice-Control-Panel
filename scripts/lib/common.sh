@@ -99,6 +99,16 @@ detect_platform() {
 
 detect_platform
 
+# On Linux, optimize file descriptor limits and kernel inotify watchers for model runtimes
+if [ "${PLATFORM}" = "linux" ]; then
+    ulimit -n 65536 2>/dev/null || ulimit -n 4096 2>/dev/null || true
+    if [ "${IS_ROOT}" = "true" ] || [ "$(id -u)" -eq 0 ]; then
+        sysctl -w fs.inotify.max_user_watches=524288 >/dev/null 2>&1 || true
+        sysctl -w fs.inotify.max_user_instances=8192 >/dev/null 2>&1 || true
+        sysctl -w fs.inotify.max_queued_events=16384 >/dev/null 2>&1 || true
+    fi
+fi
+
 # Verify if a target file is an actual native executable binary (ELF on Linux, Mach-O on macOS)
 is_valid_binary() {
     local target="$1"

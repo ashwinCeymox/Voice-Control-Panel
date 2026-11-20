@@ -100,6 +100,19 @@ start_localai() {
     mkdir -p "${HOME}/.localai-docker"
     [ ! -f "${HOME}/.localai-docker/config.json" ] && echo '{}' > "${HOME}/.localai-docker/config.json"
 
+    # Ensure high open file limits and inotify limits for LocalAI backend subprocesses
+    ulimit -n 65536 2>/dev/null || ulimit -n 4096 2>/dev/null || true
+    if [ "${PLATFORM}" = "linux" ]; then
+        if [ "${IS_ROOT:-false}" = "true" ] || [ "$(id -u)" -eq 0 ]; then
+            sysctl -w fs.inotify.max_user_watches=524288 >/dev/null 2>&1 || true
+            sysctl -w fs.inotify.max_user_instances=8192 >/dev/null 2>&1 || true
+            sysctl -w fs.inotify.max_queued_events=16384 >/dev/null 2>&1 || true
+        fi
+        if ! command -v nvidia-smi >/dev/null 2>&1; then
+            export LOCALAI_DISABLE_HARDWARE_DEFAULTS=true
+        fi
+    fi
+
     DOCKER_CONFIG="${HOME}/.localai-docker" nohup "${localai_bin}" run \
         --address "127.0.0.1:${LOCALAI_PORT}" \
         --models-path "${models_path}" \
