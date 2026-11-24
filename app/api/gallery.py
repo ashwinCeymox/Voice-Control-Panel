@@ -308,13 +308,21 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                 data = resp.json().get("data", [])
                 for m in data:
                     raw_id = m.get("id")
-                    if not raw_id or raw_id.lower() in ("parakeet-cpp", "llama-cpp", "whisper-cpp", "piper", "vits", "localai"):
+                    if not raw_id:
+                        continue
+                    lower_id = raw_id.lower()
+                    if lower_id in ("parakeet-cpp", "llama-cpp", "whisper-cpp", "piper", "vits", "localai") or any(
+                        p in lower_id for p in ("ced-tiny", "diarization", "silero_vad")
+                    ) or lower_id.startswith("realtime_eou"):
                         continue
                     base_id = raw_id.split(":")[0] if ":" in raw_id else raw_id
-                    if raw_id in seen_ids or base_id in seen_ids:
+                    from app.core.model_matching import normalize_model_id
+                    norm_id = normalize_model_id(raw_id)
+                    if raw_id in seen_ids or base_id in seen_ids or norm_id in seen_ids:
                         continue
                     seen_ids.add(raw_id)
                     seen_ids.add(base_id)
+                    seen_ids.add(norm_id)
                     catalog_match = next(
                         (
                             c
@@ -335,7 +343,6 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                         "size_mb": size_mb,
                     }
 
-                    lower_id = raw_id.lower()
                     if catalog_match and catalog_match.get("category"):
                         cat = catalog_match["category"]
                     elif any(
@@ -356,10 +363,13 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                         for k in ("vits", "piper", "tts", "kokoro", "kitten")
                     ):
                         cat = "tts"
-                    elif "silero" in lower_id or "vad" in lower_id:
-                        continue  # Utility VAD model, not agent triad
-                    else:
+                    elif any(
+                        k in lower_id
+                        for k in ("llama", "qwen", "phi", "gemma", "mistral", "deepseek", "instruct", "chat", "llm")
+                    ):
                         cat = "llm"
+                    else:
+                        continue  # Do not classify unknown component files as LLMs!
 
                     if cat == "stt":
                         model_backend = model_backend_map.get(raw_id.lower()) or model_backend_map.get(base_id.lower())
@@ -581,13 +591,10 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
         if models_dir.is_dir():
             candidate_files = []
             scan_dirs = [
-                models_dir,
                 models_dir / "weights" / "llm",
                 models_dir / "weights" / "stt" / "whisper",
-                models_dir / "weights" / "stt" / "parakeet-cpp",
                 models_dir / "llm",
                 models_dir / "whisper",
-                models_dir / "parakeet-cpp",
             ]
             for d in scan_dirs:
                 if d.is_dir():
@@ -598,34 +605,41 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                         continue
                     stem = mf.stem
                     lower_stem = stem.lower()
-                    if any(p in lower_stem for p in ("part", "download", "tmp", "temp")):
+                    # Skip partial/temp files and audio sub-components
+                    if any(p in lower_stem for p in ("part", "download", "tmp", "temp", "ced", "diarization", "eou", "vad")):
                         continue
-                    if stem not in seen_ids and lower_stem not in seen_ids:
-                        seen_ids.add(stem)
-                        seen_ids.add(lower_stem)
-                        sz_mb = max(1, int(mf.stat().st_size / (1024 * 1024)))
-                        catalog_match = next(
-                            (c for c in GALLERY_CATALOG if c["id"].lower() == lower_stem),
-                            None,
-                        )
-                        display = catalog_match["name"] if catalog_match else stem.replace("-", " ").title()
-                        if any(k in lower_stem for k in ("whisper", "stt", "asr")):
-                            stt_models.append({
-                                "id": stem,
-                                "name": display,
-                                "provider": "localai",
-                                "kind": "batch",
-                                "size_mb": sz_mb,
-                                "available": True,
-                            })
-                        else:
-                            llm_models.append({
-                                "id": stem,
-                                "name": display,
-                                "provider": "localai",
-                                "size_mb": sz_mb,
-                                "available": True,
-                            })
+                    from app.core.model_matching import normalize_model_id
+                    norm_stem = normalize_model_id(stem)
+                    if stem in seen_ids or lower_stem in seen_ids or norm_stem in seen_ids:
+                        continue
+                    seen_ids.add(stem)
+                    seen_ids.add(lower_stem)
+                    seen_ids.add(norm_stem)
+                    sz_mb = max(1, int(mf.stat().st_size / (1024 * 1024)))
+                    catalog_match = next(
+                        (c for c in GALLERY_CATALOG if c["id"].lower() == lower_stem),
+                        None,
+                    )
+                    display = catalog_match["name"] if catalog_match else stem.replace("-", " ").title()
+                    is_stt = any(k in lower_stem for k in ("whisper", "stt", "asr", "parakeet", "nemo", "zipformer", "sherpa")) or "whisper" in str(mf.parent) or "stt" in str(mf.parent)
+                    is_llm = any(k in lower_stem for k in ("llama", "qwen", "phi", "gemma", "mistral", "deepseek", "instruct", "chat", "llm")) or "llm" in str(mf.parent)
+                    if is_stt:
+                        stt_models.append({
+                            "id": stem,
+                            "name": display,
+                            "provider": "localai",
+                            "kind": "batch",
+                            "size_mb": sz_mb,
+                            "available": True,
+                        })
+                    elif is_llm:
+                        llm_models.append({
+                            "id": stem,
+                            "name": display,
+                            "provider": "localai",
+                            "size_mb": sz_mb,
+                            "available": True,
+                        })
     except Exception:
         pass
 
@@ -736,10 +750,32 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
             }
         )
 
+    # Deduplicate LLMs by normalized model id
+    from app.core.model_matching import normalize_model_id
+    seen_norm_llm = set()
+    deduped_llm = []
+    for m in llm_models:
+        norm = normalize_model_id(m.get("id", ""))
+        if norm not in seen_norm_llm:
+            seen_norm_llm.add(norm)
+            clean_m = dict(m)
+            clean_m["id"] = norm
+            clean_m["name"] = clean_m.get("name") or norm.replace("-", " ").title()
+            deduped_llm.append(clean_m)
+    llm_models = deduped_llm
+
+    def _is_clean(m):
+        mid = (m.get("id") or "").lower()
+        if not mid or mid in ("parakeet-cpp", "llama-cpp", "whisper-cpp", "piper", "vits", "localai"):
+            return False
+        if any(p in mid for p in ("ced-tiny", "diarization", "silero_vad")) or mid.startswith("realtime_eou"):
+            return False
+        return True
+
     res = {
-        "stt": stt_models,
-        "llm": llm_models,
-        "tts": tts_models,
+        "stt": [m for m in stt_models if _is_clean(m)],
+        "llm": [m for m in llm_models if _is_clean(m)],
+        "tts": [m for m in tts_models if _is_clean(m)],
     }
     try:
         from app.services.model_manifest import model_manifest

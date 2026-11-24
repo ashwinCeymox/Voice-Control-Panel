@@ -179,7 +179,10 @@ class ModelRegistryService:
             pass
 
         for mid in all_localai:
-            if mid.lower() in ("parakeet-cpp", "llama-cpp", "whisper-cpp", "piper", "vits", "localai"):
+            lower_mid = mid.lower()
+            if lower_mid in ("parakeet-cpp", "llama-cpp", "whisper-cpp", "piper", "vits", "localai") or any(
+                p in lower_mid for p in ("ced-tiny", "diarization", "silero_vad")
+            ) or lower_mid.startswith("realtime_eou"):
                 continue
             base_mid = mid.split(":")[0]
             cap_data = capabilities_map.get(mid) or capabilities_map.get(base_mid)
@@ -191,13 +194,14 @@ class ModelRegistryService:
             confidence = "low"
             source = "unknown"
 
-            lower_mid = mid.lower()
             backend = model_backend_map.get(lower_mid) or model_backend_map.get(base_mid.lower())
 
-            if any(c in caps for c in ("chat", "completion")):
+            if any(c in caps for c in ("chat", "completion")) or any(
+                k in lower_mid for k in ("llama", "qwen", "phi", "gemma", "mistral", "deepseek", "instruct", "chat", "llm")
+            ):
                 task = "llm"
                 runtime = "llama.cpp"
-                source = "metadata"
+                source = "metadata" if any(c in caps for c in ("chat", "completion")) else "file-inference"
                 confidence = "high"
             elif "transcript" in caps or any(
                 k in lower_mid
@@ -480,6 +484,10 @@ class ModelRegistryService:
                 # Include manual overrides for models not discovered by engines
                 for ovr_id, ovr in overrides.items():
                     if ovr_id not in seen_ids:
+                        if ovr_id.lower() in ("parakeet-cpp", "llama-cpp", "whisper-cpp", "piper", "vits", "localai") or any(
+                            p in ovr_id.lower() for p in ("ced-tiny", "diarization", "silero_vad")
+                        ) or ovr_id.lower().startswith("realtime_eou"):
+                            continue
                         seen_ids.add(ovr_id)
                         is_avail = True
                         unavail_reason = None
@@ -514,6 +522,11 @@ class ModelRegistryService:
         # Apply query filters
         filtered = []
         for m in models:
+            mid_lower = m.get("id", "").lower()
+            if mid_lower in ("parakeet-cpp", "llama-cpp", "whisper-cpp", "piper", "vits", "localai") or any(
+                p in mid_lower for p in ("ced-tiny", "diarization", "silero_vad")
+            ) or mid_lower.startswith("realtime_eou"):
+                continue
             # Enforce Kokoro-only policy platform-wide: disable and exclude any non-Kokoro TTS model
             if m.get("task") == "tts" and "kokoro" not in m.get("id", "").lower():
                 continue

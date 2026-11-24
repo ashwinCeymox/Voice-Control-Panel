@@ -91,10 +91,14 @@ class ModelManifest:
 
             existing = self.load_from_file_sync() or self._cached_manifest or {}
 
-            # Helper to filter out dummy probe test models
+            # Helper to filter out dummy probe test models and internal sub-components
             def _is_valid_model(mid: str) -> bool:
                 lower = mid.lower()
+                if lower in ("parakeet-cpp", "llama-cpp", "whisper-cpp", "piper", "vits", "localai"):
+                    return False
                 if any(p in lower for p in ("probe-model", "test-model", "talk-model", "mock")):
+                    return False
+                if any(p in lower for p in ("ced-tiny", "diarization", "silero_vad")) or lower.startswith("realtime_eou"):
                     return False
                 return True
 
@@ -111,6 +115,19 @@ class ModelManifest:
                     if mid and _is_valid_model(mid):
                         seen[mid.lower()] = dict(m)
                 merged[cat] = list(seen.values())
+
+            # Deduplicate LLM models by normalized model ID
+            from app.core.model_matching import normalize_model_id
+            seen_llm = {}
+            for m in merged.get("llm", []):
+                mid = m.get("id")
+                norm = normalize_model_id(mid)
+                if norm not in seen_llm:
+                    clean_m = dict(m)
+                    clean_m["id"] = norm
+                    clean_m["name"] = clean_m.get("name") or norm.replace("-", " ").title()
+                    seen_llm[norm] = clean_m
+            merged["llm"] = list(seen_llm.values())
 
             # In merged["tts"], restrict strictly to Kokoro models
             merged["tts"] = [

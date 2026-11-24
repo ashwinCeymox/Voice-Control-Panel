@@ -135,6 +135,9 @@ fi
 
 # 5. Start FastAPI Gateway on GATEWAY_HOST:GATEWAY_PORT
 log_info "Starting FastAPI Gateway on ${GATEWAY_HOST}:${GATEWAY_PORT}..."
+if command -v fuser >/dev/null 2>&1; then
+    fuser -k -9 "${GATEWAY_PORT}/tcp" 2>/dev/null || true
+fi
 (
     cd "${ROOT_DIR}"
     nohup "${ROOT_DIR}/.venv/bin/uvicorn" app.main:app \
