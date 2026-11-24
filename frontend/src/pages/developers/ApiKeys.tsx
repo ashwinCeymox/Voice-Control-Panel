@@ -737,11 +737,14 @@ export const ApiKeys: React.FC = () => {
                 <label className="block text-slate-400 mb-1">Model Allowlist (comma-separated, optional)</label>
                 <input
                   type="text"
-                  placeholder="e.g. whisper-base, kokoro"
+                  placeholder="Leave blank to allow all installed models"
                   value={newKeyModelAllowlist}
                   onChange={(e) => setNewKeyModelAllowlist(e.target.value)}
                   className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono text-[11px]"
                 />
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Optional per-key restriction. Leave blank to allow any installed model. Specifying a base model family (e.g. llama-3.2-1b-instruct) automatically permits its quantized variants.
+                </p>
               </div>
 
               <div>

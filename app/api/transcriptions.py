@@ -32,7 +32,9 @@ async def create_transcription(
             for m in settings.LOCALAI_ALLOWED_STT_MODELS.split(",")
             if m.strip()
         ]
-        if target_model not in allowed:
+        from app.core.model_matching import is_model_allowed
+
+        if not is_model_allowed(target_model, allowed):
             raise BadRequestError(
                 f"Model '{target_model}' is not in allowed models list: {allowed}"
             )

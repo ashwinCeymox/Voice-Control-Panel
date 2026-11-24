@@ -70,6 +70,27 @@ async def test_llm_model_allowlist_enforcement(monkeypatch):
             )
             assert resp_ok.status_code == 200
 
+            # Request with quant variant should also succeed (e.g. -q8_0 and :q4_k_m)
+            resp_quant = await client.post(
+                "/v1/chat/completions",
+                headers=headers,
+                json={
+                    "model": "llama-3.2-1b-instruct-q8_0",
+                    "messages": [{"role": "user", "content": "hello"}],
+                },
+            )
+            assert resp_quant.status_code == 200
+
+            resp_quant_colon = await client.post(
+                "/v1/chat/completions",
+                headers=headers,
+                json={
+                    "model": "llama-3.2-1b-instruct:q4_k_m",
+                    "messages": [{"role": "user", "content": "hello"}],
+                },
+            )
+            assert resp_quant_colon.status_code == 200
+
 
 @pytest.mark.asyncio
 async def test_stt_model_allowlist_enforcement(monkeypatch):
@@ -90,3 +111,31 @@ async def test_stt_model_allowlist_enforcement(monkeypatch):
         )
         assert resp.status_code == 400
         assert "not in allowed models" in resp.json()["error"]["message"].lower()
+
+        # Allowed STT model and tag variant
+        from app.schemas.audio import TranscriptResponse
+
+        with patch(
+            "app.api.transcriptions.stt_client.transcribe", new_callable=AsyncMock
+        ) as mock_transcribe:
+            mock_transcribe.return_value = TranscriptResponse(
+                text="hello world",
+                language="en",
+                duration=1.0,
+                model="whisper-base",
+            )
+            resp_ok = await client.post(
+                "/v1/audio/transcriptions",
+                headers=headers,
+                data={"model": "whisper-base"},
+                files={"file": ("test.wav", b"RIFF_sample_audio", "audio/wav")},
+            )
+            assert resp_ok.status_code == 200
+
+            resp_ok_variant = await client.post(
+                "/v1/audio/transcriptions",
+                headers=headers,
+                data={"model": "whisper-base:latest"},
+                files={"file": ("test.wav", b"RIFF_sample_audio", "audio/wav")},
+            )
+            assert resp_ok_variant.status_code == 200

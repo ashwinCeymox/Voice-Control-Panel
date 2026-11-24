@@ -38,7 +38,9 @@ def check_model_allowed(key: ApiKeyRecord, model_id: Optional[str]) -> None:
     if not key or key.role == "admin" or not model_id:
         return
     if key.model_allowlist and len(key.model_allowlist) > 0:
-        if model_id not in key.model_allowlist:
+        from app.core.model_matching import is_model_allowed
+
+        if not is_model_allowed(model_id, key.model_allowlist):
             raise ForbiddenError(f"Model '{model_id}' is not allowed for this key.")
 
 
