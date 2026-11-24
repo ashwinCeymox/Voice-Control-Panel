@@ -87,10 +87,11 @@ class DecodePriorityQueue:
 
     def cancel_stream_jobs(self, stream_id: str):
         """Mark all outstanding jobs for stream_id as cancelled."""
-        # Note: jobs remain in priority queue but will be skipped upon dequeue
-        # To avoid unbounded memory, cancelled futures are marked immediately
-        # (jobs will be popped and discarded quickly by workers)
-        pass
+        for job in getattr(self._queue, "_queue", []):
+            if job.stream_id == stream_id:
+                job.is_cancelled = True
+                if not job.future.done():
+                    job.future.set_result(None)
 
     @property
     def qsize(self) -> int:

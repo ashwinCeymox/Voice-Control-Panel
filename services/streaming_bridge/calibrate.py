@@ -80,15 +80,15 @@ def get_calibration_file_path(model: str) -> Path:
     return DATA_DIR / f"bridge_calibration_{fp}_{safe_model}.json"
 
 
-def is_host_calibrated_and_passing(model: str) -> Tuple[bool, str]:
+def is_host_calibrated_and_passing(model: str) -> Tuple[bool, str, dict]:
     """Check if a valid, passing calibration file exists for this host and model.
     
     Returns:
-        (passed: bool, reason: str)
+        (passed: bool, reason: str, data: dict)
     """
     calib_file = get_calibration_file_path(model)
     if not calib_file.exists():
-        return False, f"No calibration file found at {calib_file}. Run scripts/bridge-calibrate.sh --model {model}"
+        return False, f"No calibration file found at {calib_file}. Run scripts/bridge-calibrate.sh --model {model}", {}
 
     try:
         with open(calib_file, "r") as f:
@@ -97,14 +97,14 @@ def is_host_calibrated_and_passing(model: str) -> Tuple[bool, str]:
         curr_fp = get_host_fingerprint()["fingerprint"]
         file_fp = data.get("host", {}).get("fingerprint")
         if curr_fp != file_fp:
-            return False, f"Host fingerprint mismatch (current: {curr_fp}, file: {file_fp})"
+            return False, f"Host fingerprint mismatch (current: {curr_fp}, file: {file_fp})", data
 
         if not data.get("passed", False):
-            return False, f"Host calibration failed: {data.get('verdict_reason', 'Thresholds exceeded')}"
+            return False, f"Host calibration failed: {data.get('verdict_reason', 'Thresholds exceeded')}", data
 
-        return True, "Calibration passed"
+        return True, "Calibration passed", data
     except Exception as e:
-        return False, f"Failed reading calibration file: {e}"
+        return False, f"Failed reading calibration file: {e}", {}
 
 
 async def run_voice_turn(client: httpx.AsyncClient, base_url: str, tts_url: str, headers: dict) -> Tuple[float, float, float]:

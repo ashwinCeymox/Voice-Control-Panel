@@ -32,6 +32,7 @@ class BridgeScheduler:
         widened_step_ms: int = 2000,
         partial_timeout_s: float = 8.0,
         final_timeout_s: float = 30.0,
+        time_func: Optional[Callable[[], float]] = None,
     ):
         self.transcribe_func = transcribe_func
         self.max_decodes = max_decodes
@@ -39,6 +40,7 @@ class BridgeScheduler:
         self.widened_step_ms = widened_step_ms
         self.partial_timeout_s = partial_timeout_s
         self.final_timeout_s = final_timeout_s
+        self.time_func = time_func or time.time
 
         self.priority_queue = DecodePriorityQueue(partial_max_age_s=2.0)
         self._global_semaphore = asyncio.Semaphore(max_decodes)
@@ -90,14 +92,27 @@ class BridgeScheduler:
         self._stream_models.pop(stream_id, None)
         self._stream_languages.pop(stream_id, None)
 
+    def cancel_stream(self, stream_id: str):
+        """Cancel queued jobs and release resources for stream."""
+        self.priority_queue.cancel_stream_jobs(stream_id)
+        self.unregister_stream(stream_id)
+
     def set_voice_busy(self, busy: bool):
         """Signal from gateway that a voice turn (LLM or TTS) is active or finished."""
         self.voice_busy = busy
         if busy:
-            self.voice_busy_start_t = time.time()
+            self.voice_busy_start_t = self.time_func()
             logger.info("Voice turn started: yielding partial decodes to prioritize voice.")
         else:
             logger.info("Voice turn ended: resuming normal STT partial dispatch.")
+
+    def get_effective_step_ms(self, stream_id: str, base_step_ms: int = 1000) -> int:
+        """Return widened step if voice turn has exceeded bounded pause cap."""
+        if self.voice_busy:
+            elapsed_ms = (self.time_func() - self.voice_busy_start_t) * 1000.0
+            if elapsed_ms >= self.bounded_pause_ms:
+                return self.widened_step_ms
+        return base_step_ms
 
     async def _worker_loop(self):
         """Worker task processing jobs from priority queue."""
@@ -114,7 +129,7 @@ class BridgeScheduler:
                 # 1. Yield-to-voice check for partials
                 # Finals (priority=0) are NEVER held or skipped
                 if job.priority > 0 and self.voice_busy:
-                    elapsed_voice_ms = (time.time() - self.voice_busy_start_t) * 1000.0
+                    elapsed_voice_ms = (self.time_func() - self.voice_busy_start_t) * 1000.0
                     if elapsed_voice_ms < self.bounded_pause_ms:
                         # Yield to voice: skip this partial decode
                         self.skipped_steps += 1
@@ -149,7 +164,10 @@ class BridgeScheduler:
                     except asyncio.TimeoutError:
                         logger.warning("Decode timed out after %.1fs for stream %s", timeout, job.stream_id)
                         if not job.future.done():
-                            job.future.set_result("" if job.priority == 0 else None)
+                            if job.priority == 0:
+                                job.future.set_result({"text": None, "final_degraded": True})
+                            else:
+                                job.future.set_result(None)
                     except Exception as e:
                         logger.error("Decode execution failed for stream %s: %s", job.stream_id, e)
                         if not job.future.done():

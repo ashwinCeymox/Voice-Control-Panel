@@ -115,3 +115,131 @@ async def test_scheduler_yield_to_voice():
     assert res_partial_after is not None
 
     await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_bounded_pause_with_fake_clock():
+    """Verify bounded pause: partials held during voice_busy, released after pause cap with widened step using a fake clock."""
+    fake = FakeLocalAI(decode_latency_s=0.01)
+    current_time = 1000.0
+
+    def mock_clock() -> float:
+        return current_time
+
+    scheduler = BridgeScheduler(
+        transcribe_func=fake.transcribe,
+        max_decodes=1,
+        bounded_pause_ms=3000,
+        widened_step_ms=2000,
+        time_func=mock_clock,
+    )
+    scheduler.start()
+    scheduler.register_stream("stream-bounded", "test-model")
+
+    # Start voice turn at current_time = 1000.0
+    scheduler.set_voice_busy(True)
+
+    # 1. While within bounded_pause_ms (elapsed = 1500ms < 3000ms): partials held/skipped
+    current_time = 1001.5
+    res_held = await scheduler.schedule_decode("stream-bounded", 0, 1, b"wav_held", is_final=False)
+    assert res_held is None
+    assert scheduler.skipped_steps == 1
+    assert scheduler.get_effective_step_ms("stream-bounded", 1000) == 1000
+
+    # 2. Advance clock past bounded pause cap (elapsed = 3500ms >= 3000ms)
+    current_time = 1003.5
+    # Effective step widens to 2000ms
+    assert scheduler.get_effective_step_ms("stream-bounded", 1000) == 2000
+
+    # Partials are now released and executed!
+    res_released = await scheduler.schedule_decode("stream-bounded", 0, 2, b"wav_rel", is_final=False)
+    assert res_released is not None
+    assert "partly cloudy" in res_released
+
+    # 3. Voice turn ends: step returns to normal (1000ms)
+    scheduler.set_voice_busy(False)
+    assert scheduler.get_effective_step_ms("stream-bounded", 1000) == 1000
+
+    await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_cancel_and_disconnect_cleanup():
+    """Verify stream cancel and disconnect: no leaked decode slot, queued jobs removed."""
+    fake = FakeLocalAI(decode_latency_s=0.05)
+    scheduler = BridgeScheduler(transcribe_func=fake.transcribe, max_decodes=1)
+    scheduler.start()
+    scheduler.register_stream("stream-leak-test", "test-model")
+
+    # Enqueue a job into priority queue
+    fut = await scheduler.priority_queue.put(
+        stream_id="stream-leak-test",
+        segment_id=0,
+        seq=1,
+        wav_bytes=b"wav_queued",
+        is_final=False,
+    )
+
+    # Stream cancels or disconnects
+    scheduler.cancel_stream("stream-leak-test")
+
+    # Queued job future should be completed/cancelled (None), stream lock removed
+    assert fut.done()
+    assert fut.result() is None
+    assert "stream-leak-test" not in scheduler._stream_locks
+
+    # Global semaphore must NOT be leaked: next stream can immediately decode
+    scheduler.register_stream("stream-fresh", "test-model")
+    res_fresh = await scheduler.schedule_decode("stream-fresh", 0, 1, b"wav_fresh", is_final=False)
+    assert res_fresh is not None
+    assert fake.peak_concurrent_decodes <= 1
+
+    await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_partial_and_final_timeouts():
+    """Verify timeouts: partial timeout skips (None); final timeout returns dict with final_degraded=True."""
+    async def hanging_transcribe(model: str, wav_bytes: bytes, lang: str):
+        await asyncio.sleep(5.0)
+        return {"text": "should not be reached"}
+
+    scheduler = BridgeScheduler(
+        transcribe_func=hanging_transcribe,
+        max_decodes=1,
+        partial_timeout_s=0.05,
+        final_timeout_s=0.05,
+    )
+    scheduler.start()
+    scheduler.register_stream("stream-timeout", "test-model")
+
+    # 1. Partial timeout -> returns None (skipped)
+    res_partial = await scheduler.schedule_decode("stream-timeout", 0, 1, b"wav_p", is_final=False)
+    assert res_partial is None
+
+    # 2. Final timeout -> returns dict with final_degraded=True
+    res_final = await scheduler.schedule_decode("stream-timeout", 0, 2, b"wav_f", is_final=True)
+    assert isinstance(res_final, dict)
+    assert res_final.get("final_degraded") is True
+    assert res_final.get("text") is None
+
+    await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_finals_run_while_voice_busy():
+    """Verify that final decodes always execute and are never yielded/skipped when voice_busy is true."""
+    fake = FakeLocalAI(decode_latency_s=0.01)
+    scheduler = BridgeScheduler(transcribe_func=fake.transcribe, max_decodes=1)
+    scheduler.start()
+    scheduler.register_stream("stream-final-busy", "test-model")
+
+    # Turn is actively busy
+    scheduler.set_voice_busy(True)
+
+    # Final decode must run and succeed immediately
+    res_final = await scheduler.schedule_decode("stream-final-busy", 0, 1, b"wav_final", is_final=True)
+    assert res_final is not None
+    assert "partly cloudy" in res_final
+
+    await scheduler.stop()

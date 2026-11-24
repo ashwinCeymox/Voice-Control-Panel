@@ -125,7 +125,7 @@ class BridgeSession:
             "degraded": degraded,
         }
 
-    def cut_segment(self, final_raw_text: Optional[str] = None) -> Tuple[dict, Optional[bytes]]:
+    def cut_segment(self, final_raw_text: Optional[str] = None, final_degraded: bool = False) -> Tuple[dict, Optional[bytes]]:
         """Close current segment, emit segment.final, and advance segment_id.
         
         Returns:
@@ -141,6 +141,8 @@ class BridgeSession:
             "text": final_text,
             "revised": revised,
         }
+        if final_degraded:
+            event["final_degraded"] = True
 
         # Reset segment state
         self.segment_id += 1
@@ -151,7 +153,7 @@ class BridgeSession:
 
         return event, None
 
-    def complete_stream(self, final_raw_text: Optional[str] = None) -> dict:
+    def complete_stream(self, final_raw_text: Optional[str] = None, final_degraded: bool = False) -> dict:
         """Commit entire stream and produce transcript.completed."""
         self.is_closed = True
         if self.current_segment_pcm:
@@ -162,10 +164,13 @@ class BridgeSession:
 
         joined_text = " ".join(self.all_completed_segments_text).strip()
         duration_s = round(time.time() - self.created_at, 2)
-        return {
+        evt = {
             "type": "transcript.completed",
             "text": joined_text,
             "model_used": self.model,
             "duration": duration_s,
             "revised": False,
         }
+        if final_degraded:
+            evt["final_degraded"] = True
+        return evt

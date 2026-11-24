@@ -2,7 +2,6 @@
 
 import json
 import os
-import secrets
 from typing import Any, List, Optional, Union
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -115,12 +114,6 @@ class Settings(BaseSettings):
     STREAMING_BRIDGE_INTERNAL_TOKEN: Optional[str] = os.environ.get("STREAMING_BRIDGE_INTERNAL_TOKEN")
     STREAMING_BRIDGE_BOUNDED_PAUSE_MS: int = 3000
     STREAMING_BRIDGE_WIDENED_STEP_MS: int = 2000
-
-    @model_validator(mode="after")
-    def resolve_bridge_internal_token(self) -> "Settings":
-        if not self.STREAMING_BRIDGE_INTERNAL_TOKEN:
-            self.STREAMING_BRIDGE_INTERNAL_TOKEN = "dev-bridge-token-" + secrets.token_hex(16)
-        return self
 
     # Security & Administration
     ENVIRONMENT: str = os.environ.get("ENVIRONMENT", "development")

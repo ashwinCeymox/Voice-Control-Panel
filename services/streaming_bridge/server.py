@@ -53,11 +53,14 @@ async def call_localai_transcribe(model: str, wav_bytes: bytes, language: str = 
         headers["Authorization"] = f"Bearer {settings.LOCALAI_API_KEY}"
 
     files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
-    # Parameter parity: temperature 0.0, exact language, model
+    target_lang = language if (language and language != "auto") else "en"
+    # Parameter parity with LocalAISTTClient (app/providers/localai_stt.py)
     data = {
         "model": model,
-        "temperature": "0.0",
-        "language": language,
+        "response_format": "json",
+        "temperature": "0",
+        "condition_on_previous_text": "false",
+        "language": target_lang,
     }
 
     resp = await http_client.post(url, files=files, data=data, headers=headers)
@@ -69,6 +72,9 @@ async def call_localai_transcribe(model: str, wav_bytes: bytes, language: str = 
 @app.on_event("startup")
 async def startup_event():
     global http_client, scheduler
+    if not settings.STREAMING_BRIDGE_INTERNAL_TOKEN or not settings.STREAMING_BRIDGE_INTERNAL_TOKEN.strip():
+        raise RuntimeError("STREAMING_BRIDGE_INTERNAL_TOKEN not configured in .env; bridge server refusing to start")
+
     http_client = httpx.AsyncClient(timeout=30.0)
     scheduler = BridgeScheduler(
         transcribe_func=call_localai_transcribe,
@@ -224,7 +230,7 @@ async def websocket_stream(
             return
 
         # 5. Host-Gated Calibration Check
-        calib_ok, calib_reason = is_host_calibrated_and_passing(model)
+        calib_ok, calib_reason, calib_data = is_host_calibrated_and_passing(model)
         if not calib_ok:
             logger.warning("Stream %s rejected: Host calibration check failed: %s", stream_id, calib_reason)
             await websocket.send_json({
@@ -234,6 +240,17 @@ async def websocket_stream(
                 "retry_after_ms": 5000,
             })
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        admitted_limit = min(calib_data.get("admitted_streams", 1), settings.STREAMING_BRIDGE_MAX_STREAMS)
+        if len(active_sessions) >= admitted_limit:
+            await websocket.send_json({
+                "type": "error",
+                "code": "BRIDGE_BUSY",
+                "message": f"Maximum admitted streams ({admitted_limit}) reached for model {model}",
+                "retry_after_ms": 2000,
+            })
+            await websocket.close(code=1013)
             return
 
         # Initialize session & scheduler stream
@@ -256,7 +273,8 @@ async def websocket_stream(
         # Periodic step timer for partial decodes
         async def step_worker():
             while not session.is_closed:
-                await asyncio.sleep(session.step_ms / 1000.0)
+                effective_step_ms = scheduler.get_effective_step_ms(stream_id, session.step_ms) if scheduler else session.step_ms
+                await asyncio.sleep(effective_step_ms / 1000.0)
                 if session.is_eligible_for_partial() and scheduler:
                     wav_snapshot = session.get_current_segment_wav()
                     try:
@@ -284,16 +302,22 @@ async def websocket_stream(
                 if should_cut:
                     # Segment boundary reached: run final decode of segment
                     final_text = None
+                    final_degraded = False
                     if not session.can_reuse_last_decode_for_final() and scheduler:
                         wav_bytes = session.get_current_segment_wav()
-                        final_text = await scheduler.schedule_decode(
+                        res = await scheduler.schedule_decode(
                             stream_id=stream_id,
                             segment_id=session.segment_id,
                             seq=session.seq + 1,
                             wav_bytes=wav_bytes,
                             is_final=True,
                         )
-                    seg_event, _ = session.cut_segment(final_text)
+                        if isinstance(res, dict):
+                            final_text = res.get("text")
+                            final_degraded = bool(res.get("final_degraded", False))
+                        else:
+                            final_text = res
+                    seg_event, _ = session.cut_segment(final_text, final_degraded=final_degraded)
                     await websocket.send_json(seg_event)
 
             elif "text" in msg and msg["text"]:
@@ -303,22 +327,30 @@ async def websocket_stream(
                 if msg_type == "audio.commit":
                     # Commit entire stream
                     final_text = None
+                    final_degraded = False
                     if not session.can_reuse_last_decode_for_final() and scheduler:
                         wav_bytes = session.get_current_segment_wav()
-                        final_text = await scheduler.schedule_decode(
+                        res = await scheduler.schedule_decode(
                             stream_id=stream_id,
                             segment_id=session.segment_id,
                             seq=session.seq + 1,
                             wav_bytes=wav_bytes,
                             is_final=True,
                         )
-                    comp_event = session.complete_stream(final_text)
+                        if isinstance(res, dict):
+                            final_text = res.get("text")
+                            final_degraded = bool(res.get("final_degraded", False))
+                        else:
+                            final_text = res
+                    comp_event = session.complete_stream(final_text, final_degraded=final_degraded)
                     await websocket.send_json(comp_event)
                     await websocket.close()
                     break
 
                 elif msg_type == "stream.cancel":
                     session.is_closed = True
+                    if scheduler:
+                        scheduler.cancel_stream(stream_id)
                     await websocket.close()
                     break
 
@@ -331,7 +363,7 @@ async def websocket_stream(
             step_task.cancel()
         active_sessions.pop(stream_id, None)
         if scheduler:
-            scheduler.unregister_stream(stream_id)
+            scheduler.cancel_stream(stream_id)
 
 
 def start_server(host: str = "127.0.0.1", port: int = 8089):
