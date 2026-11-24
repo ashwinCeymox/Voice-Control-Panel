@@ -179,6 +179,8 @@ class ModelRegistryService:
             pass
 
         for mid in all_localai:
+            if mid.lower() in ("parakeet-cpp", "llama-cpp", "whisper-cpp", "piper", "vits", "localai"):
+                continue
             base_mid = mid.split(":")[0]
             cap_data = capabilities_map.get(mid) or capabilities_map.get(base_mid)
             caps = cap_data.get("capabilities") or [] if cap_data else []

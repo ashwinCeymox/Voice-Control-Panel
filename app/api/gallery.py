@@ -308,7 +308,7 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                 data = resp.json().get("data", [])
                 for m in data:
                     raw_id = m.get("id")
-                    if not raw_id:
+                    if not raw_id or raw_id.lower() in ("parakeet-cpp", "llama-cpp", "whisper-cpp", "piper", "vits", "localai"):
                         continue
                     base_id = raw_id.split(":")[0] if ":" in raw_id else raw_id
                     if raw_id in seen_ids or base_id in seen_ids:
