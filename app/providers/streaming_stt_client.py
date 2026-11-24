@@ -12,6 +12,7 @@ import wave
 from typing import AsyncGenerator, Dict, Any, List, Optional
 import httpx
 import websockets
+import websockets.exceptions
 from app.core.config import settings
 from app.core.errors import (
     ProviderTimeoutError,
