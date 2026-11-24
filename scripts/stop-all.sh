@@ -60,5 +60,6 @@ stop_pid_file "${PID_DIR}/localai.pid" "LocalAI"
 stop_pid_file "${PID_DIR}/local-tts.pid" "local-tts"
 stop_pid_file "${PID_DIR}/local-tts-supervisor.pid" "local-tts supervisor"
 
-rm -rf "${PID_DIR}"
+rm -f "${PID_DIR}"/*.pid 2>/dev/null || true
+mkdir -p "${PID_DIR}"
 echo -e "${GREEN}✓ All services stopped successfully.${RESET}"

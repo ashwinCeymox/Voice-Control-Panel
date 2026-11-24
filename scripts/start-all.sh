@@ -56,6 +56,7 @@ echo -e "${BOLD}${SKY}==========================================================
 
 # Stop any running instances first
 "${SCRIPT_DIR}/stop-all.sh" || true
+mkdir -p "${LOGS_DIR}" "${PID_DIR}"
 
 # 2. Start local-tts (Kokoro) on 127.0.0.1:8880
 LOCAL_TTS_BIN=""
