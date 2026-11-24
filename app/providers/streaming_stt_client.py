@@ -111,8 +111,10 @@ class StreamingSTTClient(STTProvider):
         if self.is_localai_model(model):
             alias_map = {
                 "parakeet-cpp-realtime_eou_120m-v1": "parakeet-cpp-realtime-scene",
+                "parakeet-cpp-realtime_eou_120m-v1-f16": "parakeet-cpp-realtime-scene",
                 "parakeet-eou": "parakeet-cpp-realtime-scene",
                 "realtime_eou_120m-v1": "parakeet-cpp-realtime-scene",
+                "realtime_eou_120m-v1-f16": "parakeet-cpp-realtime-scene",
             }
             req_norm = alias_map.get(model.lower(), model.lower())
             try:
@@ -193,8 +195,10 @@ class StreamingSTTClient(STTProvider):
         target_model = model
         alias_map = {
             "parakeet-cpp-realtime_eou_120m-v1": "parakeet-cpp-realtime-scene",
+            "parakeet-cpp-realtime_eou_120m-v1-f16": "parakeet-cpp-realtime-scene",
             "parakeet-eou": "parakeet-cpp-realtime-scene",
             "realtime_eou_120m-v1": "parakeet-cpp-realtime-scene",
+            "realtime_eou_120m-v1-f16": "parakeet-cpp-realtime-scene",
         }
         target_model = alias_map.get(target_model.lower(), target_model)
 

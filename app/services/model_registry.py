@@ -182,7 +182,7 @@ class ModelRegistryService:
             lower_mid = mid.lower()
             if lower_mid in ("parakeet-cpp", "llama-cpp", "whisper-cpp", "piper", "vits", "localai") or any(
                 p in lower_mid for p in ("ced-tiny", "diarization", "silero_vad")
-            ) or lower_mid.startswith("realtime_eou"):
+            ):
                 continue
             base_mid = mid.split(":")[0]
             cap_data = capabilities_map.get(mid) or capabilities_map.get(base_mid)
@@ -205,10 +205,10 @@ class ModelRegistryService:
                 confidence = "high"
             elif "transcript" in caps or any(
                 k in lower_mid
-                for k in ("whisper", "parakeet", "asr", "stt", "nemo", "nemotron", "crispasr")
+                for k in ("whisper", "parakeet", "asr", "stt", "nemo", "nemotron", "crispasr", "eou")
             ):
                 task = "stt"
-                if (backend and "parakeet" in backend) or "parakeet" in lower_mid:
+                if (backend and "parakeet" in backend) or any(k in lower_mid for k in ("parakeet", "eou")):
                     runtime = "parakeet.cpp"
                 elif (backend and "nemo" in backend) or any(k in lower_mid for k in ("nemo", "nemotron")):
                     runtime = "nemo-speech-cpp"
@@ -486,7 +486,7 @@ class ModelRegistryService:
                     if ovr_id not in seen_ids:
                         if ovr_id.lower() in ("parakeet-cpp", "llama-cpp", "whisper-cpp", "piper", "vits", "localai") or any(
                             p in ovr_id.lower() for p in ("ced-tiny", "diarization", "silero_vad")
-                        ) or ovr_id.lower().startswith("realtime_eou"):
+                        ):
                             continue
                         seen_ids.add(ovr_id)
                         is_avail = True
@@ -525,7 +525,7 @@ class ModelRegistryService:
             mid_lower = m.get("id", "").lower()
             if mid_lower in ("parakeet-cpp", "llama-cpp", "whisper-cpp", "piper", "vits", "localai") or any(
                 p in mid_lower for p in ("ced-tiny", "diarization", "silero_vad")
-            ) or mid_lower.startswith("realtime_eou"):
+            ):
                 continue
             # Enforce Kokoro-only policy platform-wide: disable and exclude any non-Kokoro TTS model
             if m.get("task") == "tts" and "kokoro" not in m.get("id", "").lower():

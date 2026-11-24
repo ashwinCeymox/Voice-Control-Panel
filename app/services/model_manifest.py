@@ -98,7 +98,7 @@ class ModelManifest:
                     return False
                 if any(p in lower for p in ("probe-model", "test-model", "talk-model", "mock")):
                     return False
-                if any(p in lower for p in ("ced-tiny", "diarization", "silero_vad")) or lower.startswith("realtime_eou"):
+                if any(p in lower for p in ("ced-tiny", "diarization", "silero_vad")):
                     return False
                 return True
 

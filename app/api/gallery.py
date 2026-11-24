@@ -313,7 +313,7 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                     lower_id = raw_id.lower()
                     if lower_id in ("parakeet-cpp", "llama-cpp", "whisper-cpp", "piper", "vits", "localai") or any(
                         p in lower_id for p in ("ced-tiny", "diarization", "silero_vad")
-                    ) or lower_id.startswith("realtime_eou"):
+                    ):
                         continue
                     base_id = raw_id.split(":")[0] if ":" in raw_id else raw_id
                     from app.core.model_matching import normalize_model_id
@@ -606,7 +606,7 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                     stem = mf.stem
                     lower_stem = stem.lower()
                     # Skip partial/temp files and audio sub-components
-                    if any(p in lower_stem for p in ("part", "download", "tmp", "temp", "ced", "diarization", "eou", "vad")):
+                    if any(p in lower_stem for p in ("part", "download", "tmp", "temp", "ced", "diarization", "vad", "silero")):
                         continue
                     from app.core.model_matching import normalize_model_id
                     norm_stem = normalize_model_id(stem)
@@ -621,14 +621,15 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                         None,
                     )
                     display = catalog_match["name"] if catalog_match else stem.replace("-", " ").title()
-                    is_stt = any(k in lower_stem for k in ("whisper", "stt", "asr", "parakeet", "nemo", "zipformer", "sherpa")) or "whisper" in str(mf.parent) or "stt" in str(mf.parent)
+                    is_stt = any(k in lower_stem for k in ("whisper", "stt", "asr", "parakeet", "nemo", "zipformer", "sherpa", "eou")) or "whisper" in str(mf.parent) or "stt" in str(mf.parent)
                     is_llm = any(k in lower_stem for k in ("llama", "qwen", "phi", "gemma", "mistral", "deepseek", "instruct", "chat", "llm")) or "llm" in str(mf.parent)
                     if is_stt:
+                        is_streaming = any(k in lower_stem for k in ("realtime", "stream", "streaming", "online", "eou", "zipformer", "sherpa"))
                         stt_models.append({
                             "id": stem,
                             "name": display,
                             "provider": "localai",
-                            "kind": "batch",
+                            "kind": "streaming" if is_streaming else "batch",
                             "size_mb": sz_mb,
                             "available": True,
                         })
@@ -768,7 +769,7 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
         mid = (m.get("id") or "").lower()
         if not mid or mid in ("parakeet-cpp", "llama-cpp", "whisper-cpp", "piper", "vits", "localai"):
             return False
-        if any(p in mid for p in ("ced-tiny", "diarization", "silero_vad")) or mid.startswith("realtime_eou"):
+        if any(p in mid for p in ("ced-tiny", "diarization", "silero_vad")):
             return False
         return True
 
