@@ -684,8 +684,9 @@ async def main():
     parser.add_argument("--tts-url", default=os.environ.get("TTS_URL", "http://127.0.0.1:8880"), help="TTS base URL")
     parser.add_argument(
         "--models",
-        default="parakeet-cpp-realtime-scene,whisper-base,realtime_eou_120m-v1-f16",
-        help="Comma-separated model IDs",
+        nargs="+",
+        default=["parakeet-cpp-realtime-scene", "whisper-base", "realtime_eou_120m-v1-f16"],
+        help="Space or comma-separated model IDs",
     )
     parser.add_argument("--api-key", default=os.environ.get("LOCALAI_API_KEY", ""), help="API key")
     args = parser.parse_args()
@@ -713,7 +714,13 @@ async def main():
 
     # 2. Extract Speech Slices
     wav_slices = {l: extract_real_speech_slice(source_wav, l) for l in CLIP_LENGTHS}
-    model_list = [m.strip() for m in args.models.split(",") if m.strip()]
+    raw_models = args.models if isinstance(args.models, list) else [args.models]
+    model_list = []
+    for item in raw_models:
+        for m in str(item).split(","):
+            if m.strip() and m.strip() not in model_list:
+                model_list.append(m.strip())
+
     primary_model = model_list[0] if model_list else "parakeet-cpp-realtime-scene"
 
     # 3. Controlled Diagnostic Experiment (Section 3) on Primary Model
