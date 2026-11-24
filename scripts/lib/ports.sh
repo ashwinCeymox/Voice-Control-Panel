@@ -120,12 +120,18 @@ resolve_all_ports() {
     LOCALAI_PORT="$(resolve_service_port "localai" "LOCALAI_PORT" "${LOCALAI_PORT}" "false")"
     TTS_PORT="$(resolve_service_port "local-tts" "TTS_PORT" "${TTS_PORT}" "false")"
     STT_PORT="$(resolve_service_port "streaming-stt" "STT_PORT" "${STT_PORT}" "false")"
+    if [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
+        STREAMING_BRIDGE_PORT="$(resolve_service_port "streaming-bridge" "STREAMING_BRIDGE_PORT" "${STREAMING_BRIDGE_PORT:-8089}" "false")"
+    fi
     if [ "${ENVIRONMENT}" = "development" ]; then
         FRONTEND_DEV_PORT="$(resolve_service_port "frontend" "FRONTEND_DEV_PORT" "${FRONTEND_DEV_PORT}" "false")"
     fi
 
     # Assert no duplicate ports across services
     local ports_str="${GATEWAY_PORT} ${LOCALAI_PORT} ${TTS_PORT} ${STT_PORT}"
+    if [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
+        ports_str="${ports_str} ${STREAMING_BRIDGE_PORT}"
+    fi
     if [ "${ENVIRONMENT}" = "development" ]; then
         ports_str="${ports_str} ${FRONTEND_DEV_PORT}"
     fi
@@ -152,6 +158,9 @@ print_ports_table() {
     printf "  %-22s | %-8s | %-12s | http://127.0.0.1:%s\n" "LocalAI Engine" "${LOCALAI_PORT}" "Internal" "${LOCALAI_PORT}"
     printf "  %-22s | %-8s | %-12s | http://127.0.0.1:%s\n" "local-tts Engine" "${TTS_PORT}" "Internal" "${TTS_PORT}"
     printf "  %-22s | %-8s | %-12s | http://127.0.0.1:%s\n" "Sherpa-ONNX STT" "${STT_PORT}" "Internal" "${STT_PORT}"
+    if [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
+        printf "  %-22s | %-8s | %-12s | http://127.0.0.1:%s\n" "Streaming Bridge" "${STREAMING_BRIDGE_PORT}" "Internal" "${STREAMING_BRIDGE_PORT}"
+    fi
     if [ "${ENVIRONMENT}" = "development" ]; then
         printf "  %-22s | %-8s | %-12s | http://127.0.0.1:%s\n" "Vite Dev Server" "${FRONTEND_DEV_PORT}" "Internal" "${FRONTEND_DEV_PORT}"
     fi

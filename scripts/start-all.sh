@@ -149,6 +149,17 @@ if [ -f "${ROOT_DIR}/services/streaming_stt/server.py" ]; then
     log_ok "Sherpa-ONNX Streaming STT started (PID $(cat "${PID_DIR}/streaming-stt.pid"))"
 fi
 
+# 4b. Start Streaming STT Bridge strictly on 127.0.0.1:STREAMING_BRIDGE_PORT (if enabled)
+if [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
+    BRIDGE_PORT="${STREAMING_BRIDGE_PORT:-8089}"
+    log_info "Starting Streaming STT Bridge strictly on 127.0.0.1:${BRIDGE_PORT}..."
+    STREAMING_BRIDGE_PORT="${BRIDGE_PORT}" \
+    nohup "${ROOT_DIR}/.venv/bin/python" -m services.streaming_bridge.server \
+        > "${LOGS_DIR}/streaming-bridge.log" 2>&1 &
+    echo $! > "${PID_DIR}/streaming-bridge.pid"
+    log_ok "Streaming STT Bridge started (PID $(cat "${PID_DIR}/streaming-bridge.pid"))"
+fi
+
 # 5. Start FastAPI Gateway on GATEWAY_HOST:GATEWAY_PORT
 log_info "Starting FastAPI Gateway on ${GATEWAY_HOST}:${GATEWAY_PORT}..."
 if command -v fuser >/dev/null 2>&1; then
@@ -184,6 +195,9 @@ echo -e "  • Frontend:     http://127.0.0.1:${FRONTEND_PORT}"
 echo -e "  • LocalAI:      http://127.0.0.1:8080 (loopback only)"
 echo -e "  • local-tts:    http://127.0.0.1:8880 (loopback only)"
 echo -e "  • Sherpa STT:   http://127.0.0.1:8088 (loopback only)"
+if [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
+    echo -e "  • Bridge STT:   http://127.0.0.1:${STREAMING_BRIDGE_PORT:-8089} (loopback only)"
+fi
 echo -e "  • Logs:         ${LOGS_DIR}/*.log"
 echo -e "  • Stop Command: ${SCRIPT_DIR}/stop-all.sh"
 echo -e "${BOLD}${GREEN}====================================================================${RESET}"

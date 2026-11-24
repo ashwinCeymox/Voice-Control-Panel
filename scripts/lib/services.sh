@@ -50,6 +50,7 @@ stop_services() {
     printf "\n${BOLD}${PURPLE}==> Stopping Local Voice Agent Stack...${RESET}\n"
     stop_process_by_pid_file "frontend"
     stop_process_by_pid_file "gateway"
+    stop_process_by_pid_file "streaming-bridge"
     stop_process_by_pid_file "streaming-stt"
     stop_process_by_pid_file "local-tts-supervisor"
     stop_process_by_pid_file "local-tts"
@@ -313,6 +314,64 @@ start_streaming_stt() {
     log_warn "Streaming STT probe timed out; continuing..."
 }
 
+# Start Streaming STT Bridge (LocalAI simulated streaming)
+start_streaming_bridge() {
+    if [ "${STREAMING_BRIDGE_ENABLED:-false}" != "true" ]; then
+        return 0
+    fi
+
+    if is_port_our_own "streaming-bridge"; then
+        log_ok "Streaming STT Bridge already running on port ${STREAMING_BRIDGE_PORT}."
+        return 0
+    fi
+
+    log_info "Starting Streaming STT Bridge on 127.0.0.1:${STREAMING_BRIDGE_PORT}..."
+    local py_exec="${ROOT_DIR}/.venv/bin/python"
+    if [ ! -f "${py_exec}" ]; then
+        py_exec="$(command -v python3)"
+    fi
+
+    # Ensure internal token is generated
+    local bridge_token
+    bridge_token="$(get_env_val "STREAMING_BRIDGE_INTERNAL_TOKEN" "")"
+    if [ -z "${bridge_token}" ]; then
+        if [ -f "${ROOT_DIR}/scripts/generate-bridge-token.sh" ]; then
+            log_info "Generating missing internal token for Streaming Bridge..."
+            bash "${ROOT_DIR}/scripts/generate-bridge-token.sh" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    (
+        cd "${ROOT_DIR}"
+        STREAMING_BRIDGE_PORT="${STREAMING_BRIDGE_PORT}" \
+        nohup "${py_exec}" -m services.streaming_bridge.server \
+            >> "${LOGS_DIR}/streaming-bridge.log" 2>&1 &
+        echo $! > "${RUN_DIR}/streaming-bridge.pid"
+    )
+    local pid
+    pid="$(cat "${RUN_DIR}/streaming-bridge.pid")"
+
+    local count=0
+    while [ "${count}" -lt 25 ]; do
+        if ! kill -0 "${pid}" 2>/dev/null; then
+            log_err "Streaming Bridge process died unexpectedly (PID: ${pid}). Last 20 lines of log:"
+            tail -n 20 "${LOGS_DIR}/streaming-bridge.log" >&2 || true
+            return 1
+        fi
+        local health_json
+        health_json="$(curl -s "http://127.0.0.1:${STREAMING_BRIDGE_PORT}/health" 2>/dev/null || true)"
+        if [ -n "${health_json}" ] && [[ "${health_json}" == *"healthy"* ]]; then
+            local max_streams
+            max_streams="$(echo "${health_json}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('max_streams', 5))" 2>/dev/null || echo "5")"
+            log_ok "Streaming STT Bridge ready on port ${STREAMING_BRIDGE_PORT} (PID: ${pid}, max_streams: ${max_streams})"
+            return 0
+        fi
+        sleep 1
+        count=$((count + 1))
+    done
+    log_warn "Streaming Bridge health probe timed out; check logs/streaming-bridge.log"
+}
+
 # Start FastAPI Gateway Backend
 start_gateway() {
     if is_port_our_own "gateway"; then
@@ -434,6 +493,7 @@ start_services() {
     start_localai
     start_local_tts
     start_streaming_stt
+    start_streaming_bridge
     start_gateway
     start_frontend_dev
 }
@@ -448,6 +508,10 @@ status_services() {
                     "localai:LocalAI Engine:${LOCALAI_PORT}:http://127.0.0.1:${LOCALAI_PORT}/v1/models"
                     "local-tts:local-tts Engine:${TTS_PORT}:http://127.0.0.1:${TTS_PORT}/v1/models"
                     "streaming-stt:Sherpa-ONNX STT:${STT_PORT}:http://127.0.0.1:${STT_PORT}/health")
+
+    if [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
+        services+=("streaming-bridge:Streaming Bridge:${STREAMING_BRIDGE_PORT}:http://127.0.0.1:${STREAMING_BRIDGE_PORT}/health")
+    fi
 
     if [ "${ENVIRONMENT}" = "development" ]; then
         services+=("frontend:Vite Frontend:${FRONTEND_DEV_PORT}:http://127.0.0.1:${FRONTEND_DEV_PORT}")
@@ -484,6 +548,9 @@ print_banner() {
     printf "  ${BOLD}🌐 Public Web Panel:${RESET}    ${SKY}%s${RESET}\n" "${PUBLIC_URL}/voicecontrolpanel"
     printf "  ${BOLD}🔌 API Base URL:${RESET}        ${SKY}%s/v1${RESET}\n" "${PUBLIC_URL}"
     printf "  ${BOLD}🩺 Gateway Health:${RESET}      ${SKY}%s/health/ready${RESET}\n" "${PUBLIC_URL}"
+    if [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
+        printf "  ${BOLD}🌉 Streaming Bridge:${RESET}    ${SKY}http://127.0.0.1:%s/health (Internal Loopback)${RESET}\n" "${STREAMING_BRIDGE_PORT:-8089}"
+    fi
     printf "${BOLD}${GREEN}--------------------------------------------------------------------${RESET}\n"
 
     # Display credentials securely on first-run only (terminal only, never written to log files)

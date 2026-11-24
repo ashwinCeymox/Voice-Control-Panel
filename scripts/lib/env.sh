@@ -138,6 +138,8 @@ init_env() {
     append_env_if_missing "LOCALAI_PORT" "8080" "Internal LocalAI engine port (loopback only)"
     append_env_if_missing "TTS_PORT" "8880" "Internal Kokoro TTS engine port (loopback only)"
     append_env_if_missing "STT_PORT" "8088" "Internal Sherpa-ONNX streaming STT port (loopback only)"
+    append_env_if_missing "STREAMING_BRIDGE_PORT" "8089" "Internal streaming bridge service port (loopback only)"
+    append_env_if_missing "STREAMING_BRIDGE_ENABLED" "false" "Enable simulated streaming bridge for LocalAI STT models"
     append_env_if_missing "FRONTEND_DEV_PORT" "5173" "Frontend development dev-server port"
 
     # Dynamic Port Handling
@@ -192,6 +194,8 @@ with open(path, 'w') as f:
     LOCALAI_PORT="$(get_env_val "LOCALAI_PORT" "8080")"
     TTS_PORT="$(get_env_val "TTS_PORT" "8880")"
     STT_PORT="$(get_env_val "STT_PORT" "8088")"
+    STREAMING_BRIDGE_PORT="$(get_env_val "STREAMING_BRIDGE_PORT" "8089")"
+    STREAMING_BRIDGE_ENABLED="$(get_env_val "STREAMING_BRIDGE_ENABLED" "false")"
     FRONTEND_DEV_PORT="$(get_env_val "FRONTEND_DEV_PORT" "5173")"
     AUTO_PORTS="$(get_env_val "AUTO_PORTS" "true")"
     PORT_SEARCH_RANGE="$(get_env_val "PORT_SEARCH_RANGE" "100")"

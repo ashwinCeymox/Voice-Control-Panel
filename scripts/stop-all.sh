@@ -62,6 +62,7 @@ for dir in "${PID_DIR}" "${RUN_DIR}"; do
     stop_pid_file "${dir}/frontend.pid" "Frontend"
     stop_pid_file "${dir}/gateway.pid" "FastAPI Gateway"
     stop_pid_file "${dir}/backend.pid" "Backend Gateway"
+    stop_pid_file "${dir}/streaming-bridge.pid" "Streaming Bridge"
     stop_pid_file "${dir}/streaming-stt.pid" "Sherpa-ONNX STT"
     stop_pid_file "${dir}/localai.pid" "LocalAI"
     stop_pid_file "${dir}/local-tts.pid" "local-tts"

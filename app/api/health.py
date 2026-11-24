@@ -55,29 +55,55 @@ async def health_ready():
             except Exception:
                 streaming_stt_ok = False
 
+        streaming_bridge_ok = False
+        streaming_bridge_info = {}
+        if settings.STREAMING_BRIDGE_ENABLED:
+            try:
+                bridge_health_url = f"{settings.STREAMING_BRIDGE_URL.rstrip('/')}/health"
+                r = await client.get(bridge_health_url)
+                if r.status_code == 200:
+                    streaming_bridge_ok = True
+                    streaming_bridge_info = r.json()
+            except Exception:
+                streaming_bridge_ok = False
+
     is_linux = sys.platform.startswith("linux")
     if is_linux:
         # On Linux/Cloud, localtts (Apple MLX) is in standby; gateway is ready when localai and stt are operational
         status = "ready" if (localai_ok and (streaming_stt_ok or not settings.STT_STREAM_ENABLED)) else "degraded"
     else:
         status = "ready" if (localai_ok and localtts_ok) else "degraded"
+
+    providers = {
+        "localai": {
+            "reachable": localai_ok,
+        },
+        "localtts": {
+            "reachable": localtts_ok,
+        },
+        "streaming_stt": {
+            "reachable": streaming_stt_ok,
+            "status": "ready" if streaming_stt_ok else "offline",
+            "model": streaming_info.get(
+                "model", settings.STREAMING_STT_DEFAULT_MODEL
+            ),
+        },
+    }
+
+    if settings.STREAMING_BRIDGE_ENABLED:
+        providers["streaming_bridge"] = {
+            "reachable": streaming_bridge_ok,
+            "status": "ready" if streaming_bridge_ok else "offline",
+            "port": settings.STREAMING_BRIDGE_PORT,
+            "active_streams": streaming_bridge_info.get("active_streams", 0),
+            "max_streams": streaming_bridge_info.get(
+                "max_streams", settings.STREAMING_BRIDGE_MAX_STREAMS
+            ),
+        }
+
     return {
         "status": status,
-        "providers": {
-            "localai": {
-                "reachable": localai_ok,
-            },
-            "localtts": {
-                "reachable": localtts_ok,
-            },
-            "streaming_stt": {
-                "reachable": streaming_stt_ok,
-                "status": "ready" if streaming_stt_ok else "offline",
-                "model": streaming_info.get(
-                    "model", settings.STREAMING_STT_DEFAULT_MODEL
-                ),
-            },
-        },
+        "providers": providers,
         "streaming_stt": {
             "status": "ready" if streaming_stt_ok else "offline",
             "reachable": streaming_stt_ok,
