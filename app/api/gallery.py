@@ -486,11 +486,16 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                             or (m_dir / f"{mid}.bin").is_file()
                             or (m_dir / f"{mid}.safetensors").is_file()
                             or (m_dir / f"{mid}.yaml").is_file()
+                            or (m_dir / "llm" / f"{mid}.gguf").is_file()
+                            or (m_dir / "llm" / f"{lower_mid}.gguf").is_file()
+                            or (m_dir / "whisper" / f"{mid}.bin").is_file()
+                            or (m_dir / "whisper" / f"{lower_mid}.bin").is_file()
                             or (m_dir / f"{mid}").is_dir()
                             or (m_dir / f"{lower_mid}.gguf").is_file()
                             or (m_dir / f"{lower_mid}.bin").is_file()
                             or (m_dir / f"{lower_mid}.safetensors").is_file()
                             or (m_dir / f"{lower_mid}.yaml").is_file()
+                            or any(m_dir.glob(f"**/*{lower_mid}*"))
                         )
                         if not has_file and lower_mid in (
                             "llama-3.2-1b-instruct",
@@ -568,8 +573,14 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
 
         models_dir = Path("models")
         if models_dir.is_dir():
-            for mf in models_dir.iterdir():
+            candidate_files = []
+            for d in [models_dir, models_dir / "llm", models_dir / "whisper", models_dir / "parakeet-cpp"]:
+                if d.is_dir():
+                    candidate_files.extend(d.iterdir())
+            for mf in candidate_files:
                 if mf.is_file() and mf.suffix in (".gguf", ".bin", ".safetensors"):
+                    if mf.name.startswith("._"):
+                        continue
                     stem = mf.stem
                     lower_stem = stem.lower()
                     if any(p in lower_stem for p in ("part", "download", "tmp", "temp")):
@@ -738,11 +749,16 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                         or (m_dir / f"{mid}.bin").is_file()
                         or (m_dir / f"{mid}.safetensors").is_file()
                         or (m_dir / f"{mid}.yaml").is_file()
+                        or (m_dir / "llm" / f"{mid}.gguf").is_file()
+                        or (m_dir / "llm" / f"{lower_mid}.gguf").is_file()
+                        or (m_dir / "whisper" / f"{mid}.bin").is_file()
+                        or (m_dir / "whisper" / f"{lower_mid}.bin").is_file()
                         or (m_dir / f"{mid}").is_dir()
                         or (m_dir / f"{lower_mid}.gguf").is_file()
                         or (m_dir / f"{lower_mid}.bin").is_file()
                         or (m_dir / f"{lower_mid}.safetensors").is_file()
                         or (m_dir / f"{lower_mid}.yaml").is_file()
+                        or any(m_dir.glob(f"**/*{lower_mid}*"))
                     )
                     if not has_w:
                         continue
@@ -1364,12 +1380,13 @@ async def start_install_job(
             # 2. LocalAI LLM or Batch STT
             elif prov == "localai":
                 models_dir = Path(settings.LOCALAI_MODELS_PATH if settings.LOCALAI_MODELS_PATH else "models")
-                models_dir.mkdir(parents=True, exist_ok=True)
+                target_sub = models_dir / ("whisper" if cat == "stt" else "llm")
+                target_sub.mkdir(parents=True, exist_ok=True)
                 ext = "bin" if cat == "stt" else "gguf"
-                weight_file = models_dir / f"{mid}.{ext}"
+                weight_file = target_sub / f"{mid}.{ext}"
                 config_file = models_dir / f"{mid}.yaml"
 
-                if weight_file.is_file() and weight_file.stat().st_size > 1024 * 1024:
+                if (weight_file.is_file() and weight_file.stat().st_size > 1024 * 1024) or ((models_dir / f"{mid}.{ext}").is_file() and (models_dir / f"{mid}.{ext}").stat().st_size > 1024 * 1024):
                     job["progress_percent"] = 85
                     await asyncio.sleep(0.3)
                 elif dl_url:
@@ -1410,11 +1427,13 @@ async def start_install_job(
                             raise RuntimeError(f"LocalAI returned HTTP {apply_resp.status_code}: {apply_resp.text}")
 
                 # Ensure LocalAI YAML config exists so LocalAI serves model under canonical mid
-                if not config_file.exists() and weight_file.exists():
+                effective_weight = weight_file if weight_file.exists() else (models_dir / f"{mid}.{ext}")
+                if not config_file.exists() and effective_weight.exists():
+                    rel_model_path = f"{target_sub.name}/{effective_weight.name}" if effective_weight.parent == target_sub else effective_weight.name
                     if cat == "stt":
-                        yaml_content = f"name: {mid}\nbackend: whisper\nparameters:\n  model: {weight_file.name}\n"
+                        yaml_content = f"name: {mid}\nbackend: whisper\nparameters:\n  model: {rel_model_path}\n"
                     else:
-                        yaml_content = f"name: {mid}\nbackend: llama-cpp\nparameters:\n  model: {weight_file.name}\ncontext_size: 4096\nf16: true\n"
+                        yaml_content = f"name: {mid}\nbackend: llama-cpp\nparameters:\n  model: {rel_model_path}\ncontext_size: 4096\nf16: true\n"
                     config_file.write_text(yaml_content, encoding="utf-8")
 
             # 3. Resident Kokoro TTS
@@ -1517,8 +1536,10 @@ def is_weight_file_shared(
             try:
                 content = entry.read_text(encoding="utf-8", errors="ignore")
                 m_match = re.search(r"model:\s*([^\s\n]+)", content)
-                if m_match and m_match.group(1).strip() == weight_filename:
-                    return True
+                if m_match:
+                    ref_val = m_match.group(1).strip()
+                    if ref_val == weight_filename or Path(ref_val).name == Path(weight_filename).name:
+                        return True
             except Exception:
                 pass
     return False
@@ -1623,6 +1644,9 @@ async def uninstall_model(
             Path("../LocalAI/models"),
             Path("models"),
             Path("models/streaming-stt"),
+            Path("models/llm"),
+            Path("models/whisper"),
+            Path("models/parakeet-cpp"),
         ]
     )
 

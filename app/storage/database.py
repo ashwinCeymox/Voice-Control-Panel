@@ -309,7 +309,10 @@ async def init_db():
                 or (models_dir / f"{legacy_id}.bin").is_file()
                 or (models_dir / f"{legacy_id}.safetensors").is_file()
                 or (models_dir / f"{legacy_id}.yaml").is_file()
+                or (models_dir / "llm" / f"{legacy_id}.gguf").is_file()
+                or (models_dir / "whisper" / f"{legacy_id}.bin").is_file()
                 or (models_dir / f"{legacy_id}").is_dir()
+                or any(models_dir.glob(f"**/*{legacy_id}*"))
             )
             if not has_file:
                 await db.execute(
