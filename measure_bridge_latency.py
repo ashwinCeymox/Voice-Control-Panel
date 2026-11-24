@@ -462,7 +462,19 @@ async def probe_native_realtime_websocket(base_url: str, model: str, headers: di
     # Test WebSocket connection via httpx websocket or raw socket probe
     try:
         import websockets
-        async with websockets.connect(probe_url, extra_headers=headers, close_timeout=3.0) as ws:
+        import inspect
+
+        connect_kwargs = {"close_timeout": 3.0}
+        try:
+            sig = inspect.signature(websockets.connect)
+            if "additional_headers" in sig.parameters:
+                connect_kwargs["additional_headers"] = headers
+            elif "extra_headers" in sig.parameters:
+                connect_kwargs["extra_headers"] = headers
+        except Exception:
+            connect_kwargs["extra_headers"] = headers
+
+        async with websockets.connect(probe_url, **connect_kwargs) as ws:
             # Read first greeting event
             first_event = await asyncio.wait_for(ws.recv(), timeout=3.0)
             res["first_event_raw"] = str(first_event)[:200]
@@ -685,7 +697,11 @@ async def main():
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["parakeet-cpp-realtime-scene", "whisper-base", "realtime_eou_120m-v1-f16"],
+        default=[
+            "parakeet-cpp-realtime_eou_120m-v1",
+            "parakeet-cpp-realtime-scene",
+            "parakeet-cpp-nemotron-3.5-asr-streaming-0.6b",
+        ],
         help="Space or comma-separated model IDs",
     )
     parser.add_argument("--api-key", default=os.environ.get("LOCALAI_API_KEY", ""), help="API key")
