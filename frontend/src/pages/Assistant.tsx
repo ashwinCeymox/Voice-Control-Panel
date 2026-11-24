@@ -683,7 +683,13 @@ export const AssistantView: React.FC = () => {
               <span>LLM: {activeAgent?.llm?.model || 'None'}</span>
               <span>•</span>
               <span>
-                STT: {activeAgent?.stt?.model || 'None'} ({activeAgent?.stt?.kind || 'batch'})
+                STT: {activeAgent?.stt?.model || 'None'} (
+                {activeAgent?.stt?.kind === 'streaming'
+                  ? (activeAgent?.stt?.streaming_mode === 'simulated' || !(activeAgent?.stt?.model || '').toLowerCase().includes('sherpa'))
+                    ? 'Live (simulated)'
+                    : 'Live (native)'
+                  : 'batch'}
+                )
               </span>
               <span>•</span>
               <span>

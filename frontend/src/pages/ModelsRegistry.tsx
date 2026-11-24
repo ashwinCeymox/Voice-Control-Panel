@@ -516,15 +516,30 @@ export const ModelsRegistry: React.FC = () => {
                         <h3 className="font-semibold text-slate-100 text-sm truncate">{model.name}</h3>
                         <span className="text-[11px] font-mono text-slate-500 truncate block">{model.id}</span>
                       </div>
-                      <span className={`text-[10px] uppercase font-mono px-2 py-0.5 rounded border shrink-0 ${
-                        model.category === 'stt'
-                          ? model.kind === 'streaming'
-                            ? 'bg-sky-950/80 border-sky-800 text-sky-400'
-                            : 'bg-indigo-950/80 border-indigo-800 text-indigo-400'
-                          : 'bg-slate-900 border-slate-800 text-indigo-400'
-                      }`}>
+                      <span
+                        className={`text-[10px] uppercase font-mono px-2 py-0.5 rounded border shrink-0 ${
+                          model.category === 'stt'
+                            ? model.kind === 'streaming'
+                              ? (model.streaming_mode === 'simulated' || !model.id.toLowerCase().includes('sherpa'))
+                                ? 'bg-amber-950/80 border-amber-800 text-amber-300'
+                                : 'bg-emerald-950/80 border-emerald-800 text-emerald-400'
+                              : 'bg-indigo-950/80 border-indigo-800 text-indigo-400'
+                            : 'bg-slate-900 border-slate-800 text-indigo-400'
+                        }`}
+                        title={
+                          model.category === 'stt' && model.kind === 'streaming'
+                            ? (model.streaming_mode === 'simulated' || !model.id.toLowerCase().includes('sherpa'))
+                              ? 'Simulated Streaming: Recurrent batch decodes through LocalAI. Partial text may be revised, and consumes additional host compute compared to native streaming.'
+                              : 'Native Streaming: True online neural streaming over WebSocket via Sherpa-ONNX.'
+                            : undefined
+                        }
+                      >
                         {model.category === 'stt'
-                          ? `STT • ${model.kind === 'streaming' ? 'STREAM' : 'BATCH'}`
+                          ? model.kind === 'streaming'
+                            ? (model.streaming_mode === 'simulated' || !model.id.toLowerCase().includes('sherpa'))
+                              ? 'STT • Live (simulated)'
+                              : 'STT • Live (native)'
+                            : 'STT • BATCH'
                           : model.category}
                       </span>
                     </div>

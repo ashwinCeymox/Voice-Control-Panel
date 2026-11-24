@@ -152,6 +152,8 @@ export interface LLMConfig {
 export interface STTConfig {
   model: string;
   kind?: 'batch' | 'streaming';
+  streaming_mode?: 'native' | 'simulated' | 'none';
+  transports?: string[];
   fallback_model?: string | null;
   language: string;
 }
@@ -237,6 +239,8 @@ export interface GalleryModel {
   provider: string;        // e.g. "localai" | "local-tts"
   category: 'llm' | 'stt' | 'tts';
   kind?: 'batch' | 'streaming';
+  streaming_mode?: 'native' | 'simulated' | 'none';
+  transports?: string[];
   size_mb: number;
   ram_required_mb: number;
   license: string;

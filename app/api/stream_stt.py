@@ -28,6 +28,7 @@ streaming_client = StreamingSTTClient()
 
 class STTSettingsUpdate(BaseModel):
     stt_stream_enabled: Optional[bool] = None
+    streaming_bridge_enabled: Optional[bool] = None
     default_kind: Optional[str] = Field(None, pattern="^(batch|streaming)$")
     max_active_streams: Optional[int] = Field(None, ge=1, le=50)
     precision: Optional[str] = Field(None, pattern="^(fp32|int8|f16)$")
@@ -43,6 +44,7 @@ async def get_stt_settings(
     """Get global STT configuration (kill switch, default mode, stream caps, precision, backend provider)."""
     return {
         "stt_stream_enabled": settings.STT_STREAM_ENABLED,
+        "streaming_bridge_enabled": settings.STREAMING_BRIDGE_ENABLED,
         "default_kind": "streaming" if settings.STT_STREAM_ENABLED else "batch",
         "max_active_streams": settings.MAX_ACTIVE_STT_STREAMS,
         "default_model": settings.STREAMING_STT_DEFAULT_MODEL,
@@ -61,6 +63,10 @@ async def update_stt_settings(
     """Update global STT configuration live without requiring server restart."""
     if payload.stt_stream_enabled is not None:
         settings.STT_STREAM_ENABLED = payload.stt_stream_enabled
+    if payload.streaming_bridge_enabled is not None:
+        settings.STREAMING_BRIDGE_ENABLED = payload.streaming_bridge_enabled
+        from app.services.model_registry import model_registry
+        model_registry.invalidate_cache()
     if payload.max_active_streams is not None:
         settings.MAX_ACTIVE_STT_STREAMS = payload.max_active_streams
     if payload.precision is not None:
@@ -74,6 +80,7 @@ async def update_stt_settings(
 
     return {
         "stt_stream_enabled": settings.STT_STREAM_ENABLED,
+        "streaming_bridge_enabled": settings.STREAMING_BRIDGE_ENABLED,
         "default_kind": payload.default_kind
         or ("streaming" if settings.STT_STREAM_ENABLED else "batch"),
         "max_active_streams": settings.MAX_ACTIVE_STT_STREAMS,

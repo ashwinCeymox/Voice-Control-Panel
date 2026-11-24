@@ -422,6 +422,21 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                                 entry["available"] = True
                         else:
                             entry["available"] = True
+
+                        if "sherpa" in lower_id:
+                            transports = ["ws_stream_native"]
+                            streaming_mode = "native"
+                        else:
+                            transports = ["batch_http"]
+                            from app.services.streaming_bridge_client import bridge_available
+                            if bridge_available(raw_id) or bridge_available(effective_id):
+                                transports.append("ws_stream_bridge")
+                                streaming_mode = "simulated"
+                            else:
+                                streaming_mode = "none"
+                        entry["transports"] = transports
+                        entry["streaming_mode"] = streaming_mode
+
                         stt_models.append(entry)
                     elif cat == "tts":
                         tts_models.append(entry)
@@ -548,6 +563,19 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                             )
                         )
                         entry["kind"] = "streaming" if is_streaming else "batch"
+                        if r["provider"] == "stream-stt" or "sherpa" in lower_mid:
+                            transports = ["ws_stream_native"]
+                            streaming_mode = "native"
+                        else:
+                            transports = ["batch_http"]
+                            from app.services.streaming_bridge_client import bridge_available
+                            if bridge_available(mid) or bridge_available(lower_mid):
+                                transports.append("ws_stream_bridge")
+                                streaming_mode = "simulated"
+                            else:
+                                streaming_mode = "none"
+                        entry["transports"] = transports
+                        entry["streaming_mode"] = streaming_mode
                         stt_models.append(entry)
                     elif cat == "tts":
                         tts_models.append(entry)
@@ -577,6 +605,8 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                                 "kind": "streaming",
                                 "size_mb": 42,
                                 "available": True,
+                                "transports": ["ws_stream_native"],
+                                "streaming_mode": "native",
                             }
                         )
                     break
@@ -644,7 +674,7 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
     except Exception:
         pass
 
-    # Ensure kind is tagged on all STT models
+    # Ensure kind, transports, and streaming_mode are tagged on all STT models
     for m in stt_models:
         lower_m_id = m.get("id", "").lower()
         is_streaming = (
@@ -663,6 +693,19 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
         m["kind"] = "streaming" if is_streaming else "batch"
         if m.get("available") is None:
             m["available"] = True
+
+        if "transports" not in m or "streaming_mode" not in m:
+            if m.get("provider") == "stream-stt" or "sherpa" in lower_m_id:
+                m["transports"] = ["ws_stream_native"]
+                m["streaming_mode"] = "native"
+            else:
+                from app.services.streaming_bridge_client import bridge_available
+                if bridge_available(m.get("id", "")):
+                    m["transports"] = ["batch_http", "ws_stream_bridge"]
+                    m["streaming_mode"] = "simulated"
+                else:
+                    m["transports"] = ["batch_http"]
+                    m["streaming_mode"] = "none"
 
     for m in tts_models:
         if m.get("available") is None:
@@ -827,6 +870,22 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                     seen[mid.lower()] = dict(m)
             merged_res[cat] = list(seen.values())
 
+        # Ensure all STT models in merged manifest expose transports and streaming_mode
+        for m in merged_res.get("stt", []):
+            lower_m_id = (m.get("id") or "").lower()
+            if "transports" not in m or "streaming_mode" not in m:
+                if m.get("provider") == "stream-stt" or "sherpa" in lower_m_id:
+                    m["transports"] = ["ws_stream_native"]
+                    m["streaming_mode"] = "native"
+                else:
+                    from app.services.streaming_bridge_client import bridge_available
+                    if bridge_available(m.get("id", "")):
+                        m["transports"] = ["batch_http", "ws_stream_bridge"]
+                        m["streaming_mode"] = "simulated"
+                    else:
+                        m["transports"] = ["batch_http"]
+                        m["streaming_mode"] = "none"
+
         merged_res["tts"] = [
             m for m in merged_res.get("tts", []) if "kokoro" in m.get("id", "").lower()
         ]
@@ -854,6 +913,22 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
         res = merged_res
     except Exception:
         pass
+
+    # Final guarantee: ensure all STT models returned expose transports and streaming_mode
+    for m in res.get("stt", []):
+        lower_m_id = (m.get("id") or "").lower()
+        if "transports" not in m or "streaming_mode" not in m:
+            if m.get("provider") == "stream-stt" or "sherpa" in lower_m_id:
+                m["transports"] = ["ws_stream_native"]
+                m["streaming_mode"] = "native"
+            else:
+                from app.services.streaming_bridge_client import bridge_available
+                if bridge_available(m.get("id", "")):
+                    m["transports"] = ["batch_http", "ws_stream_bridge"]
+                    m["streaming_mode"] = "simulated"
+                else:
+                    m["transports"] = ["batch_http"]
+                    m["streaming_mode"] = "none"
     return res
 
 

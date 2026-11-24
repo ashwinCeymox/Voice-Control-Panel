@@ -18,6 +18,8 @@ export const Settings: React.FC = () => {
   const [defaultRateLimit, setDefaultRateLimit] = useState<number>(60);
   const [defaultMaxConcurrent, setDefaultMaxConcurrent] = useState<number>(5);
   const [retentionDays, setRetentionDays] = useState<number>(30);
+  const [sttStreamEnabled, setSttStreamEnabled] = useState<boolean>(true);
+  const [streamingBridgeEnabled, setStreamingBridgeEnabled] = useState<boolean>(false);
 
   const [_loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
@@ -47,6 +49,14 @@ export const Settings: React.FC = () => {
         if (data.default_rate_limit) setDefaultRateLimit(data.default_rate_limit);
         if (data.default_max_concurrent) setDefaultMaxConcurrent(data.default_max_concurrent);
         if (data.usage_retention_days) setRetentionDays(data.usage_retention_days);
+
+        try {
+          const sttData = await fetchAdminJson<any>('/v1/admin/settings/stt');
+          if (sttData) {
+            if (sttData.stt_stream_enabled !== undefined) setSttStreamEnabled(Boolean(sttData.stt_stream_enabled));
+            if (sttData.streaming_bridge_enabled !== undefined) setStreamingBridgeEnabled(Boolean(sttData.streaming_bridge_enabled));
+          }
+        } catch {}
       } catch (err: any) {
         setError(err?.message || 'Failed to load dashboard settings');
       } finally {
@@ -73,6 +83,19 @@ export const Settings: React.FC = () => {
           usage_retention_days: Number(retentionDays),
         }),
       });
+
+      try {
+        await fetchAdminJson('/v1/admin/settings/stt', {
+          method: 'PUT',
+          body: JSON.stringify({
+            stt_stream_enabled: sttStreamEnabled,
+            streaming_bridge_enabled: streamingBridgeEnabled,
+          }),
+        });
+      } catch (sttErr) {
+        console.warn('Failed to update STT admin settings:', sttErr);
+      }
+
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 4000);
     } catch (err: any) {
@@ -195,6 +218,53 @@ export const Settings: React.FC = () => {
               onChange={(e) => setRetentionDays(Number(e.target.value))}
               className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono text-xs outline-none focus:border-indigo-500"
             />
+          </div>
+        </div>
+
+        {/* Streaming STT & Bridge Settings */}
+        <div className="bg-slate-950 border border-slate-800 rounded-xl p-6 space-y-4 text-xs">
+          <div>
+            <h3 className="font-semibold text-slate-200 text-sm">Streaming STT & Simulated Bridge</h3>
+            <p className="text-slate-400 mt-0.5">
+              Control live streaming speech recognition and the simulated streaming bridge without restarting the gateway.
+            </p>
+          </div>
+
+          <div className="space-y-4 max-w-lg">
+            <div className="flex items-center justify-between p-3 bg-slate-900 border border-slate-800 rounded-lg">
+              <div>
+                <span className="font-medium text-slate-200 block">Native Streaming STT</span>
+                <span className="text-[11px] text-slate-400">Sherpa-ONNX online neural streaming WebSocket route</span>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={sttStreamEnabled}
+                  onChange={(e) => setSttStreamEnabled(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+              </label>
+            </div>
+
+            <div className="flex items-center justify-between p-3 bg-slate-900 border border-slate-800 rounded-lg">
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-medium text-slate-200 block">Simulated Streaming Bridge</span>
+                  <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-amber-950/80 border border-amber-800 text-amber-300">Kill Switch</span>
+                </div>
+                <span className="text-[11px] text-slate-400">Routes LocalAI STT models through the streaming bridge (port 8089)</span>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={streamingBridgeEnabled}
+                  onChange={(e) => setStreamingBridgeEnabled(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+              </label>
+            </div>
           </div>
         </div>
 
