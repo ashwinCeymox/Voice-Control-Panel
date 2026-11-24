@@ -2,6 +2,7 @@
 
 import json
 import os
+import secrets
 from typing import Any, List, Optional, Union
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -71,6 +72,15 @@ class Settings(BaseSettings):
                 stt_ws = data.get("STREAMING_STT_WS_URL") or os.environ.get("STREAMING_STT_WS_URL", "")
                 if not stt_ws or stt_ws.startswith("ws://127.0.0.1:") or stt_ws.startswith("ws://localhost:") or "streaming-stt:" in stt_ws:
                     data["STREAMING_STT_WS_URL"] = f"ws://127.0.0.1:{stt_port}/ws"
+
+            bridge_port = data.get("STREAMING_BRIDGE_PORT") or os.environ.get("STREAMING_BRIDGE_PORT", 8089)
+            if bridge_port:
+                bridge_url = data.get("STREAMING_BRIDGE_URL") or os.environ.get("STREAMING_BRIDGE_URL", "")
+                if not bridge_url or bridge_url.startswith("http://127.0.0.1:") or bridge_url.startswith("http://localhost:"):
+                    data["STREAMING_BRIDGE_URL"] = f"http://127.0.0.1:{bridge_port}"
+                bridge_ws = data.get("STREAMING_BRIDGE_WS_URL") or os.environ.get("STREAMING_BRIDGE_WS_URL", "")
+                if not bridge_ws or bridge_ws.startswith("ws://127.0.0.1:") or bridge_ws.startswith("ws://localhost:"):
+                    data["STREAMING_BRIDGE_WS_URL"] = f"ws://127.0.0.1:{bridge_port}/ws"
         return data
     STT_STREAM_ENABLED: bool = True
     STREAMING_STT_TIMEOUT_SECONDS: float = 15.0
@@ -80,6 +90,37 @@ class Settings(BaseSettings):
     STREAMING_STT_PROVIDER: str = os.environ.get("STREAMING_STT_PROVIDER", "cpu")
     STREAMING_STT_CHUNK_MS: int = int(os.environ.get("STREAMING_STT_CHUNK_MS", "560"))
     STREAMING_STT_LANGUAGE: str = os.environ.get("STREAMING_STT_LANGUAGE", "en")
+
+    # Streaming STT Bridge (LocalAI Bridge :8089)
+    STREAMING_BRIDGE_PORT: int = 8089
+    STREAMING_BRIDGE_URL: str = "http://127.0.0.1:8089"
+    STREAMING_BRIDGE_WS_URL: str = "ws://127.0.0.1:8089/ws"
+    STREAMING_BRIDGE_ENABLED: bool = False
+    STREAMING_BRIDGE_STEP_MS: int = 1000
+    STREAMING_BRIDGE_MIN_WINDOW_MS: int = 1200
+    STREAMING_BRIDGE_SEGMENT_MAX_MS: int = 15000
+    STREAMING_BRIDGE_SEGMENT_SILENCE_MS: int = 600
+    STREAMING_BRIDGE_MAX_STREAMS: int = 5
+    STREAMING_BRIDGE_MAX_DECODES: int = 1
+    STREAMING_BRIDGE_MAX_DECODES_PER_MODEL: int = 1
+    STREAMING_BRIDGE_PARTIAL_TIMEOUT_S: float = 8.0
+    STREAMING_BRIDGE_FINAL_TIMEOUT_S: float = 30.0
+    STREAMING_BRIDGE_READY_TIMEOUT_S: float = 10.0
+    STREAMING_BRIDGE_IDLE_TIMEOUT_S: float = 30.0
+    STREAMING_BRIDGE_MAX_STREAM_S: float = 600.0
+    STREAMING_BRIDGE_VAD: str = "off"
+    STREAMING_BRIDGE_ALLOWED_MODELS: str = "auto"
+    STREAMING_BRIDGE_MAX_MODEL_MB: int = 1500
+    STREAMING_BRIDGE_FALLBACK_TO_BATCH: bool = False
+    STREAMING_BRIDGE_INTERNAL_TOKEN: Optional[str] = os.environ.get("STREAMING_BRIDGE_INTERNAL_TOKEN")
+    STREAMING_BRIDGE_BOUNDED_PAUSE_MS: int = 3000
+    STREAMING_BRIDGE_WIDENED_STEP_MS: int = 2000
+
+    @model_validator(mode="after")
+    def resolve_bridge_internal_token(self) -> "Settings":
+        if not self.STREAMING_BRIDGE_INTERNAL_TOKEN:
+            self.STREAMING_BRIDGE_INTERNAL_TOKEN = "dev-bridge-token-" + secrets.token_hex(16)
+        return self
 
     # Security & Administration
     ENVIRONMENT: str = os.environ.get("ENVIRONMENT", "development")
