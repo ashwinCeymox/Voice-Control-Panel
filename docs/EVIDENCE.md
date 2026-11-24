@@ -365,3 +365,28 @@ CREATE TABLE admin_session (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, expir
 - **System Port & Process State (Mac Dev Machine):**
   - Ports 8000, 8080, 8088, 8880: Idle (no background listeners currently active)
   - Working tree: Clean (0 uncommitted files)
+
+---
+
+## Phase B1: RunPod GPU Benchmark Spike Results
+- **Date/Time:** 2026-11-24
+- **Host:** RunPod Container `e7c5bc4eac54` (NVIDIA GPU)
+- **Model:** `parakeet-cpp-realtime-scene`
+- **Audio Fixture:** `tests/fixtures/audio/quiet_normal_speech.wav` (16kHz mono PCM16)
+- **Measured Results:**
+  - Length 2.0s: $d_{50} = 96.3$ ms, $d_{95} = 184.4$ ms, $\text{RTF} = 0.048\text{x}$
+  - Length 4.0s: $d_{50} = 165.6$ ms, $d_{95} = 176.7$ ms, $\text{RTF} = 0.041\text{x}$
+  - Length 6.0s: $d_{50} = 233.7$ ms, $d_{95} = 319.8$ ms, $\text{RTF} = 0.039\text{x}$
+  - Length 10.0s: $d_{50} = 376.7$ ms, $d_{95} = 452.0$ ms, $\text{RTF} = 0.038\text{x}$
+  - Length 15.0s: $d_{50} = 558.0$ ms, $d_{95} = 655.5$ ms, $\text{RTF} = 0.037\text{x}$
+- **Linear Fit:**
+  - $t_0$ (Intercept): $23.06$ ms
+  - Slope: $35.54$ ms per second of audio
+  - $d_{\text{worst}}(15\text{s}) = 556.16$ ms
+- **Capacity:**
+  - 4s typical window: 6 streams at 1.0s step
+  - 15s max cap: 1.79 streams (1 stream with MAX_DECODES=1, 3 streams with MAX_DECODES=2)
+- **Interference:**
+  - LLM warm latency during parallel STT: 277.9 ms (no negative degradation)
+  - Process memory delta: +6.0 MB
+- **Decision:** Recommended GO for Phase B2.
