@@ -486,6 +486,12 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                             or (m_dir / f"{mid}.bin").is_file()
                             or (m_dir / f"{mid}.safetensors").is_file()
                             or (m_dir / f"{mid}.yaml").is_file()
+                            or (m_dir / "configs" / f"{mid}.yaml").is_file()
+                            or (m_dir / "configs" / f"{lower_mid}.yaml").is_file()
+                            or (m_dir / "weights" / "llm" / f"{mid}.gguf").is_file()
+                            or (m_dir / "weights" / "llm" / f"{lower_mid}.gguf").is_file()
+                            or (m_dir / "weights" / "stt" / "whisper" / f"{mid}.bin").is_file()
+                            or (m_dir / "weights" / "stt" / "whisper" / f"{lower_mid}.bin").is_file()
                             or (m_dir / "llm" / f"{mid}.gguf").is_file()
                             or (m_dir / "llm" / f"{lower_mid}.gguf").is_file()
                             or (m_dir / "whisper" / f"{mid}.bin").is_file()
@@ -574,7 +580,16 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
         models_dir = Path("models")
         if models_dir.is_dir():
             candidate_files = []
-            for d in [models_dir, models_dir / "llm", models_dir / "whisper", models_dir / "parakeet-cpp"]:
+            scan_dirs = [
+                models_dir,
+                models_dir / "weights" / "llm",
+                models_dir / "weights" / "stt" / "whisper",
+                models_dir / "weights" / "stt" / "parakeet-cpp",
+                models_dir / "llm",
+                models_dir / "whisper",
+                models_dir / "parakeet-cpp",
+            ]
+            for d in scan_dirs:
                 if d.is_dir():
                     candidate_files.extend(d.iterdir())
             for mf in candidate_files:
@@ -749,6 +764,12 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
                         or (m_dir / f"{mid}.bin").is_file()
                         or (m_dir / f"{mid}.safetensors").is_file()
                         or (m_dir / f"{mid}.yaml").is_file()
+                        or (m_dir / "configs" / f"{mid}.yaml").is_file()
+                        or (m_dir / "configs" / f"{lower_mid}.yaml").is_file()
+                        or (m_dir / "weights" / "llm" / f"{mid}.gguf").is_file()
+                        or (m_dir / "weights" / "llm" / f"{lower_mid}.gguf").is_file()
+                        or (m_dir / "weights" / "stt" / "whisper" / f"{mid}.bin").is_file()
+                        or (m_dir / "weights" / "stt" / "whisper" / f"{lower_mid}.bin").is_file()
                         or (m_dir / "llm" / f"{mid}.gguf").is_file()
                         or (m_dir / "llm" / f"{lower_mid}.gguf").is_file()
                         or (m_dir / "whisper" / f"{mid}.bin").is_file()
@@ -1380,11 +1401,13 @@ async def start_install_job(
             # 2. LocalAI LLM or Batch STT
             elif prov == "localai":
                 models_dir = Path(settings.LOCALAI_MODELS_PATH if settings.LOCALAI_MODELS_PATH else "models")
-                target_sub = models_dir / ("whisper" if cat == "stt" else "llm")
+                configs_dir = models_dir / "configs"
+                configs_dir.mkdir(parents=True, exist_ok=True)
+                target_sub = models_dir / "weights" / ("stt/whisper" if cat == "stt" else "llm")
                 target_sub.mkdir(parents=True, exist_ok=True)
                 ext = "bin" if cat == "stt" else "gguf"
                 weight_file = target_sub / f"{mid}.{ext}"
-                config_file = models_dir / f"{mid}.yaml"
+                config_file = configs_dir / f"{mid}.yaml"
 
                 if (weight_file.is_file() and weight_file.stat().st_size > 1024 * 1024) or ((models_dir / f"{mid}.{ext}").is_file() and (models_dir / f"{mid}.{ext}").stat().st_size > 1024 * 1024):
                     job["progress_percent"] = 85
@@ -1429,7 +1452,10 @@ async def start_install_job(
                 # Ensure LocalAI YAML config exists so LocalAI serves model under canonical mid
                 effective_weight = weight_file if weight_file.exists() else (models_dir / f"{mid}.{ext}")
                 if not config_file.exists() and effective_weight.exists():
-                    rel_model_path = f"{target_sub.name}/{effective_weight.name}" if effective_weight.parent == target_sub else effective_weight.name
+                    try:
+                        rel_model_path = str(effective_weight.relative_to(models_dir))
+                    except ValueError:
+                        rel_model_path = effective_weight.name
                     if cat == "stt":
                         yaml_content = f"name: {mid}\nbackend: whisper\nparameters:\n  model: {rel_model_path}\n"
                     else:
@@ -1520,28 +1546,33 @@ def is_weight_file_shared(
             for c in excluding_configs:
                 exclude_set.add(Path(c).name.lower())
 
-    for entry in models_path.iterdir():
-        if entry.is_file() and entry.suffix in (".yaml", ".yml"):
-            entry_name_lower = entry.name.lower()
-            if entry_name_lower in exclude_set:
-                continue
-            # Also exclude companion gallery metadata files for the excluded configs
-            if any(
-                entry_name_lower == f"._gallery_{exc}"
-                or entry_name_lower
-                == f"._gallery_{exc.replace('.yaml', '').replace('.yml', '')}.yaml"
-                for exc in exclude_set
-            ):
-                continue
-            try:
-                content = entry.read_text(encoding="utf-8", errors="ignore")
-                m_match = re.search(r"model:\s*([^\s\n]+)", content)
-                if m_match:
-                    ref_val = m_match.group(1).strip()
-                    if ref_val == weight_filename or Path(ref_val).name == Path(weight_filename).name:
-                        return True
-            except Exception:
-                pass
+    yaml_search_dirs = [models_path]
+    if (models_path / "configs").is_dir():
+        yaml_search_dirs.append(models_path / "configs")
+
+    for sdir in yaml_search_dirs:
+        for entry in sdir.iterdir():
+            if entry.is_file() and entry.suffix in (".yaml", ".yml"):
+                entry_name_lower = entry.name.lower()
+                if entry_name_lower in exclude_set:
+                    continue
+                # Also exclude companion gallery metadata files for the excluded configs
+                if any(
+                    entry_name_lower == f"._gallery_{exc}"
+                    or entry_name_lower
+                    == f"._gallery_{exc.replace('.yaml', '').replace('.yml', '')}.yaml"
+                    for exc in exclude_set
+                ):
+                    continue
+                try:
+                    content = entry.read_text(encoding="utf-8", errors="ignore")
+                    m_match = re.search(r"model:\s*([^\s\n]+)", content)
+                    if m_match:
+                        ref_val = m_match.group(1).strip()
+                        if ref_val == weight_filename or Path(ref_val).name == Path(weight_filename).name:
+                            return True
+                except Exception:
+                    pass
     return False
 
 
@@ -1643,6 +1674,12 @@ async def uninstall_model(
         [
             Path("../LocalAI/models"),
             Path("models"),
+            Path("models/configs"),
+            Path("models/weights"),
+            Path("models/weights/llm"),
+            Path("models/weights/stt"),
+            Path("models/weights/stt/whisper"),
+            Path("models/weights/stt/parakeet-cpp"),
             Path("models/streaming-stt"),
             Path("models/llm"),
             Path("models/whisper"),
