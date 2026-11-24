@@ -52,6 +52,83 @@ def extract_real_speech_slice(source_wav: str, duration_s: float) -> bytes:
     return buf.getvalue()
 
 
+def get_hardware_and_cgroup_info() -> dict:
+    info = {
+        "os": f"{platform.system()} {platform.release()}",
+        "architecture": platform.machine(),
+        "nproc_available": os.cpu_count(),
+        "python": sys.version.split()[0],
+    }
+
+    # 1. CPU Model
+    if os.path.exists("/proc/cpuinfo"):
+        try:
+            with open("/proc/cpuinfo", "r") as f:
+                for line in f:
+                    if "model name" in line:
+                        info["cpu_model"] = line.split(":", 1)[1].strip()
+                        break
+        except Exception:
+            pass
+    elif sys.platform == "darwin":
+        try:
+            out = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"], universal_newlines=True).strip()
+            info["cpu_model"] = out
+        except Exception:
+            info["cpu_model"] = "Apple Silicon"
+
+    # 2. Container CFS CPU Quotas (v2 & v1)
+    if os.path.exists("/sys/fs/cgroup/cpu.max"):
+        try:
+            with open("/sys/fs/cgroup/cpu.max", "r") as f:
+                val = f.read().strip()
+                info["cgroup_cpu_max"] = val
+                parts = val.split()
+                if len(parts) == 2 and parts[0] != "max":
+                    quota, period = float(parts[0]), float(parts[1])
+                    info["effective_cores_limit"] = round(quota / period, 2)
+                else:
+                    info["effective_cores_limit"] = "unlimited (max)"
+        except Exception as e:
+            info["cgroup_cpu_max_error"] = str(e)
+    elif os.path.exists("/sys/fs/cgroup/cpu/cpu.cfs_quota_us"):
+        try:
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", "r") as f_q, open("/sys/fs/cgroup/cpu/cpu.cfs_period_us", "r") as f_p:
+                q = float(f_q.read().strip())
+                p = float(f_p.read().strip())
+                if q > 0:
+                    info["effective_cores_limit"] = round(q / p, 2)
+                else:
+                    info["effective_cores_limit"] = "unlimited (-1)"
+        except Exception as e:
+            info["cgroup_v1_error"] = str(e)
+
+    # 3. GPU Info via nvidia-smi
+    if shutil.which("nvidia-smi"):
+        try:
+            out = subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"],
+                universal_newlines=True,
+            ).strip()
+            info["gpu"] = out
+        except Exception as e:
+            info["gpu"] = f"error: {e}"
+    else:
+        info["gpu"] = "None (CPU / Apple Silicon)"
+
+    # 4. Host Memory via free
+    if shutil.which("free"):
+        try:
+            out = subprocess.check_output(["free", "-h"], universal_newlines=True).strip()
+            lines = out.splitlines()
+            if len(lines) > 1:
+                info["memory"] = lines[1]
+        except Exception:
+            pass
+
+    return info
+
+
 async def decode_once(client: httpx.AsyncClient, base_url: str, model: str, wav_bytes: bytes, headers: dict) -> tuple[float, str]:
     files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
     data = {"model": model, "temperature": "0", "language": "en"}
@@ -146,15 +223,18 @@ async def run_diagnostic_experiment(client: httpx.AsyncClient, base_url: str, tt
     async def measure_target_with_stt(target_func, num_stt_concurrent: int, num_runs: int = 15):
         latencies = []
         for _ in range(num_runs):
-            if num_stt_concurrent == 0:
-                dur, _, _ = await target_func()
-                latencies.append(dur)
-            else:
-                stt_tasks = [decode_once(client, base_url, model, wav_6s, headers) for _ in range(num_stt_concurrent)]
-                batch = await asyncio.gather(target_func(), *stt_tasks, return_exceptions=True)
-                target_res = batch[0]
-                if isinstance(target_res, tuple):
-                    latencies.append(target_res[0])
+            try:
+                if num_stt_concurrent == 0:
+                    dur, _, _ = await target_func()
+                    latencies.append(dur)
+                else:
+                    stt_tasks = [decode_once(client, base_url, model, wav_6s, headers) for _ in range(num_stt_concurrent)]
+                    batch = await asyncio.gather(target_func(), *stt_tasks, return_exceptions=True)
+                    target_res = batch[0]
+                    if isinstance(target_res, tuple):
+                        latencies.append(target_res[0])
+            except Exception as e:
+                logger.warning("Target call error: %s", e)
             await asyncio.sleep(0.1)
 
         valid = [l for l in latencies if isinstance(l, (int, float))]
