@@ -348,3 +348,20 @@ CREATE TABLE admin_session (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, expir
   ==========================================================
   ✅ NO REGRESSIONS DETECTED. Metrics within tolerances.
   ```
+
+---
+
+## Phase B0: Streaming STT Bridge Baseline (`pre-bridge`)
+- **Date/Time:** 2026-11-24
+- **Git Tag:** `pre-bridge` (commit `978780a`)
+- **Safety Copies Created:**
+  - `tmp/agent/b0-safety-backup/.env` (mode 0600, confirmed gitignored)
+  - `tmp/agent/b0-safety-backup/voice_platform.db`
+  - `tmp/agent/b0-safety-backup/installed_models.txt` (schema verified: id, name, category, provider, size_mb)
+  - `tmp/agent/b0-safety-backup/model_overrides.txt` (schema verified: model_id, task, kind, display_name)
+- **Unit Test Baseline:**
+  - Command: `.venv/bin/pytest tests/unit/test_model_classification_dashboard.py tests/unit/test_agents_api.py tests/unit/test_stt_gallery.py tests/unit/test_tts_kokoro_only.py tests/unit/test_model_matching.py tests/unit/test_model_manifest.py -q`
+  - Result: 47 passed, 1 warning in 9.14s (Exit code: 0)
+- **System Port & Process State (Mac Dev Machine):**
+  - Ports 8000, 8080, 8088, 8880: Idle (no background listeners currently active)
+  - Working tree: Clean (0 uncommitted files)
