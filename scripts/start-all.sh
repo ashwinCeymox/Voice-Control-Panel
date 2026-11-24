@@ -92,18 +92,34 @@ else
 fi
 
 # 3. Start LocalAI strictly on 127.0.0.1:8080
-LOCALAI_BIN="${ROOT_DIR}/arch/LocalAI/local-ai"
-if [ ! -f "${LOCALAI_BIN}" ] && [ -f "${ROOT_DIR}/../LocalAI/local-ai" ]; then
-    LOCALAI_BIN="${ROOT_DIR}/../LocalAI/local-ai"
+LOCALAI_BIN=""
+for candidate in "${ROOT_DIR}/arch/LocalAI/local-ai" \
+                 "${ROOT_DIR}/../LocalAI/local-ai" \
+                 "${ROOT_DIR}/LocalAI/local-ai" \
+                 "${ROOT_DIR}/.tools/localai/local-ai" \
+                 "/usr/local/bin/local-ai" \
+                 "${HOME}/.local/bin/local-ai"; do
+    if [ -x "${candidate}" ] || [ -f "${candidate}" ]; then
+        LOCALAI_BIN="${candidate}"
+        break
+    fi
+done
+if [ -z "${LOCALAI_BIN}" ] && command -v local-ai >/dev/null 2>&1; then
+    LOCALAI_BIN="$(command -v local-ai)"
 fi
 
-LOCALAI_MODELS="${ROOT_DIR}/arch/LocalAI/models"
-if [ ! -d "${LOCALAI_MODELS}" ] && [ -d "${ROOT_DIR}/../LocalAI/models" ]; then
-    LOCALAI_MODELS="${ROOT_DIR}/../LocalAI/models"
-fi
+LOCALAI_MODELS="${ROOT_DIR}/models"
+for candidate in "${ROOT_DIR}/models" \
+                 "${ROOT_DIR}/arch/LocalAI/models" \
+                 "${ROOT_DIR}/../LocalAI/models"; do
+    if [ -d "${candidate}" ]; then
+        LOCALAI_MODELS="${candidate}"
+        break
+    fi
+done
 
-if [ -f "${LOCALAI_BIN}" ]; then
-    log_info "Starting LocalAI strictly on 127.0.0.1:8080..."
+if [ -n "${LOCALAI_BIN}" ] && [ -f "${LOCALAI_BIN}" ]; then
+    log_info "Starting LocalAI strictly on 127.0.0.1:8080 using models at ${LOCALAI_MODELS}..."
     mkdir -p "${HOME}/.localai-docker"
     [ ! -f "${HOME}/.localai-docker/config.json" ] && echo '{}' > "${HOME}/.localai-docker/config.json"
     DOCKER_CONFIG="${HOME}/.localai-docker" nohup "${LOCALAI_BIN}" run \
@@ -113,7 +129,7 @@ if [ -f "${LOCALAI_BIN}" ]; then
     echo $! > "${PID_DIR}/localai.pid"
     log_ok "LocalAI started (PID $(cat "${PID_DIR}/localai.pid"))"
 else
-    log_warn "LocalAI binary not found at ${LOCALAI_BIN}. STT/LLM fallback active."
+    log_warn "LocalAI binary not found. Checked: arch/LocalAI, ../LocalAI, .tools/localai, /usr/local/bin, PATH. STT/LLM fallback active."
 fi
 
 # 4. Start Sherpa-ONNX Streaming STT strictly on 127.0.0.1:8088

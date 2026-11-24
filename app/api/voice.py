@@ -825,8 +825,12 @@ async def voice_stream(
                                         )
                                         else raw_data
                                     )
+                                    req_stt_model = (agent.get("stt") or {}).get("model") if agent else None
+                                    req_stt_lang = (agent.get("stt") or {}).get("language") if agent else None
                                     resp = await streaming_stt_client.transcribe(
-                                        pcm_payload
+                                        pcm_payload,
+                                        model=req_stt_model,
+                                        language=req_stt_lang,
                                     )
                                     final_stream_text = resp.text
                                 except Exception as stream_err:
