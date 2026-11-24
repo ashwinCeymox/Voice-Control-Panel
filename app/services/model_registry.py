@@ -276,6 +276,24 @@ class ModelRegistryService:
                         "Missing backend: llama-cpp backend not installed in LocalAI"
                     )
 
+            if task == "stt":
+                transports = ["batch_http"]
+                from app.services.streaming_bridge_client import bridge_available
+                if bridge_available(mid):
+                    transports.append("ws_stream_bridge")
+                    streaming_mode = "simulated"
+                else:
+                    streaming_mode = "none"
+            elif task == "llm":
+                transports = ["chat_http"]
+                streaming_mode = "none"
+            elif task == "tts":
+                transports = ["tts_http"]
+                streaming_mode = "none"
+            else:
+                transports = []
+                streaming_mode = "none"
+
             models.append(
                 {
                     "id": mid,
@@ -295,6 +313,8 @@ class ModelRegistryService:
                     "loaded": is_loaded,
                     "classification_source": source,
                     "classification_confidence": confidence,
+                    "transports": transports,
+                    "streaming_mode": streaming_mode,
                 }
             )
 
@@ -320,6 +340,8 @@ class ModelRegistryService:
                     data.setdefault("loaded", False)
                     data.setdefault("classification_source", "manifest")
                     data.setdefault("classification_confidence", "high")
+                    data.setdefault("transports", ["ws_stream_native"])
+                    data.setdefault("streaming_mode", "native")
                     models.append(data)
                     continue
                 except Exception as e:
@@ -350,6 +372,8 @@ class ModelRegistryService:
                     "loaded": False,
                     "classification_source": "file-inference",
                     "classification_confidence": "medium",
+                    "transports": ["ws_stream_native"],
+                    "streaming_mode": "native",
                 }
                 # Backfill model.json
                 try:
@@ -573,6 +597,22 @@ class ModelRegistryService:
             "kind": kind,
             "display_name": display_name,
         }
+
+    async def get_model_transports(self, model_id: str) -> List[str]:
+        """Return list of supported transports for model (batch_http, ws_stream_native, ws_stream_bridge)."""
+        models = await self.list_models()
+        m_lower = model_id.lower().strip()
+        for m in models:
+            mid = m.get("id", "").lower()
+            if mid == m_lower or m_lower in mid or mid in m_lower:
+                return m.get("transports", [])
+        # Fallback if model not yet scanned into registry:
+        from app.services.streaming_bridge_client import bridge_available
+        if bridge_available(model_id):
+            return ["batch_http", "ws_stream_bridge"]
+        if any(k in m_lower for k in ("sherpa-onnx", "zipformer")):
+            return ["ws_stream_native"]
+        return ["batch_http"]
 
 
 model_registry = ModelRegistryService()

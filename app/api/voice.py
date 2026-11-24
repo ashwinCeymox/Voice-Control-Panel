@@ -620,82 +620,84 @@ async def voice_stream(
             full_response_text = ""
             audio_started_sent = False
 
-            async def phrase_generator():
-                nonlocal full_response_text
-                try:
-                    async for delta in orchestrator.llm.stream_tokens(
-                        messages=llm_messages, **llm_kwargs
-                    ):
-                        full_response_text += delta
-                        # Send text delta to client
+            from app.services.streaming_bridge_client import voice_signal_manager
+            async with voice_signal_manager.track_voice_busy():
+                async def phrase_generator():
+                    nonlocal full_response_text
+                    try:
+                        async for delta in orchestrator.llm.stream_tokens(
+                            messages=llm_messages, **llm_kwargs
+                        ):
+                            full_response_text += delta
+                            # Send text delta to client
+                            await websocket.send_text(
+                                ResponseTextDeltaEvent(
+                                    turn_id=turn_id, delta=delta
+                                ).model_dump_json()
+                            )
+                            # Feed chunker
+                            ready_chunks = chunker.append(delta)
+                            for chunk in ready_chunks:
+                                yield chunk
+
+                        final_chunk = chunker.flush()
+                        if final_chunk:
+                            yield final_chunk
+                    except Exception as llm_exc:
+                        logger.error(
+                            "LLM failure (localai) for turn %s: %s", turn_id, str(llm_exc)
+                        )
                         await websocket.send_text(
-                            ResponseTextDeltaEvent(
-                                turn_id=turn_id, delta=delta
+                            ErrorEvent(
+                                code="LLM_ERROR",
+                                message=f"Language model generation failed: {str(llm_exc)}",
+                                turn_id=turn_id,
                             ).model_dump_json()
                         )
-                        # Feed chunker
-                        ready_chunks = chunker.append(delta)
-                        for chunk in ready_chunks:
-                            yield chunk
+                        return
 
-                    final_chunk = chunker.flush()
-                    if final_chunk:
-                        yield final_chunk
-                except Exception as llm_exc:
+                # Step C: Stream through local-tts WebSocket
+                # Build TTS kwargs for voice_id/speed/model overrides
+                tts_kwargs: Dict[str, Any] = {}
+                if tts_voice_id:
+                    tts_kwargs["voice_id"] = tts_voice_id
+                if tts_speed is not None:
+                    tts_kwargs["speed"] = tts_speed
+                if tts_engine:
+                    tts_kwargs["model_id"] = tts_engine
+
+                try:
+                    async for pcm_chunk in orchestrator.tts.stream_synthesis_ws(
+                        phrase_generator(), **tts_kwargs
+                    ):
+                        if not audio_started_sent:
+                            await websocket.send_text(
+                                AudioStartedEvent(
+                                    turn_id=turn_id,
+                                    sample_rate=24000,
+                                    sample_format="s16le",
+                                    channels=1,
+                                ).model_dump_json()
+                            )
+                            audio_started_sent = True
+
+                        # Send binary PCM frame to client
+                        await websocket.send_bytes(pcm_chunk)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as tts_exc:
                     logger.error(
-                        "LLM failure (localai) for turn %s: %s", turn_id, str(llm_exc)
+                        "TTS failure (local-tts) for turn %s: %s", turn_id, str(tts_exc)
                     )
+                    error_msg = getattr(tts_exc, "details", None) or str(tts_exc)
                     await websocket.send_text(
                         ErrorEvent(
-                            code="LLM_ERROR",
-                            message=f"Language model generation failed: {str(llm_exc)}",
+                            code="TTS_ERROR",
+                            message=f"Text-to-speech synthesis failed (local-tts): {error_msg}",
                             turn_id=turn_id,
                         ).model_dump_json()
                     )
                     return
-
-            # Step C: Stream through local-tts WebSocket
-            # Build TTS kwargs for voice_id/speed/model overrides
-            tts_kwargs: Dict[str, Any] = {}
-            if tts_voice_id:
-                tts_kwargs["voice_id"] = tts_voice_id
-            if tts_speed is not None:
-                tts_kwargs["speed"] = tts_speed
-            if tts_engine:
-                tts_kwargs["model_id"] = tts_engine
-
-            try:
-                async for pcm_chunk in orchestrator.tts.stream_synthesis_ws(
-                    phrase_generator(), **tts_kwargs
-                ):
-                    if not audio_started_sent:
-                        await websocket.send_text(
-                            AudioStartedEvent(
-                                turn_id=turn_id,
-                                sample_rate=24000,
-                                sample_format="s16le",
-                                channels=1,
-                            ).model_dump_json()
-                        )
-                        audio_started_sent = True
-
-                    # Send binary PCM frame to client
-                    await websocket.send_bytes(pcm_chunk)
-            except asyncio.CancelledError:
-                raise
-            except Exception as tts_exc:
-                logger.error(
-                    "TTS failure (local-tts) for turn %s: %s", turn_id, str(tts_exc)
-                )
-                error_msg = getattr(tts_exc, "details", None) or str(tts_exc)
-                await websocket.send_text(
-                    ErrorEvent(
-                        code="TTS_ERROR",
-                        message=f"Text-to-speech synthesis failed (local-tts): {error_msg}",
-                        turn_id=turn_id,
-                    ).model_dump_json()
-                )
-                return
 
             if audio_started_sent:
                 await websocket.send_text(

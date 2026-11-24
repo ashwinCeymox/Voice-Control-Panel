@@ -58,8 +58,11 @@ class SessionCreatedEvent(BaseModel):
 
 class TranscriptCompletedEvent(BaseModel):
     type: Literal["transcript.completed"] = "transcript.completed"
-    turn_id: str
-    text: str
+    turn_id: Optional[str] = None
+    text: str = ""
+    model_used: Optional[str] = None
+    duration: Optional[float] = None
+    final_degraded: Optional[bool] = False
 
 
 class TranscriptPartialEvent(BaseModel):
@@ -68,6 +71,17 @@ class TranscriptPartialEvent(BaseModel):
     confirmed: str = ""
     tentative: str = ""
     turn_id: Optional[str] = None
+    text: Optional[str] = None
+    segment_id: Optional[int] = None
+    degraded: Optional[bool] = False
+
+
+class SegmentFinalEvent(BaseModel):
+    type: Literal["segment.final"] = "segment.final"
+    segment_id: int = 0
+    text: str = ""
+    revised: Optional[bool] = False
+    final_degraded: Optional[bool] = False
 
 
 class STTFallbackEvent(BaseModel):

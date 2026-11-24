@@ -51,6 +51,8 @@ async def list_models(
             unavailable_reason=m.get("unavailable_reason"),
             installed=m.get("installed", True),
             size_mb=m.get("size_mb", 0),
+            streaming_mode=m.get("streaming_mode", "none"),
+            transports=m.get("transports", []),
         )
         for m in registered
     ]

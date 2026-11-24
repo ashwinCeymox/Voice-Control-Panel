@@ -54,43 +54,45 @@ class VoiceOrchestrator:
         # Save user message to history
         await SessionRepository.add_message(sid, "user", transcript)
 
-        # 2. History & LLM Completion
-        llm_start = time.perf_counter()
-        history = await SessionRepository.get_recent_messages(
-            sid, limit=settings.MAX_SESSION_MESSAGES
-        )
-        system_prompt = ChatMessage(
-            role="system",
-            content="You are a helpful, concise voice AI assistant. Keep responses natural, conversational, and under two sentences.",
-        )
-        llm_messages = [system_prompt] + history
-
-        chat_resp = await self.llm.complete(
-            ChatCompletionRequest(
-                model=llm_model or settings.LOCALAI_LLM_MODEL,
-                messages=llm_messages,
-                stream=False,
+        # 2. History & LLM Completion + 3. Text-to-Speech (tracked via voice_signal_manager for yield-to-voice)
+        from app.services.streaming_bridge_client import voice_signal_manager
+        async with voice_signal_manager.track_voice_busy():
+            llm_start = time.perf_counter()
+            history = await SessionRepository.get_recent_messages(
+                sid, limit=settings.MAX_SESSION_MESSAGES
             )
-        )
-        response_text = ""
-        if chat_resp.choices:
-            response_text = chat_resp.choices[0].message.content.strip()
-        llm_ms = int((time.perf_counter() - llm_start) * 1000)
+            system_prompt = ChatMessage(
+                role="system",
+                content="You are a helpful, concise voice AI assistant. Keep responses natural, conversational, and under two sentences.",
+            )
+            llm_messages = [system_prompt] + history
 
-        # Save assistant message to history
-        await SessionRepository.add_message(sid, "assistant", response_text)
+            chat_resp = await self.llm.complete(
+                ChatCompletionRequest(
+                    model=llm_model or settings.LOCALAI_LLM_MODEL,
+                    messages=llm_messages,
+                    stream=False,
+                )
+            )
+            response_text = ""
+            if chat_resp.choices:
+                response_text = chat_resp.choices[0].message.content.strip()
+            llm_ms = int((time.perf_counter() - llm_start) * 1000)
 
-        # 3. Text-to-Speech (strictly Kokoro)
-        tts_start = time.perf_counter()
-        effective_tts_model = tts_model or settings.LOCAL_TTS_MODEL or "kokoro"
-        if "kokoro" not in effective_tts_model.lower():
-            effective_tts_model = "kokoro"
-        pcm_bytes = await self.tts.synthesize_http(
-            text=response_text,
-            voice_id=voice_id or settings.LOCAL_TTS_VOICE_ID,
-            model_id=effective_tts_model,
-        )
-        tts_ms = int((time.perf_counter() - tts_start) * 1000)
+            # Save assistant message to history
+            await SessionRepository.add_message(sid, "assistant", response_text)
+
+            # 3. Text-to-Speech (strictly Kokoro)
+            tts_start = time.perf_counter()
+            effective_tts_model = tts_model or settings.LOCAL_TTS_MODEL or "kokoro"
+            if "kokoro" not in effective_tts_model.lower():
+                effective_tts_model = "kokoro"
+            pcm_bytes = await self.tts.synthesize_http(
+                text=response_text,
+                voice_id=voice_id or settings.LOCAL_TTS_VOICE_ID,
+                model_id=effective_tts_model,
+            )
+            tts_ms = int((time.perf_counter() - tts_start) * 1000)
         total_ms = int((time.perf_counter() - start_total) * 1000)
 
         # 4. Save turn to database

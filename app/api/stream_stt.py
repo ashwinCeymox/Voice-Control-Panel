@@ -289,6 +289,9 @@ async def audio_transcription_stream(
                     "default",
                 }
             )
+            from app.services.streaming_bridge_client import bridge_available
+            if bridge_available(req_model_str):
+                valid_set.add(req_model_str.lower())
 
             if req_model_str.lower() not in valid_set:
                 final_status_code = 400

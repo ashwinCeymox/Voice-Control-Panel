@@ -177,13 +177,69 @@ class StreamingSTTClient(STTProvider):
         if target_lang == "auto":
             target_lang = "en"
 
-        if self.is_localai_model(target_model):
-            async for evt in self._stream_localai(audio_stream, target_model, target_lang):
+        # Routing based on registry transports
+        from app.services.model_registry import model_registry
+        transports = await model_registry.get_model_transports(target_model)
+
+        # 1. ws_stream_bridge: Bridge streaming transport
+        if "ws_stream_bridge" in transports:
+            from app.services.streaming_bridge_client import stream_via_bridge
+            async for evt in stream_via_bridge(audio_stream, target_model, target_lang, self.timeout):
                 yield evt
             return
 
-        async for evt in self._stream_sherpa(audio_stream, target_model, target_lang):
-            yield evt
+        # 2. ws_stream_native: Native Sherpa-ONNX streaming transport
+        if "ws_stream_native" in transports:
+            async for evt in self._stream_sherpa(audio_stream, target_model, target_lang):
+                yield evt
+            return
+
+        # 3. Fallback to batch if enabled
+        if getattr(settings, "STREAMING_BRIDGE_FALLBACK_TO_BATCH", False) and "batch_http" in transports:
+            logger.info("Streaming unavailable for model '%s'; falling back to batch STT per policy", target_model)
+            yield {
+                "type": "stt.fallback",
+                "reason": "streaming_unavailable",
+                "message": f"Streaming transport unavailable for '{target_model}'; falling back to batch STT",
+            }
+            pcm_buffer = bytearray()
+            async for chunk in audio_stream:
+                if chunk:
+                    pcm_buffer.extend(chunk)
+            from app.providers.localai_stt import LocalAISTTClient
+            from services.streaming_bridge.core.audio_utils import pcm16_to_wav
+            batch_client = LocalAISTTClient()
+            wav_bytes = pcm16_to_wav(bytes(pcm_buffer), sample_rate=16000)
+            batch_resp = await batch_client.transcribe(
+                audio_bytes=wav_bytes,
+                model=target_model,
+                language=target_lang,
+            )
+            yield {
+                "type": "transcript.completed",
+                "text": batch_resp.text,
+                "model_used": batch_resp.model,
+                "duration": batch_resp.duration or round(len(pcm_buffer) / 32000.0, 2),
+                "fallback_used": True,
+            }
+            return
+
+        # 4. If flag is off, preserve legacy paths for un-migrated models
+        if not getattr(settings, "STREAMING_BRIDGE_ENABLED", False):
+            if self.is_localai_model(target_model):
+                async for evt in self._stream_localai(audio_stream, target_model, target_lang):
+                    yield evt
+                return
+            async for evt in self._stream_sherpa(audio_stream, target_model, target_lang):
+                yield evt
+            return
+
+        # Explicit error if bridge enabled but model has no streaming transport and fallback is off
+        raise StreamingModelNotLoadedError(
+            target_model,
+            details=f"Model '{target_model}' has no active streaming transport (transports: {transports})",
+            status_code=404,
+        )
 
     async def _stream_localai(
         self,

@@ -37,6 +37,8 @@ class ModelInfo(BaseModel):
     unavailable_reason: Optional[str] = None
     installed: Optional[bool] = True
     size_mb: Optional[int] = 0
+    streaming_mode: Optional[str] = "none"
+    transports: Optional[List[str]] = None
 
 
 class ModelListResponse(BaseModel):
