@@ -160,3 +160,58 @@ def test_ports_script_bridge_inclusion_only_when_enabled():
     assert 'if [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then' in content
     assert 'STREAMING_BRIDGE_PORT="$(resolve_service_port "streaming-bridge"' in content
     assert 'ports_str="${ports_str} ${STREAMING_BRIDGE_PORT}"' in content
+
+
+@pytest.mark.asyncio
+async def test_health_ready_when_native_flag_enabled():
+    """When STT_STREAM_NATIVE_ENABLED=True (even if STREAMING_BRIDGE_ENABLED=False), /health/ready checks :8089."""
+    transport = ASGITransport(app=app)
+    with patch.object(settings, "STT_STREAM_NATIVE_ENABLED", True), \
+         patch.object(settings, "STREAMING_BRIDGE_ENABLED", False), \
+         patch.object(settings, "STREAMING_BRIDGE_PORT", 8089), \
+         patch.object(settings, "STREAMING_BRIDGE_URL", "http://127.0.0.1:8089"):
+        mock_inner_client = AsyncMock()
+
+        async def fake_get(url, *args, **kwargs):
+            url_str = str(url)
+            if "8080" in url_str:
+                return Response(200, json={"data": []})
+            if "8880" in url_str:
+                return Response(200, json=[])
+            if "8088" in url_str:
+                return Response(200, json={"model": "test-zipformer"})
+            if "8089" in url_str:
+                return Response(200, json={"status": "healthy", "active_streams": 0, "max_streams": 1})
+            return Response(404)
+
+        mock_inner_client.get = AsyncMock(side_effect=fake_get)
+        mock_inner_client.__aenter__.return_value = mock_inner_client
+        mock_inner_client.__aexit__.return_value = None
+
+        with patch("app.api.health.httpx.AsyncClient", return_value=mock_inner_client):
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get("/health/ready")
+                assert resp.status_code == 200
+                data = resp.json()
+                assert data["providers"]["streaming_bridge"]["reachable"] is True
+                assert data["providers"]["streaming_bridge"]["status"] == "ready"
+
+
+def test_scripts_support_stt_stream_native_flag_and_docs():
+    """Verify S4 scripts recognize STT_STREAM_NATIVE_ENABLED and migration doc exists."""
+    from pathlib import Path
+    for rel in (
+        "scripts/lib/env.sh",
+        "scripts/lib/services.sh",
+        "scripts/preflight.sh",
+        "scripts/start-all.sh",
+        "scripts/start-bridge.sh",
+    ):
+        txt = Path(rel).read_text(encoding="utf-8")
+        assert "STT_STREAM_NATIVE_ENABLED" in txt, f"Missing STT_STREAM_NATIVE_ENABLED in {rel}"
+
+    assert Path("docs/STREAMING_BRIDGE_CHANGES.md").exists()
+    changes_doc = Path("docs/STREAMING_BRIDGE_CHANGES.md").read_text(encoding="utf-8")
+    assert "bridge-relay-v1" in changes_doc
+    assert "bridge-calibrate.sh" in changes_doc
+    assert "STT_STREAM_NATIVE_ENABLED" in changes_doc

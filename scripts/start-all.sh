@@ -149,15 +149,19 @@ if [ -f "${ROOT_DIR}/services/streaming_stt/server.py" ]; then
     log_ok "Sherpa-ONNX Streaming STT started (PID $(cat "${PID_DIR}/streaming-stt.pid"))"
 fi
 
-# 4b. Start Streaming STT Bridge strictly on 127.0.0.1:STREAMING_BRIDGE_PORT (if enabled)
-if [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
+# 4b. Start Native Streaming STT Service strictly on 127.0.0.1:STREAMING_BRIDGE_PORT (if enabled)
+if [ "${STT_STREAM_NATIVE_ENABLED:-false}" = "true" ] || [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
     BRIDGE_PORT="${STREAMING_BRIDGE_PORT:-8089}"
-    log_info "Starting Streaming STT Bridge strictly on 127.0.0.1:${BRIDGE_PORT}..."
+    mkdir -p "${ROOT_DIR}/.run"
+    log_info "Starting Native Streaming STT service strictly on 127.0.0.1:${BRIDGE_PORT}..."
     STREAMING_BRIDGE_PORT="${BRIDGE_PORT}" \
+    STT_STREAM_NATIVE_ENABLED="true" \
     nohup "${ROOT_DIR}/.venv/bin/python" -m services.streaming_bridge.server \
         > "${LOGS_DIR}/streaming-bridge.log" 2>&1 &
-    echo $! > "${PID_DIR}/streaming-bridge.pid"
-    log_ok "Streaming STT Bridge started (PID $(cat "${PID_DIR}/streaming-bridge.pid"))"
+    BRIDGE_PID=$!
+    echo "${BRIDGE_PID}" > "${PID_DIR}/streaming-bridge.pid"
+    echo "${BRIDGE_PID}" > "${ROOT_DIR}/.run/streaming-bridge.pid"
+    log_ok "Native Streaming STT started (PID ${BRIDGE_PID})"
 fi
 
 # 5. Start FastAPI Gateway on GATEWAY_HOST:GATEWAY_PORT
@@ -195,8 +199,8 @@ echo -e "  • Frontend:     http://127.0.0.1:${FRONTEND_PORT}"
 echo -e "  • LocalAI:      http://127.0.0.1:8080 (loopback only)"
 echo -e "  • local-tts:    http://127.0.0.1:8880 (loopback only)"
 echo -e "  • Sherpa STT:   http://127.0.0.1:8088 (loopback only)"
-if [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
-    echo -e "  • Bridge STT:   http://127.0.0.1:${STREAMING_BRIDGE_PORT:-8089} (loopback only)"
+if [ "${STT_STREAM_NATIVE_ENABLED:-false}" = "true" ] || [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
+    echo -e "  • Native STT:   http://127.0.0.1:${STREAMING_BRIDGE_PORT:-8089} (loopback only)"
 fi
 echo -e "  • Logs:         ${LOGS_DIR}/*.log"
 echo -e "  • Stop Command: ${SCRIPT_DIR}/stop-all.sh"

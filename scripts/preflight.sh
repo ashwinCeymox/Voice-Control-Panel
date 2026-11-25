@@ -170,8 +170,8 @@ check_port 8000 "FastAPI Gateway"
 check_port 8080 "LocalAI"
 check_port 8088 "Sherpa-ONNX STT"
 check_port 8880 "TTS Engine"
-if [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
-    check_port "${STREAMING_BRIDGE_PORT:-8089}" "Streaming Bridge"
+if [ "${STT_STREAM_NATIVE_ENABLED:-false}" = "true" ] || [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
+    check_port "${STREAMING_BRIDGE_PORT:-8089}" "Native Streaming STT"
     if [ -z "${STREAMING_BRIDGE_INTERNAL_TOKEN:-}" ]; then
         log_warn "STREAMING_BRIDGE_INTERNAL_TOKEN is not configured in .env. Run scripts/generate-bridge-token.sh"
         WARNINGS=$((WARNINGS + 1))

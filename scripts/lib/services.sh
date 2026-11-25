@@ -314,18 +314,18 @@ start_streaming_stt() {
     log_warn "Streaming STT probe timed out; continuing..."
 }
 
-# Start Streaming STT Bridge (LocalAI simulated streaming)
+# Start Native Streaming STT Service (:8089)
 start_streaming_bridge() {
-    if [ "${STREAMING_BRIDGE_ENABLED:-false}" != "true" ]; then
+    if [ "${STT_STREAM_NATIVE_ENABLED:-false}" != "true" ] && [ "${STREAMING_BRIDGE_ENABLED:-false}" != "true" ]; then
         return 0
     fi
 
     if is_port_our_own "streaming-bridge"; then
-        log_ok "Streaming STT Bridge already running on port ${STREAMING_BRIDGE_PORT}."
+        log_ok "Native Streaming STT service already running on port ${STREAMING_BRIDGE_PORT}."
         return 0
     fi
 
-    log_info "Starting Streaming STT Bridge on 127.0.0.1:${STREAMING_BRIDGE_PORT}..."
+    log_info "Starting Native Streaming STT service on 127.0.0.1:${STREAMING_BRIDGE_PORT}..."
     local py_exec="${ROOT_DIR}/.venv/bin/python"
     if [ ! -f "${py_exec}" ]; then
         py_exec="$(command -v python3)"
@@ -343,10 +343,15 @@ start_streaming_bridge() {
 
     (
         cd "${ROOT_DIR}"
+        mkdir -p "${ROOT_DIR}/.pids"
         STREAMING_BRIDGE_PORT="${STREAMING_BRIDGE_PORT}" \
+        STT_STREAM_NATIVE_ENABLED="true" \
+        STREAMING_BRIDGE_ENABLED="true" \
         nohup "${py_exec}" -m services.streaming_bridge.server \
             >> "${LOGS_DIR}/streaming-bridge.log" 2>&1 &
-        echo $! > "${RUN_DIR}/streaming-bridge.pid"
+        local b_pid=$!
+        echo "${b_pid}" > "${RUN_DIR}/streaming-bridge.pid"
+        echo "${b_pid}" > "${ROOT_DIR}/.pids/streaming-bridge.pid"
     )
     local pid
     pid="$(cat "${RUN_DIR}/streaming-bridge.pid")"
@@ -509,8 +514,8 @@ status_services() {
                     "local-tts:local-tts Engine:${TTS_PORT}:http://127.0.0.1:${TTS_PORT}/v1/models"
                     "streaming-stt:Sherpa-ONNX STT:${STT_PORT}:http://127.0.0.1:${STT_PORT}/health")
 
-    if [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
-        services+=("streaming-bridge:Streaming Bridge:${STREAMING_BRIDGE_PORT}:http://127.0.0.1:${STREAMING_BRIDGE_PORT}/health")
+    if [ "${STT_STREAM_NATIVE_ENABLED:-false}" = "true" ] || [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
+        services+=("streaming-bridge:Native Streaming STT:${STREAMING_BRIDGE_PORT}:http://127.0.0.1:${STREAMING_BRIDGE_PORT}/health")
     fi
 
     if [ "${ENVIRONMENT}" = "development" ]; then
@@ -548,8 +553,8 @@ print_banner() {
     printf "  ${BOLD}🌐 Public Web Panel:${RESET}    ${SKY}%s${RESET}\n" "${PUBLIC_URL}/voicecontrolpanel"
     printf "  ${BOLD}🔌 API Base URL:${RESET}        ${SKY}%s/v1${RESET}\n" "${PUBLIC_URL}"
     printf "  ${BOLD}🩺 Gateway Health:${RESET}      ${SKY}%s/health/ready${RESET}\n" "${PUBLIC_URL}"
-    if [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
-        printf "  ${BOLD}🌉 Streaming Bridge:${RESET}    ${SKY}http://127.0.0.1:%s/health (Internal Loopback)${RESET}\n" "${STREAMING_BRIDGE_PORT:-8089}"
+    if [ "${STT_STREAM_NATIVE_ENABLED:-false}" = "true" ] || [ "${STREAMING_BRIDGE_ENABLED:-false}" = "true" ]; then
+        printf "  ${BOLD}🎙️  Native STT (:8089):${RESET} ${SKY}http://127.0.0.1:%s/health (Internal Loopback)${RESET}\n" "${STREAMING_BRIDGE_PORT:-8089}"
     fi
     printf "${BOLD}${GREEN}--------------------------------------------------------------------${RESET}\n"
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # scripts/start-bridge.sh
-# Standalone launcher for Streaming STT Bridge daemon (port 8089)
-# Loopback-only service simulating streaming STT for LocalAI models.
+# Standalone launcher for Native Streaming STT service (port 8089)
+# Loopback-only parakeet.cpp C-API streaming service (:8089).
 # ==============================================================================
 
 set -euo pipefail
@@ -71,10 +71,11 @@ if [ ! -f "${PY_EXEC}" ]; then
     PY_EXEC="$(command -v python3)"
 fi
 
-log_info "Starting Streaming STT Bridge on 127.0.0.1:${BRIDGE_PORT}..."
+log_info "Starting Native Streaming STT service on 127.0.0.1:${BRIDGE_PORT}..."
 (
     cd "${ROOT_DIR}"
     STREAMING_BRIDGE_PORT="${BRIDGE_PORT}" \
+    STT_STREAM_NATIVE_ENABLED="true" \
     STREAMING_BRIDGE_ENABLED="true" \
     nohup "${PY_EXEC}" -m services.streaming_bridge.server \
         >> "${LOGS_DIR}/streaming-bridge.log" 2>&1 &

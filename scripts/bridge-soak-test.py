@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 import sys
 import time
 from typing import Dict, List, Optional
@@ -233,7 +234,7 @@ def main():
     parser.add_argument("--host", default="127.0.0.1", help="Bridge daemon host")
     parser.add_argument("--port", type=int, default=8089, help="Bridge daemon port")
     parser.add_argument("--token", default=None, help="Bridge internal token (reads from env if omitted)")
-    parser.add_argument("--model", default="parakeet-cpp-realtime-scene", help="STT model to test")
+    parser.add_argument("--model", default="parakeet-cpp-realtime_eou_120m-v1", help="STT model to test")
     parser.add_argument("--streams", type=int, default=5, help="Number of concurrent streams")
     parser.add_argument("--duration-s", type=float, default=10.0, help="Duration of audio per stream in seconds")
     parser.add_argument("--churn", action="store_true", help="Enable abrupt disconnect and churn testing")

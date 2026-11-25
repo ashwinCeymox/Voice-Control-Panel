@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # scripts/stop-bridge.sh
-# Graceful stopper for Streaming STT Bridge daemon (PID-only, no kill-by-port)
-# Adheres to run-pod.md and port-stt.md Phase B6 specification.
+# Graceful stopper for Native Streaming STT service (PID-only, no kill-by-port)
 # ==============================================================================
 
 set -euo pipefail
