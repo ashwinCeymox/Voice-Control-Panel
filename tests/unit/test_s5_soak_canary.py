@@ -42,8 +42,15 @@ def test_soak_script_compiles():
     py_compile.compile(str(script), doraise=True)
 
 
-def test_canary_generates_nonzero_pcm16_chunks():
-    """The canary's synthetic PCM-16 generator must emit non-silent, correctly-sized chunks."""
+def test_engine_smoke_script_compiles():
+    """engine-smoke.py must pass py_compile with no syntax errors."""
+    script = Path("scripts/engine-smoke.py")
+    assert script.exists(), "scripts/engine-smoke.py not found"
+    py_compile.compile(str(script), doraise=True)
+
+
+def test_canary_loads_real_wav_chunks_and_overlap():
+    """The canary must load quiet_normal_speech.wav into 160 ms PCM-16 chunks and score overlap."""
     spec = importlib.util.spec_from_file_location(
         "canary_stt_native", "scripts/canary-stt-native.py"
     )
@@ -51,15 +58,63 @@ def test_canary_generates_nonzero_pcm16_chunks():
     spec.loader.exec_module(canary)
 
     CHUNK_BYTES = canary.CHUNK_BYTES
-    chunks = canary._make_audio_chunks(1.0)
+    assert CHUNK_BYTES == 5120
+    chunks = canary._load_wav_as_pcm16_chunks(Path("tests/fixtures/audio/quiet_normal_speech.wav"))
 
-    assert len(chunks) > 0, "No audio chunks generated"
+    assert len(chunks) >= 30, f"Expected >=30 chunks for 5.2s wav, got {len(chunks)}"
     for c in chunks:
         assert len(c) == CHUNK_BYTES, f"Chunk size mismatch: {len(c)} != {CHUNK_BYTES}"
 
-    # Verify non-silence (sine wave: not all zero)
     all_silent = all(b == 0 for chunk in chunks[:10] for b in chunk)
-    assert not all_silent, "Generated audio is all silence (sine wave not applied)"
+    assert not all_silent, "Loaded WAV audio is unexpectedly all silence"
+
+    assert canary.word_overlap_ratio("hello world today", "hello world today") == 1.0
+    assert canary.word_overlap_ratio("hello world", "hello world today extra") == 0.5
+
+
+def test_soak_pass_fail_and_latency_logic():
+    """Unit test bridge-soak-test.py pass/fail logic with canned RSS, session, and latency samples."""
+    spec = importlib.util.spec_from_file_location(
+        "bridge_soak_test", "scripts/bridge-soak-test.py"
+    )
+    soak = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(soak)
+
+    # 1. Pass case: <10% RSS growth after warmup, 0 final sessions, 0 errors
+    res_pass = soak.evaluate_soak_results(
+        rss_samples_mb=[80.0, 95.0, 100.0, 100.0, 102.0, 105.0],
+        session_samples=[0, 1, 2, 0],
+        partial_latencies_ms=[10.0, 20.0, 30.0, 40.0, 100.0],
+        errors=[],
+        warmup_samples=3,
+    )
+    assert res_pass["passed"] is True
+    assert res_pass["rss_failed"] is False
+    assert res_pass["session_leak"] is False
+    assert res_pass["partial_p50_ms"] == pytest.approx(30.0)
+    assert res_pass["partial_p95_ms"] == pytest.approx(88.0)
+
+    # 2. Fail case: >10% RSS growth after warmup
+    res_rss_fail = soak.evaluate_soak_results(
+        rss_samples_mb=[80.0, 95.0, 100.0, 100.0, 112.0],
+        session_samples=[0, 1, 0],
+        partial_latencies_ms=[20.0],
+        errors=[],
+        warmup_samples=3,
+    )
+    assert res_rss_fail["passed"] is False
+    assert res_rss_fail["rss_failed"] is True
+
+    # 3. Fail case: leaked active session at end
+    res_leak_fail = soak.evaluate_soak_results(
+        rss_samples_mb=[100.0, 101.0, 101.0, 101.0],
+        session_samples=[0, 1, 2, 1],
+        partial_latencies_ms=[20.0],
+        errors=[],
+        warmup_samples=3,
+    )
+    assert res_leak_fail["passed"] is False
+    assert res_leak_fail["session_leak"] is True
 
 
 def test_canary_constructs_correct_start_message():

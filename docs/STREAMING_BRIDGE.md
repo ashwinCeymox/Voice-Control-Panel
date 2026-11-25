@@ -79,6 +79,7 @@ Toggle live without restarting the gateway in **Developer Settings** or via `PUT
 ## 5. Operations & Script Management
 
 - **Preflight check (passes when flag is off):** `./scripts/preflight.sh`
-- **Unified start / stop / status:** `./start.sh up`, `./start.sh stop`, `./start.sh status`
-- **Standalone start / PID-only stop:** `./scripts/start-bridge.sh` and `./scripts/stop-bridge.sh` (stops strictly via `.run/streaming-bridge.pid` and `.pids/streaming-bridge.pid`, never kills port `8089` blindly)
-- **Soak test:** `./scripts/bridge-soak-test.py --model parakeet-cpp-realtime_eou_120m-v1 --streams 1 --duration-s 30`
+- **Engine smoke (pod-only, NOT RUN on macOS):** `.venv/bin/python scripts/engine-smoke.py`
+- **Standalone start / PID-only stop (do NOT use `./start.sh restart` on pod):** `./scripts/start-bridge.sh` and `./scripts/stop-bridge.sh` (stops strictly via `.run/streaming-bridge.pid` and `.pids/streaming-bridge.pid`, never kills port `8089` blindly)
+- **Canary (pod-only, NOT RUN on macOS):** `.venv/bin/python scripts/canary-stt-native.py --model parakeet-cpp-realtime_eou_120m-v1`
+- **Soak test (pod-only, NOT RUN on macOS):** `.venv/bin/python scripts/bridge-soak-test.py --model parakeet-cpp-realtime_eou_120m-v1 --streams 1 --duration-s 30`
