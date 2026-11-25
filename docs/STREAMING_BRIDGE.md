@@ -1,6 +1,8 @@
-# Universal Streaming STT Bridge Documentation
+# Native Streaming STT Service Documentation (`:8089`)
 
-The Streaming STT Bridge is a high-efficiency simulated streaming speech-to-text service that sits alongside LocalAI. It bridges batch STT models (such as Parakeet and Whisper) into real-time streaming speech recognition with live partials, monotonic text alignment, priority scheduling, and host-fingerprint calibration.
+> For migration history, archived relay components (`bridge-relay-v1`), and rollback steps, see [STREAMING_BRIDGE_CHANGES.md](./STREAMING_BRIDGE_CHANGES.md).
+
+The Native Streaming STT service runs alongside LocalAI on loopback port `8089` and streams audio directly through an isolated `parakeet.cpp` C ABI (`ABI 11`) worker process for eligible models (`parakeet-cpp-realtime_eou_120m-v1`), while Sherpa-ONNX continues handling online Zipformer models on `:8088`.
 
 ---
 
@@ -8,28 +10,26 @@ The Streaming STT Bridge is a high-efficiency simulated streaming speech-to-text
 
 ```
                                  ┌──────────────────────────────────────────┐
-                                 │       Streaming Bridge Daemon (:8089)    │
+                                 │     Native Streaming STT (:8089)         │
                                  │                                          │
-Browser / Client ──WebSocket──▶ │  1. Loopback & Token Auth                │
-  (/v1/audio/transcriptions/     │  2. Host Fingerprint Calibration Gate     │
-   stream via Gateway)           │  3. Bounded Audio Buffer (16 kHz PCM)    │
-                                 │  4. Priority Queue (Finals > Partials)   │
-                                 │  5. Aligner (Confirmed Monotonic Prefix) │
+Browser / Client ──WebSocket──▶  │  1. Loopback & X-Bridge-Token Auth       │
+  (/v1/audio/transcriptions/     │  2. Host Calibration & Stream Cap Gate   │
+   stream via FastAPI Gateway)   │  3. Voice-Turn Pause / <=2x Catch-Up     │
+                                 │  4. ParakeetNativeEngine Worker (ABI 11) │
                                  └────────────────────┬─────────────────────┘
-                                                      │ HTTP /v1/audio/transcriptions
+                                                      │ ctypes / packaged ld.so
                                                       ▼
                                        ┌─────────────────────────────┐
-                                       │   LocalAI Backend (:8080)   │
-                                       │ (Parakeet / Whisper Models) │
+                                       │ libparakeet.so (EOU 120M)   │
                                        └─────────────────────────────┘
 ```
 
 ### Core Design Principles
-1. **Loopback & Internal Token Only:** Listens exclusively on `127.0.0.1` and requires `STREAMING_BRIDGE_INTERNAL_TOKEN` (via `X-Bridge-Token` header). Never accessible externally.
-2. **Flag Off by Default:** `STREAMING_BRIDGE_ENABLED=false`. When disabled, the gateway preserves baseline behavior with 0 changes or overhead.
-3. **Fairness & Concurrency Caps:** Global `MAX_DECODES` semaphore (default 1) prevents overloading CPU/GPU and starves neither LLM nor TTS. Single in-flight per stream skips intermediate partials (latest wins).
-4. **Yield-to-Voice Coordination:** When a voice turn (LLM completion or TTS audio synthesis) starts, the bridge is signaled via `/internal/voice-signal`. Partials yield while voice is active, resuming after completion or a bounded pause cap (default 3000ms). Finals are never blocked.
-5. **Host-Gated Calibration:** A model cannot be streamed until an offline calibration pass (`scripts/bridge-calibrate.sh`) has run on the specific host hardware, verified acoustic latency, and generated a signed fingerprint calibration record.
+1. **Loopback & Internal Token Only:** Listens strictly on `127.0.0.1:8089` and requires `STREAMING_BRIDGE_INTERNAL_TOKEN` (`X-Bridge-Token`).
+2. **Flag Off by Default (`STT_STREAM_NATIVE_ENABLED=false`):** With the flag off, gateway `/v1/models` and WebSocket routing preserve baseline behavior completely, and `./scripts/preflight.sh` does not require port `8089` or an internal token.
+3. **Registry-Driven Routing:** Models expose `transports` (`ws_stream_native`) and `streaming_backend` (`"parakeet_native"` or `"sherpa"`). The gateway routes strictly by registry metadata.
+4. **Voice-Turn Protection & Bounded Catch-Up:** When `/internal/voice-signal` indicates an active LLM/TTS turn, chunk feeding pauses into a bounded buffer (`STREAMING_NATIVE_PAUSE_MAX_CHUNKS`) and replays at up to `STREAMING_NATIVE_CATCHUP_RATE` afterward so voice turns are not starved and audio is not dropped.
+5. **Host-Gated Calibration:** Models must pass `./scripts/bridge-calibrate.sh --model <id>` on the host (`admitted_streams >= 1`) before the gateway exposes `ws_stream_native`.
 
 ---
 
@@ -37,87 +37,48 @@ Browser / Client ──WebSocket──▶ │  1. Loopback & Token Auth         
 
 | Key | Default | Description |
 |---|---|---|
-| `STREAMING_BRIDGE_ENABLED` | `false` | Master toggle. When false, bridge path is completely disabled. |
-| `STREAMING_BRIDGE_PORT` | `8089` | Internal loopback port. Auto-migrates if port is busy. |
-| `STREAMING_BRIDGE_INTERNAL_TOKEN` | Generated once | Secret token used by gateway to authenticate loopback requests. |
-| `STREAMING_BRIDGE_STEP_MS` | `1000` | Cadence between recurrent partial decode attempts. |
-| `STREAMING_BRIDGE_MIN_WINDOW_MS` | `1200` | Minimum audio duration required before the first partial decode. |
-| `STREAMING_BRIDGE_SEGMENT_MAX_MS` | `15000` | Hard cap on audio segment length before forcing a segment cut. |
-| `STREAMING_BRIDGE_SEGMENT_SILENCE_MS`| `600` | Trailing silence duration triggering an automatic segment finalization. |
-| `STREAMING_BRIDGE_MAX_STREAMS` | `5` | Maximum concurrent active client WebSocket streams. |
-| `STREAMING_BRIDGE_MAX_DECODES` | `1` | Maximum parallel in-flight decodes dispatched to LocalAI. |
-| `STREAMING_BRIDGE_PARTIAL_TIMEOUT_S` | `8.0` | Timeout for intermediate partial transcription requests. |
-| `STREAMING_BRIDGE_FINAL_TIMEOUT_S` | `30.0` | Timeout for segment final / commit transcription requests. |
-| `STREAMING_BRIDGE_FALLBACK_TO_BATCH` | `false` | Explicit failover to batch STT when bridge is unavailable. |
+| `STT_STREAM_NATIVE_ENABLED` | `false` | Master feature flag for native `:8089` streaming (alias: `STREAMING_BRIDGE_ENABLED`). |
+| `STREAMING_BRIDGE_PORT` | `8089` | Internal loopback port for `services.streaming_bridge.server`. |
+| `STREAMING_BRIDGE_INTERNAL_TOKEN` | Generated once | Shared secret stored in `.env` (mode `600`). |
+| `STREAMING_BRIDGE_MAX_STREAMS` | `5` | Upper bound (clamped by calibrated `admitted_streams`). |
+| `STREAMING_BRIDGE_IDLE_TIMEOUT_S` | `30.0` | Idle WebSocket timeout in seconds. |
+| `STREAMING_BRIDGE_MAX_STREAM_S` | `600.0` | Maximum stream session duration in seconds. |
+| `STREAMING_NATIVE_EXPECTED_ABI` | `11` | Required `libparakeet.so` C ABI version. |
+| `STREAMING_NATIVE_OMP_NUM_THREADS` | unset | Optional OpenMP thread cap passed to `parakeet_worker`. |
+| `STREAMING_NATIVE_GOMP_WAIT_POLICY` | unset | Optional `GOMP_WAIT_POLICY` (e.g., `PASSIVE`) passed to worker. |
+| `STREAMING_NATIVE_WORKER_NICE` | unset | Optional POSIX `nice` adjustment applied in worker. |
+| `STREAMING_NATIVE_PAUSE_MAX_CHUNKS` | `40` | Max buffered chunks during a paused voice turn. |
+| `STREAMING_NATIVE_CATCHUP_RATE` | `2.0` | Replay multiplier when draining buffered audio after pause. |
 
 ---
 
 ## 3. Host Calibration & Admission
 
-To ensure real-time performance and prevent degradation of LLM or TTS services, models must pass an automated host benchmark:
-
 ```bash
-# Run calibration on a model
-./scripts/bridge-calibrate.sh --model parakeet-cpp-realtime-scene
+./scripts/bridge-calibrate.sh --model parakeet-cpp-realtime_eou_120m-v1
 ```
 
-### What Calibration Verifies:
-1. **Decode Latency:** Measures decode time across 2s, 4s, 6s, 10s, and 15s audio windows.
-2. **Voice Interference:** Runs concurrent LLM and TTS voice turns during STT decodes to verify LLM latency does not degrade by >10%.
-3. **Admitted Streams:** Calculates maximum safe concurrent streams ($N_{\text{admitted}}$) supported by the host.
-4. **Signed Fingerprint:** Generates `data/bridge_calibration_<fingerprint>_<model>.json`. If host hardware changes (CPU cores, RAM, GPU), the calibration must be re-run.
+Writes `data/bridge_calibration_<fingerprint>_<model>.json`. If host resources fail the S0b CPU pass rule (for example, undersized multi-tenant containers), `admitted_streams` is recorded as `0` (`FAIL`) and native streaming stays safely disabled for that host.
 
 ---
 
-## 4. UI Indicators & Badges
+## 4. UI Indicators & Runtime Toggle
 
-The user interface distinguishes between true native neural streaming and simulated streaming:
+All STT selectors (Models Registry, Assistant, Agents, STT Playground) use unified capability metadata:
 
-| Badge / Label | Engine / Transport | Description |
+| Label | `streaming_backend` | Transport |
 |---|---|---|
-| `Live (native)` | Sherpa-ONNX (`ws_stream_native`) | True online streaming neural ASR (Zipformer). Lowest compute overhead, character-by-character monotonic emission. |
-| `Live (simulated)` | Streaming Bridge (`ws_stream_bridge`) | Recurrent LocalAI batch decodes with aligner prefix stabilization. Supported on Parakeet and Whisper models. |
-| `[Disabled: BRIDGE_UNAVAILABLE]` | Streaming Bridge | Shown when a simulated model is selected but the bridge daemon is down, disabled, or uncalibrated for the host. |
+| `Live (native)` | `"sherpa"` | `ws_stream_native` (`:8088`) |
+| `Live (native)` | `"parakeet_native"` | `ws_stream_native` (`:8089`) |
+| Batch-only | `null` | `batch_http` |
 
-### Runtime Kill Switch
-Administrators can toggle bridge routing live without restarting the gateway via:
-- **Developer Settings:** Toggle under "Streaming STT & Simulated Bridge".
-- **REST API:** `PUT /v1/admin/settings/stt` with `{"streaming_bridge_enabled": false}`.
+Toggle live without restarting the gateway in **Developer Settings** or via `PUT /v1/admin/settings/stt` (`{"stt_stream_native_enabled": true|false}`).
 
 ---
 
 ## 5. Operations & Script Management
 
-- **Start Bridge Daemon:**
-  ```bash
-  ./scripts/start-bridge.sh
-  # Or via unified launcher:
-  ./start.sh up
-  ```
-- **Stop Bridge Daemon:**
-  ```bash
-  ./scripts/stop-bridge.sh
-  # Uses recorded PID in .run/streaming-bridge.pid only; never kills by port.
-  ```
-- **Run Soak & Concurrency Test:**
-  ```bash
-  ./scripts/bridge-soak-test.py --streams 5 --duration-s 30
-  ```
-
----
-
-## 6. Troubleshooting
-
-### 1. `BRIDGE_UNAVAILABLE` in UI Dropdowns
-- **Cause:** `STREAMING_BRIDGE_ENABLED` is `false` or the model has not passed calibration.
-- **Fix:**
-  1. Toggle bridge on in Developer Settings or `.env` (`STREAMING_BRIDGE_ENABLED=true`).
-  2. Run calibration: `./scripts/bridge-calibrate.sh --model <model-name>`.
-
-### 2. `BRIDGE_BUSY` (HTTP / WS 1013)
-- **Cause:** Active concurrent streams reached `STREAMING_BRIDGE_MAX_STREAMS` or the model's calibrated limit.
-- **Fix:** The bridge sends `retry_after_ms: 2000`. The client should retry after the specified backoff.
-
-### 3. Missing `X-Bridge-Token` or 401/1008
-- **Cause:** Direct unauthorized connection attempt or missing token.
-- **Fix:** Ensure `STREAMING_BRIDGE_INTERNAL_TOKEN` in `.env` is populated and passed in the `X-Bridge-Token` header.
+- **Preflight check (passes when flag is off):** `./scripts/preflight.sh`
+- **Unified start / stop / status:** `./start.sh up`, `./start.sh stop`, `./start.sh status`
+- **Standalone start / PID-only stop:** `./scripts/start-bridge.sh` and `./scripts/stop-bridge.sh` (stops strictly via `.run/streaming-bridge.pid` and `.pids/streaming-bridge.pid`, never kills port `8089` blindly)
+- **Soak test:** `./scripts/bridge-soak-test.py --model parakeet-cpp-realtime_eou_120m-v1 --streams 1 --duration-s 30`
