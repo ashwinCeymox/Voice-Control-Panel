@@ -11,6 +11,12 @@ from services.streaming_bridge.engines.base import (
     pcm16_to_float32,
 )
 from services.streaming_bridge.engines.fake_engine import FakeStreamingEngine
+from services.streaming_bridge.engines.parakeet_native import (
+    ParakeetNativeEngine,
+    build_worker_command,
+    build_worker_env,
+    resolve_parakeet_library,
+)
 
 __all__ = [
     "EngineABIMismatchError",
@@ -18,8 +24,12 @@ __all__ = [
     "EngineCrashedError",
     "EngineFinalResult",
     "FakeStreamingEngine",
+    "ParakeetNativeEngine",
     "StreamingEngine",
     "UnsupportedAudioFormatError",
+    "build_worker_command",
+    "build_worker_env",
     "join_transcript_parts",
     "pcm16_to_float32",
+    "resolve_parakeet_library",
 ]
