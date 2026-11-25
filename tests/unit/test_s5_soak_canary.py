@@ -72,6 +72,21 @@ def test_canary_loads_real_wav_chunks_and_overlap():
     assert canary.word_overlap_ratio("hello world", "hello world today extra") == 0.5
 
 
+def test_canary_expected_text_matches_data_pack_source():
+    """Canary DEFAULT_EXPECTED_TEXT must match the measured transcript in docs/streaming-stt-data-pack.md."""
+    spec = importlib.util.spec_from_file_location(
+        "canary_stt_native", "scripts/canary-stt-native.py"
+    )
+    canary = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(canary)
+
+    data_pack = Path("docs/streaming-stt-data-pack.md").read_text(encoding="utf-8")
+    expected = canary.DEFAULT_EXPECTED_TEXT
+    assert f'"{expected}"' in data_pack, (
+        f"DEFAULT_EXPECTED_TEXT {expected!r} not found in docs/streaming-stt-data-pack.md"
+    )
+
+
 def test_soak_pass_fail_and_latency_logic():
     """Unit test bridge-soak-test.py pass/fail logic with canned RSS, session, and latency samples."""
     spec = importlib.util.spec_from_file_location(

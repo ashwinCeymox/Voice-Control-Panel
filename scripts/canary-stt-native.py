@@ -51,7 +51,8 @@ CHUNK_MS = 160        # 160 ms of audio per send
 CHUNK_FRAMES = SAMPLE_RATE * CHUNK_MS // 1000
 CHUNK_BYTES = CHUNK_FRAMES * CHANNELS * BYTES_PER_SAMPLE  # 5120 bytes
 DEFAULT_WAV_PATH = Path("tests/fixtures/audio/quiet_normal_speech.wav")
-DEFAULT_EXPECTED_TEXT = "today in new york is partly cloudy with a chance of afternoon rain"
+# Source: docs/streaming-stt-data-pack.md line 408 (Parakeet Realtime Scene EOU 120M, 0.0% WER)
+DEFAULT_EXPECTED_TEXT = "the weather today in new york is partly cloudy with a chance of afternoon rain"
 
 
 def _load_wav_as_pcm16_chunks(

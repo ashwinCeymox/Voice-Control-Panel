@@ -41,13 +41,13 @@ When `STT_STREAM_NATIVE_ENABLED=false` (default):
 
 | Step | Count | Details |
 |---|---:|---|
-| **Pre-branch baseline (`bridge-relay-v1`, `0c23fe1`)** | **281** | `.venv/bin/pytest tests/unit/ -q --tb=line` -> `281 passed, 12 failed` |
+| **Pre-branch baseline (`bridge-relay-v1`, `0c23fe1`)** | **281** | `.venv/bin/pytest tests/unit/ -q --tb=line` -> `281 passed, 12 failed` (`293` collected) |
 | **− S1/S2/S3 removed/replaced relay tests** | **−30** | `test_streaming_bridge_b8_load_soak.py` (8), `test_streaming_bridge_core.py` (7), `test_streaming_bridge_scheduler.py` (9), `test_streaming_bridge_service.py` (5 relay tests), `test_streaming_bridge_b7_ui_api.py` (1 renamed) |
-| **+ S2 additions** | **+16** | `test_streaming_bridge_engines.py` (4), `test_parakeet_native_engine.py` (4), `test_streaming_bridge_service.py` (8) |
-| **+ S3 additions** | **+4** | `test_streaming_bridge_b7_ui_api.py` (1 renamed), `test_streaming_bridge_gateway_routing.py` (3) |
+| **+ S2 additions** | **+18** | `test_streaming_bridge_engines.py` (5), `test_parakeet_native_engine.py` (4), `test_streaming_bridge_service.py` (9) |
+| **+ S3 additions** | **+2** | `test_streaming_bridge_b7_ui_api.py` (1 renamed), `test_streaming_bridge_gateway_routing.py` (1) |
 | **+ S4 additions** | **+2** | `test_streaming_bridge_b6_ops.py` (2) |
-| **+ S5 additions (incl. post-review fixes)** | **+9** | `test_s5_soak_canary.py` (9: canary WAV/overlap, engine-smoke compile, soak pass/fail/latency, session leak, idle timeout, docs/scripts) |
-| **= `feat/stt-stream-native` HEAD total** | **282** | `282 passed, 12 failed` (294 collected) |
+| **+ S5 additions (incl. post-review fixes)** | **+10** | `test_s5_soak_canary.py` (10: canary WAV/overlap, expected-text source match, engine-smoke compile, soak pass/fail/latency, start msg, session leak, idle timeout, docs/scripts) |
+| **= `feat/stt-stream-native` HEAD total** | **283** | `283 passed, 12 failed` (`295` collected; zero duplicate test names; zero tracked `.pyc`/`__pycache__`) |
 
 ### The 12 Known Failures (Identical on `bridge-relay-v1` and `feat/stt-stream-native`)
 
