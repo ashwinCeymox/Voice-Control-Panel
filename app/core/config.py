@@ -115,6 +115,18 @@ class Settings(BaseSettings):
     STREAMING_BRIDGE_BOUNDED_PAUSE_MS: int = 3000
     STREAMING_BRIDGE_WIDENED_STEP_MS: int = 2000
 
+    # Native Parakeet Streaming Worker Settings (S2)
+    STREAMING_NATIVE_LIB_PATH: Optional[str] = os.environ.get("STREAMING_NATIVE_LIB_PATH")
+    STREAMING_NATIVE_EXPECTED_ABI: int = int(os.environ.get("STREAMING_NATIVE_EXPECTED_ABI", "11"))
+    STREAMING_NATIVE_OMP_NUM_THREADS: Optional[str] = os.environ.get("STREAMING_NATIVE_OMP_NUM_THREADS")
+    STREAMING_NATIVE_GOMP_WAIT_POLICY: Optional[str] = os.environ.get("STREAMING_NATIVE_GOMP_WAIT_POLICY")
+    STREAMING_NATIVE_OMP_PROC_BIND: Optional[str] = os.environ.get("STREAMING_NATIVE_OMP_PROC_BIND")
+    STREAMING_NATIVE_WORKER_NICE: Optional[int] = None
+    STREAMING_NATIVE_CPU_AFFINITY: str = os.environ.get("STREAMING_NATIVE_CPU_AFFINITY", "")
+    STREAMING_NATIVE_VOICE_PAUSE_ENABLED: Optional[bool] = None
+    STREAMING_NATIVE_PAUSE_MAX_CHUNKS: int = int(os.environ.get("STREAMING_NATIVE_PAUSE_MAX_CHUNKS", "40"))
+    STREAMING_NATIVE_CATCHUP_RATE: float = float(os.environ.get("STREAMING_NATIVE_CATCHUP_RATE", "2.0"))
+
     # Security & Administration
     ENVIRONMENT: str = os.environ.get("ENVIRONMENT", "development")
     ADMIN_EMAIL: str = os.environ.get("ADMIN_EMAIL", "admin@voicepanel.io")

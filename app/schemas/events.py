@@ -63,6 +63,8 @@ class TranscriptCompletedEvent(BaseModel):
     model_used: Optional[str] = None
     duration: Optional[float] = None
     final_degraded: Optional[bool] = False
+    eou: Optional[bool] = None
+    eob: Optional[bool] = None
 
 
 class TranscriptPartialEvent(BaseModel):
@@ -74,6 +76,8 @@ class TranscriptPartialEvent(BaseModel):
     text: Optional[str] = None
     segment_id: Optional[int] = None
     degraded: Optional[bool] = False
+    eou: Optional[bool] = None
+    eob: Optional[bool] = None
 
 
 class SegmentFinalEvent(BaseModel):
@@ -82,6 +86,17 @@ class SegmentFinalEvent(BaseModel):
     text: str = ""
     revised: Optional[bool] = False
     final_degraded: Optional[bool] = False
+
+
+class StreamPausedEvent(BaseModel):
+    type: Literal["stream.paused"] = "stream.paused"
+    reason: str = "voice_turn_active"
+    buffered_chunks: int = 0
+
+
+class StreamResumedEvent(BaseModel):
+    type: Literal["stream.resumed"] = "stream.resumed"
+    buffered_chunks: int = 0
 
 
 class STTFallbackEvent(BaseModel):
