@@ -17,17 +17,14 @@ import hmac
 import json
 import logging
 import os
-import sys
 import uuid
-from typing import Dict, Optional
-import httpx
+from typing import Any, Dict, Optional
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from services.streaming_bridge.calibrate import is_host_calibrated_and_passing
-from services.streaming_bridge.core.session import BridgeSession
 from services.streaming_bridge.scheduler.bridge_scheduler import BridgeScheduler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -36,48 +33,17 @@ logger = logging.getLogger("streaming_bridge_server")
 app = FastAPI(title="Streaming STT Bridge", version="1.0.0")
 
 # Active streams registry
-active_sessions: Dict[str, BridgeSession] = {}
-http_client: Optional[httpx.AsyncClient] = None
+active_sessions: Dict[str, Any] = {}
 scheduler: Optional[BridgeScheduler] = None
-
-
-async def call_localai_transcribe(model: str, wav_bytes: bytes, language: str = "en") -> dict:
-    """Call LocalAI POST /v1/audio/transcriptions with parameter parity."""
-    global http_client
-    if http_client is None:
-        http_client = httpx.AsyncClient(timeout=30.0)
-
-    url = f"{settings.LOCALAI_BASE_URL.rstrip('/')}/v1/audio/transcriptions"
-    headers = {}
-    if settings.LOCALAI_API_KEY:
-        headers["Authorization"] = f"Bearer {settings.LOCALAI_API_KEY}"
-
-    files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
-    target_lang = language if (language and language != "auto") else "en"
-    # Parameter parity with LocalAISTTClient (app/providers/localai_stt.py)
-    data = {
-        "model": model,
-        "response_format": "json",
-        "temperature": "0",
-        "condition_on_previous_text": "false",
-        "language": target_lang,
-    }
-
-    resp = await http_client.post(url, files=files, data=data, headers=headers)
-    if resp.status_code != 200:
-        raise RuntimeError(f"LocalAI decode returned HTTP {resp.status_code}: {resp.text}")
-    return resp.json()
 
 
 @app.on_event("startup")
 async def startup_event():
-    global http_client, scheduler
+    global scheduler
     if not settings.STREAMING_BRIDGE_INTERNAL_TOKEN or not settings.STREAMING_BRIDGE_INTERNAL_TOKEN.strip():
         raise RuntimeError("STREAMING_BRIDGE_INTERNAL_TOKEN not configured in .env; bridge server refusing to start")
 
-    http_client = httpx.AsyncClient(timeout=30.0)
     scheduler = BridgeScheduler(
-        transcribe_func=call_localai_transcribe,
         max_decodes=settings.STREAMING_BRIDGE_MAX_DECODES,
         bounded_pause_ms=settings.STREAMING_BRIDGE_BOUNDED_PAUSE_MS,
         widened_step_ms=settings.STREAMING_BRIDGE_WIDENED_STEP_MS,
@@ -85,16 +51,14 @@ async def startup_event():
         final_timeout_s=settings.STREAMING_BRIDGE_FINAL_TIMEOUT_S,
     )
     scheduler.start()
-    logger.info("Streaming STT Bridge started on port %d (max_decodes=%d)", settings.STREAMING_BRIDGE_PORT, settings.STREAMING_BRIDGE_MAX_DECODES)
+    logger.info("Streaming STT Bridge started on port %d", settings.STREAMING_BRIDGE_PORT)
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    global http_client, scheduler
+    global scheduler
     if scheduler:
         await scheduler.stop()
-    if http_client:
-        await http_client.aclose()
 
 
 def verify_loopback(client_host: Optional[str]) -> bool:
@@ -197,8 +161,6 @@ async def websocket_stream(
 
     await websocket.accept()
     stream_id = f"stream_{uuid.uuid4().hex[:8]}"
-    session: Optional[BridgeSession] = None
-    step_task: Optional[asyncio.Task] = None
 
     try:
         # 4. Wait for stream.start message
@@ -253,104 +215,17 @@ async def websocket_stream(
             await websocket.close(code=1013)
             return
 
-        # Initialize session & scheduler stream
-        session = BridgeSession(
-            stream_id=stream_id,
-            model=model,
-            language=language,
-            step_ms=settings.STREAMING_BRIDGE_STEP_MS,
-            min_window_ms=settings.STREAMING_BRIDGE_MIN_WINDOW_MS,
-            segment_max_ms=settings.STREAMING_BRIDGE_SEGMENT_MAX_MS,
-            segment_silence_ms=settings.STREAMING_BRIDGE_SEGMENT_SILENCE_MS,
-        )
-        active_sessions[stream_id] = session
+        active_sessions[stream_id] = {"model": model, "language": language}
         if scheduler:
             scheduler.register_stream(stream_id, model, language)
 
-        # Notify client ready
         await websocket.send_json({"type": "stream.ready", "stream_id": stream_id})
 
-        # Periodic step timer for partial decodes
-        async def step_worker():
-            while not session.is_closed:
-                effective_step_ms = scheduler.get_effective_step_ms(stream_id, session.step_ms) if scheduler else session.step_ms
-                await asyncio.sleep(effective_step_ms / 1000.0)
-                if session.is_eligible_for_partial() and scheduler:
-                    wav_snapshot = session.get_current_segment_wav()
-                    try:
-                        raw_text = await scheduler.schedule_decode(
-                            stream_id=stream_id,
-                            segment_id=session.segment_id,
-                            seq=session.seq + 1,
-                            wav_bytes=wav_snapshot,
-                            is_final=False,
-                        )
-                        if raw_text is not None and not session.is_closed:
-                            part_event = session.process_partial_result(raw_text)
-                            await websocket.send_json(part_event)
-                    except Exception as e:
-                        logger.error("Error during partial decode in stream %s: %s", stream_id, e)
-
-        step_task = asyncio.create_task(step_worker())
-
-        # Main message receive loop
-        while not session.is_closed:
+        while True:
             msg = await websocket.receive()
-            if "bytes" in msg and msg["bytes"]:
-                pcm_chunk = msg["bytes"]
-                should_cut = session.append_pcm(pcm_chunk)
-                if should_cut:
-                    # Segment boundary reached: run final decode of segment
-                    final_text = None
-                    final_degraded = False
-                    if not session.can_reuse_last_decode_for_final() and scheduler:
-                        wav_bytes = session.get_current_segment_wav()
-                        res = await scheduler.schedule_decode(
-                            stream_id=stream_id,
-                            segment_id=session.segment_id,
-                            seq=session.seq + 1,
-                            wav_bytes=wav_bytes,
-                            is_final=True,
-                        )
-                        if isinstance(res, dict):
-                            final_text = res.get("text")
-                            final_degraded = bool(res.get("final_degraded", False))
-                        else:
-                            final_text = res
-                    seg_event, _ = session.cut_segment(final_text, final_degraded=final_degraded)
-                    await websocket.send_json(seg_event)
-
-            elif "text" in msg and msg["text"]:
+            if "text" in msg and msg["text"]:
                 txt_payload = json.loads(msg["text"])
-                msg_type = txt_payload.get("type")
-
-                if msg_type == "audio.commit":
-                    # Commit entire stream
-                    final_text = None
-                    final_degraded = False
-                    if not session.can_reuse_last_decode_for_final() and scheduler:
-                        wav_bytes = session.get_current_segment_wav()
-                        res = await scheduler.schedule_decode(
-                            stream_id=stream_id,
-                            segment_id=session.segment_id,
-                            seq=session.seq + 1,
-                            wav_bytes=wav_bytes,
-                            is_final=True,
-                        )
-                        if isinstance(res, dict):
-                            final_text = res.get("text")
-                            final_degraded = bool(res.get("final_degraded", False))
-                        else:
-                            final_text = res
-                    comp_event = session.complete_stream(final_text, final_degraded=final_degraded)
-                    await websocket.send_json(comp_event)
-                    await websocket.close()
-                    break
-
-                elif msg_type == "stream.cancel":
-                    session.is_closed = True
-                    if scheduler:
-                        scheduler.cancel_stream(stream_id)
+                if txt_payload.get("type") in ("audio.commit", "stream.cancel"):
                     await websocket.close()
                     break
 
@@ -359,8 +234,6 @@ async def websocket_stream(
     except Exception as e:
         logger.error("Exception in stream %s: %s", stream_id, e)
     finally:
-        if step_task:
-            step_task.cancel()
         active_sessions.pop(stream_id, None)
         if scheduler:
             scheduler.cancel_stream(stream_id)

@@ -24,7 +24,7 @@ from typing import Dict, Optional, Tuple
 import httpx
 import numpy as np
 
-from services.streaming_bridge.core.audio_utils import pcm16_to_wav
+from app.services.audio_utils import build_wav_from_pcm
 from services.streaming_bridge.scheduler.bridge_scheduler import BridgeScheduler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -154,8 +154,8 @@ async def run_calibration(
 
     # 16kHz mono synthetic audio slices for 6s and 15s decode checks
     sample_rate = 16000
-    wav_6s = pcm16_to_wav(b"\x00\x05" * (sample_rate * 6), sample_rate=sample_rate)
-    wav_15s = pcm16_to_wav(b"\x00\x05" * (sample_rate * 15), sample_rate=sample_rate)
+    wav_6s = build_wav_from_pcm(b"\x00\x05" * (sample_rate * 6), sample_rate=sample_rate)
+    wav_15s = build_wav_from_pcm(b"\x00\x05" * (sample_rate * 15), sample_rate=sample_rate)
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         # A. Measure 6s and 15s decode latencies

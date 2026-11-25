@@ -208,9 +208,9 @@ class StreamingSTTClient(STTProvider):
                 if chunk:
                     pcm_buffer.extend(chunk)
             from app.providers.localai_stt import LocalAISTTClient
-            from services.streaming_bridge.core.audio_utils import pcm16_to_wav
+            from app.services.audio_utils import build_wav_from_pcm
             batch_client = LocalAISTTClient()
-            wav_bytes = pcm16_to_wav(bytes(pcm_buffer), sample_rate=16000)
+            wav_bytes = build_wav_from_pcm(bytes(pcm_buffer), sample_rate=16000)
             batch_resp = await batch_client.transcribe(
                 audio_bytes=wav_bytes,
                 model=target_model,
