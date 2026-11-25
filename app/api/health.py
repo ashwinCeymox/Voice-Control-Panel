@@ -57,7 +57,9 @@ async def health_ready():
 
         streaming_bridge_ok = False
         streaming_bridge_info = {}
-        if settings.STREAMING_BRIDGE_ENABLED:
+        from app.services.streaming_bridge_client import native_service_enabled
+        native_on = native_service_enabled()
+        if native_on:
             try:
                 bridge_health_url = f"{settings.STREAMING_BRIDGE_URL.rstrip('/')}/health"
                 r = await client.get(bridge_health_url)
@@ -90,7 +92,7 @@ async def health_ready():
         },
     }
 
-    if settings.STREAMING_BRIDGE_ENABLED:
+    if native_on:
         providers["streaming_bridge"] = {
             "reachable": streaming_bridge_ok,
             "status": "ready" if streaming_bridge_ok else "offline",

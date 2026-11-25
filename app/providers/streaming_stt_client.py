@@ -178,24 +178,25 @@ class StreamingSTTClient(STTProvider):
         if target_lang == "auto":
             target_lang = "en"
 
-        # Routing based on registry transports
+        # Routing strictly by registry metadata (transports + streaming_backend), never model-name strings
         from app.services.model_registry import model_registry
-        transports = await model_registry.get_model_transports(target_model)
+        from app.services.streaming_bridge_client import native_service_enabled, stream_via_bridge
 
-        # 1. ws_stream_bridge: Bridge streaming transport
-        if "ws_stream_bridge" in transports:
-            from app.services.streaming_bridge_client import stream_via_bridge
-            async for evt in stream_via_bridge(audio_stream, target_model, target_lang, self.timeout):
-                yield evt
-            return
+        spec = await model_registry.get_model_streaming_spec(target_model)
+        transports = spec.get("transports", [])
+        streaming_backend = spec.get("streaming_backend")
 
-        # 2. ws_stream_native: Native Sherpa-ONNX streaming transport
+        # 1. ws_stream_native: route to configured native engine backend
         if "ws_stream_native" in transports:
+            if streaming_backend == "parakeet_native":
+                async for evt in stream_via_bridge(audio_stream, target_model, target_lang, self.timeout):
+                    yield evt
+                return
             async for evt in self._stream_sherpa(audio_stream, target_model, target_lang):
                 yield evt
             return
 
-        # 3. Fallback to batch if enabled
+        # 2. Fallback to batch if enabled
         if getattr(settings, "STREAMING_BRIDGE_FALLBACK_TO_BATCH", False) and "batch_http" in transports:
             logger.info("Streaming unavailable for model '%s'; falling back to batch STT per policy", target_model)
             yield {
@@ -225,8 +226,8 @@ class StreamingSTTClient(STTProvider):
             }
             return
 
-        # 4. If flag is off, preserve legacy paths for un-migrated models
-        if not getattr(settings, "STREAMING_BRIDGE_ENABLED", False):
+        # 3. If flag is off, preserve platform behavior identically
+        if not native_service_enabled():
             if self.is_localai_model(target_model):
                 async for evt in self._stream_localai(audio_stream, target_model, target_lang):
                     yield evt
@@ -235,7 +236,7 @@ class StreamingSTTClient(STTProvider):
                 yield evt
             return
 
-        # Explicit error if bridge enabled but model has no streaming transport and fallback is off
+        # Explicit error if native service enabled but model has no streaming transport and fallback is off
         raise StreamingModelNotLoadedError(
             target_model,
             details=f"Model '{target_model}' has no active streaming transport (transports: {transports})",

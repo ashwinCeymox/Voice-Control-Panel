@@ -90,11 +90,12 @@ class Settings(BaseSettings):
     STREAMING_STT_CHUNK_MS: int = int(os.environ.get("STREAMING_STT_CHUNK_MS", "560"))
     STREAMING_STT_LANGUAGE: str = os.environ.get("STREAMING_STT_LANGUAGE", "en")
 
-    # Streaming STT Bridge (LocalAI Bridge :8089)
+    # Native Streaming STT Service (:8089) & Bridge compat
+    STT_STREAM_NATIVE_ENABLED: bool = os.environ.get("STT_STREAM_NATIVE_ENABLED", "false").lower() == "true"
     STREAMING_BRIDGE_PORT: int = 8089
     STREAMING_BRIDGE_URL: str = "http://127.0.0.1:8089"
     STREAMING_BRIDGE_WS_URL: str = "ws://127.0.0.1:8089/ws"
-    STREAMING_BRIDGE_ENABLED: bool = False
+    STREAMING_BRIDGE_ENABLED: bool = os.environ.get("STREAMING_BRIDGE_ENABLED", "false").lower() == "true"
     STREAMING_BRIDGE_STEP_MS: int = 1000
     STREAMING_BRIDGE_MIN_WINDOW_MS: int = 1200
     STREAMING_BRIDGE_SEGMENT_MAX_MS: int = 15000

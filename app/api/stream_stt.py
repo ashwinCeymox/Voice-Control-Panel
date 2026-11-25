@@ -28,6 +28,7 @@ streaming_client = StreamingSTTClient()
 
 class STTSettingsUpdate(BaseModel):
     stt_stream_enabled: Optional[bool] = None
+    stt_stream_native_enabled: Optional[bool] = None
     streaming_bridge_enabled: Optional[bool] = None
     default_kind: Optional[str] = Field(None, pattern="^(batch|streaming)$")
     max_active_streams: Optional[int] = Field(None, ge=1, le=50)
@@ -42,9 +43,12 @@ async def get_stt_settings(
     admin: ApiKeyRecord = Depends(require_admin_key),
 ) -> Dict[str, Any]:
     """Get global STT configuration (kill switch, default mode, stream caps, precision, backend provider)."""
+    from app.services.streaming_bridge_client import native_service_enabled
+    native_on = native_service_enabled()
     return {
         "stt_stream_enabled": settings.STT_STREAM_ENABLED,
-        "streaming_bridge_enabled": settings.STREAMING_BRIDGE_ENABLED,
+        "stt_stream_native_enabled": native_on,
+        "streaming_bridge_enabled": native_on,
         "default_kind": "streaming" if settings.STT_STREAM_ENABLED else "batch",
         "max_active_streams": settings.MAX_ACTIVE_STT_STREAMS,
         "default_model": settings.STREAMING_STT_DEFAULT_MODEL,
@@ -63,8 +67,14 @@ async def update_stt_settings(
     """Update global STT configuration live without requiring server restart."""
     if payload.stt_stream_enabled is not None:
         settings.STT_STREAM_ENABLED = payload.stt_stream_enabled
-    if payload.streaming_bridge_enabled is not None:
-        settings.STREAMING_BRIDGE_ENABLED = payload.streaming_bridge_enabled
+    flag_val = (
+        payload.stt_stream_native_enabled
+        if payload.stt_stream_native_enabled is not None
+        else payload.streaming_bridge_enabled
+    )
+    if flag_val is not None:
+        settings.STT_STREAM_NATIVE_ENABLED = flag_val
+        settings.STREAMING_BRIDGE_ENABLED = flag_val
         from app.services.model_registry import model_registry
         model_registry.invalidate_cache()
     if payload.max_active_streams is not None:
@@ -78,9 +88,12 @@ async def update_stt_settings(
     if payload.language is not None:
         settings.STREAMING_STT_LANGUAGE = payload.language
 
+    from app.services.streaming_bridge_client import native_service_enabled
+    native_on = native_service_enabled()
     return {
         "stt_stream_enabled": settings.STT_STREAM_ENABLED,
-        "streaming_bridge_enabled": settings.STREAMING_BRIDGE_ENABLED,
+        "stt_stream_native_enabled": native_on,
+        "streaming_bridge_enabled": native_on,
         "default_kind": payload.default_kind
         or ("streaming" if settings.STT_STREAM_ENABLED else "batch"),
         "max_active_streams": settings.MAX_ACTIVE_STT_STREAMS,
@@ -296,8 +309,11 @@ async def audio_transcription_stream(
                     "default",
                 }
             )
-            from app.services.streaming_bridge_client import bridge_available
-            if bridge_available(req_model_str):
+            from app.services.model_registry import model_registry
+            from app.services.streaming_bridge_client import native_service_available
+
+            spec = await model_registry.get_model_streaming_spec(req_model_str)
+            if "ws_stream_native" in spec.get("transports", []) or native_service_available(req_model_str):
                 valid_set.add(req_model_str.lower())
 
             if req_model_str.lower() not in valid_set:

@@ -277,22 +277,23 @@ class ModelRegistryService:
                     )
 
             if task == "stt":
-                transports = ["batch_http"]
-                from app.services.streaming_bridge_client import bridge_available
-                if bridge_available(mid):
-                    transports.append("ws_stream_bridge")
-                    streaming_mode = "simulated"
-                else:
-                    streaming_mode = "none"
+                from app.services.streaming_bridge_client import resolve_stt_streaming_metadata
+                meta = resolve_stt_streaming_metadata(mid, engine="localai", runtime=runtime)
+                transports = meta["transports"]
+                streaming_mode = meta["streaming_mode"]
+                streaming_backend = meta["streaming_backend"]
             elif task == "llm":
                 transports = ["chat_http"]
                 streaming_mode = "none"
+                streaming_backend = None
             elif task == "tts":
                 transports = ["tts_http"]
                 streaming_mode = "none"
+                streaming_backend = None
             else:
                 transports = []
                 streaming_mode = "none"
+                streaming_backend = None
 
             models.append(
                 {
@@ -315,6 +316,7 @@ class ModelRegistryService:
                     "classification_confidence": confidence,
                     "transports": transports,
                     "streaming_mode": streaming_mode,
+                    "streaming_backend": streaming_backend,
                 }
             )
 
@@ -342,6 +344,7 @@ class ModelRegistryService:
                     data.setdefault("classification_confidence", "high")
                     data.setdefault("transports", ["ws_stream_native"])
                     data.setdefault("streaming_mode", "native")
+                    data.setdefault("streaming_backend", "sherpa")
                     models.append(data)
                     continue
                 except Exception as e:
@@ -374,6 +377,7 @@ class ModelRegistryService:
                     "classification_confidence": "medium",
                     "transports": ["ws_stream_native"],
                     "streaming_mode": "native",
+                    "streaming_backend": "sherpa",
                 }
                 # Backfill model.json
                 try:
@@ -598,21 +602,35 @@ class ModelRegistryService:
             "display_name": display_name,
         }
 
-    async def get_model_transports(self, model_id: str) -> List[str]:
-        """Return list of supported transports for model (batch_http, ws_stream_native, ws_stream_bridge)."""
+    async def get_model_streaming_spec(self, model_id: str) -> Dict[str, Any]:
+        """Return registry streaming metadata (transports, streaming_mode, streaming_backend)."""
+        from app.services.streaming_bridge_client import resolve_stt_streaming_metadata
+
         models = await self.list_models()
         m_lower = model_id.lower().strip()
         for m in models:
             mid = m.get("id", "").lower()
-            if mid == m_lower or m_lower in mid or mid in m_lower:
-                return m.get("transports", [])
-        # Fallback if model not yet scanned into registry:
-        from app.services.streaming_bridge_client import bridge_available
-        if bridge_available(model_id):
-            return ["batch_http", "ws_stream_bridge"]
-        if any(k in m_lower for k in ("sherpa-onnx", "zipformer")):
-            return ["ws_stream_native"]
-        return ["batch_http"]
+            if mid == m_lower or (m_lower and (m_lower in mid or mid in m_lower)):
+                transports = m.get("transports")
+                backend = m.get("streaming_backend")
+                mode = m.get("streaming_mode")
+                if transports is not None and (backend is not None or "ws_stream_native" not in transports):
+                    return {
+                        "transports": transports,
+                        "streaming_mode": mode or "none",
+                        "streaming_backend": backend,
+                    }
+                return resolve_stt_streaming_metadata(
+                    m.get("id", model_id),
+                    engine=m.get("engine"),
+                    runtime=m.get("runtime"),
+                )
+        return resolve_stt_streaming_metadata(model_id)
+
+    async def get_model_transports(self, model_id: str) -> List[str]:
+        """Return list of supported transports for model from registry."""
+        spec = await self.get_model_streaming_spec(model_id)
+        return list(spec.get("transports", []))
 
 
 model_registry = ModelRegistryService()

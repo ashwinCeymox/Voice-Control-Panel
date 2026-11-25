@@ -1,17 +1,11 @@
-"""Gateway client and routing adapter for Streaming STT Bridge (:8089).
-
-Handles:
-1. `bridge_available(model)`: Helper verifying flag, internal token, and host calibration.
-2. `VoiceBusyManager`: Fire-and-forget `voice_busy` signaling to bridge with turn counting and outage immunity.
-3. `stream_via_bridge`: Connects to `STREAMING_BRIDGE_WS_URL` with internal token in header (never in URL/logs),
-   forwards audio and control frames, maps events to public schemas, and handles explicit fallback if enabled.
-"""
+"""Gateway client, registry eligibility helpers, and routing adapter for Native Streaming STT (:8089)."""
 
 import asyncio
 from contextlib import asynccontextmanager
 import json
 import logging
-from typing import AsyncGenerator, Dict, Any, Optional
+from pathlib import Path
+from typing import Any, AsyncGenerator, Dict, Optional
 import httpx
 import websockets
 
@@ -21,14 +15,81 @@ from app.core.errors import StreamingUnavailableError
 logger = logging.getLogger("voice_agent.services.streaming_bridge_client")
 
 
-def bridge_available(model: Optional[str]) -> bool:
-    """Return True only if STREAMING_BRIDGE_ENABLED is True, token is present, and calibration passes for host and model."""
-    if not getattr(settings, "STREAMING_BRIDGE_ENABLED", False):
+def native_service_enabled() -> bool:
+    """Return True if STT_STREAM_NATIVE_ENABLED (or compat STREAMING_BRIDGE_ENABLED) is True."""
+    return bool(
+        getattr(settings, "STT_STREAM_NATIVE_ENABLED", False)
+        or getattr(settings, "STREAMING_BRIDGE_ENABLED", False)
+    )
+
+
+def _find_parakeet_yaml_config(model_id: str) -> Optional[str]:
+    """Read-only lookup of a matching LocalAI YAML config under LOCALAI_MODELS_PATH."""
+    models_dir_cfg = getattr(settings, "LOCALAI_MODELS_PATH", None)
+    if not models_dir_cfg:
+        return None
+    models_dir = Path(str(models_dir_cfg))
+    if not models_dir.is_dir():
+        return None
+    norm = model_id.strip().lower()
+    for p in sorted(models_dir.glob("*.yaml")):
+        if p.name.startswith("._"):
+            continue
+        if p.stem.lower() == norm or norm in p.stem.lower():
+            try:
+                return p.read_text(errors="replace")
+            except OSError:
+                return None
+    return None
+
+
+def is_native_parakeet_eligible(model_id: Optional[str]) -> bool:
+    """Determine if a model is eligible for native :8089 parakeet.cpp streaming.
+
+    Reads installed LocalAI YAML configs when present:
+    - Requires backend `parakeet-cpp`.
+    - Excludes `realtime-scene` multi-model configs (requires separate scene API)
+      and uninstalled `nemotron` until tested/verified on pod.
+    - Currently eligible: `parakeet-cpp-realtime_eou_120m-v1`.
+    """
+    if not model_id or not str(model_id).strip():
+        return False
+    low = str(model_id).strip().lower()
+
+    # Never admit multi-model scene configs or unverified nemotron until explicitly tested
+    if "scene" in low or "nemotron" in low or "diariz" in low:
+        return False
+
+    yaml_txt = _find_parakeet_yaml_config(model_id)
+    if yaml_txt is not None:
+        yaml_low = yaml_txt.lower()
+        if "parakeet-cpp" not in yaml_low:
+            return False
+        if "diarization_model" in yaml_low or "sound_model" in yaml_low:
+            return False
+        # Verify EOU GGUF exists when YAML is inspected locally
+        for line in yaml_txt.splitlines():
+            s = line.strip()
+            if s.startswith("model:"):
+                rel = s.split(":", 1)[1].strip().strip('"').strip("'")
+                models_dir = Path(str(settings.LOCALAI_MODELS_PATH))
+                gguf_path = Path(rel) if Path(rel).is_absolute() else (models_dir / rel)
+                if not gguf_path.is_file():
+                    return False
+                break
+        return "eou" in low or "eou" in yaml_low
+
+    return "parakeet-cpp" in low and "eou" in low
+
+
+def native_service_available(model: Optional[str]) -> bool:
+    """Return True only if flag is ON, token exists, model is S0-eligible, and host calibration passes."""
+    if not native_service_enabled():
         return False
     token = getattr(settings, "STREAMING_BRIDGE_INTERNAL_TOKEN", None)
     if not token or not str(token).strip():
         return False
-    if not model or not str(model).strip():
+    if not is_native_parakeet_eligible(model):
         return False
 
     try:
@@ -40,8 +101,47 @@ def bridge_available(model: Optional[str]) -> bool:
         return False
 
 
+# Preserved name alias for existing imports during S3->S4 transition
+bridge_available = native_service_available
+
+
+def resolve_stt_streaming_metadata(
+    model_id: str,
+    *,
+    provider: Optional[str] = None,
+    engine: Optional[str] = None,
+    runtime: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Single source of truth for STT transports, streaming_mode, and streaming_backend."""
+    low = (model_id or "").lower()
+    if (
+        provider == "stream-stt"
+        or engine == "streaming-stt"
+        or runtime == "sherpa-onnx"
+        or any(k in low for k in ("sherpa", "zipformer"))
+    ):
+        return {
+            "transports": ["ws_stream_native"],
+            "streaming_mode": "native",
+            "streaming_backend": "sherpa",
+        }
+
+    if native_service_available(model_id):
+        return {
+            "transports": ["batch_http", "ws_stream_native"],
+            "streaming_mode": "native",
+            "streaming_backend": "parakeet_native",
+        }
+
+    return {
+        "transports": ["batch_http"],
+        "streaming_mode": "none",
+        "streaming_backend": None,
+    }
+
+
 class VoiceBusyManager:
-    """Coordinates voice_busy signaling to bridge daemon with turn-counter overlap tracking."""
+    """Coordinates voice_busy signaling to :8089 daemon with turn-counter overlap tracking."""
 
     def __init__(self):
         self._active_count: int = 0
@@ -54,7 +154,7 @@ class VoiceBusyManager:
         return self._http_client
 
     async def _send_signal(self, event: str):
-        if not getattr(settings, "STREAMING_BRIDGE_ENABLED", False):
+        if not native_service_enabled():
             return
         token = getattr(settings, "STREAMING_BRIDGE_INTERNAL_TOKEN", None)
         if not token or not str(token).strip():
@@ -67,30 +167,26 @@ class VoiceBusyManager:
             client = self._get_client()
             await client.post(url, json={"event": event}, headers=headers)
         except Exception as e:
-            # Fire-and-forget: bridge outage must NEVER delay or fail a voice turn
             logger.debug("Voice busy signal '%s' failed (non-fatal): %s", event, e)
 
     async def start_busy(self):
-        if not getattr(settings, "STREAMING_BRIDGE_ENABLED", False):
+        if not native_service_enabled():
             return
         async with self._lock:
             self._active_count += 1
             if self._active_count == 1:
-                # First overlapping turn active: send signal in background
                 asyncio.create_task(self._send_signal("voice_busy_start"))
 
     async def end_busy(self):
-        if not getattr(settings, "STREAMING_BRIDGE_ENABLED", False):
+        if not native_service_enabled():
             return
         async with self._lock:
             self._active_count = max(0, self._active_count - 1)
             if self._active_count == 0:
-                # All active turns completed: send signal in background
                 asyncio.create_task(self._send_signal("voice_busy_end"))
 
     @asynccontextmanager
     async def track_voice_busy(self):
-        """Context manager guaranteeing end_busy is invoked even on exceptions."""
         await self.start_busy()
         try:
             yield
@@ -107,7 +203,7 @@ async def stream_via_bridge(
     target_lang: str = "en",
     timeout: float = 15.0,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """Connect to Streaming STT Bridge over WebSocket and yield mapped public transcription events."""
+    """Connect to Native Streaming STT Service (:8089) over WebSocket and map public events."""
     token = getattr(settings, "STREAMING_BRIDGE_INTERNAL_TOKEN", None)
     if not token or not str(token).strip():
         yield {
@@ -119,8 +215,6 @@ async def stream_via_bridge(
 
     bridge_ws_url = getattr(settings, "STREAMING_BRIDGE_WS_URL", "ws://127.0.0.1:8089/ws")
     headers = {"X-Bridge-Token": str(token).strip()}
-
-    # Buffer PCM in case explicit fallback to batch is triggered
     pcm_accumulator = bytearray()
 
     async def fallback_to_batch(reason: str, message: str) -> AsyncGenerator[Dict[str, Any], None]:
@@ -130,7 +224,6 @@ async def stream_via_bridge(
             "reason": reason,
             "message": message,
         }
-        # Drain remaining audio from stream
         try:
             async for chunk in audio_stream:
                 if chunk:
@@ -158,53 +251,57 @@ async def stream_via_bridge(
     ws = None
     try:
         try:
-            # Token passed ONLY in HTTP handshake header, NEVER in query params or logged
-            ws = await websockets.connect(
-                bridge_ws_url,
-                additional_headers=headers,
-                open_timeout=min(timeout, 5.0),
-            )
+            try:
+                ws = await websockets.connect(bridge_ws_url, additional_headers=headers, open_timeout=5.0)
+            except TypeError:
+                ws = await websockets.connect(bridge_ws_url, extra_headers=headers, open_timeout=5.0)
         except Exception as conn_err:
-            logger.warning("Bridge WebSocket connection failed: %s", conn_err)
+            logger.warning("Native streaming connection failed on %s: %s", bridge_ws_url, conn_err)
             if getattr(settings, "STREAMING_BRIDGE_FALLBACK_TO_BATCH", False):
-                async for evt in fallback_to_batch("bridge_unavailable", f"Bridge connection failed: {conn_err}"):
+                async for evt in fallback_to_batch("bridge_unavailable", f"Streaming service unreachable: {conn_err}"):
                     yield evt
                 return
             yield {
                 "type": "error",
                 "code": "BRIDGE_UNAVAILABLE",
-                "message": f"Streaming bridge service unreachable: {conn_err}",
+                "message": f"Streaming service unavailable: {conn_err}",
             }
             return
 
-        # 1. Send stream.start
-        await ws.send(json.dumps({
+        start_payload = {
             "type": "stream.start",
             "model": target_model,
             "language": target_lang,
             "format": "pcm_s16le",
             "sample_rate": 16000,
-        }))
+        }
+        await ws.send(json.dumps(start_payload))
 
-        # 2. Wait for initial response (stream.ready or error)
-        init_raw = await asyncio.wait_for(ws.recv(), timeout=min(timeout, 5.0))
-        init_data = json.loads(init_raw) if isinstance(init_raw, str) else {}
-
-        if init_data.get("type") == "error":
-            code = init_data.get("code", "BRIDGE_ERROR")
-            msg = init_data.get("message", "Bridge handshake rejected")
+        ready_raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+        ready_msg = json.loads(ready_raw)
+        if ready_msg.get("type") == "error":
+            err_code = ready_msg.get("code", "BRIDGE_ERROR")
+            err_msg = ready_msg.get("message", "Streaming service refused stream")
             if getattr(settings, "STREAMING_BRIDGE_FALLBACK_TO_BATCH", False):
-                async for evt in fallback_to_batch(code, msg):
+                async for evt in fallback_to_batch(err_code.lower(), err_msg):
                     yield evt
                 return
             yield {
                 "type": "error",
-                "code": code,
-                "message": msg,
+                "code": err_code,
+                "message": err_msg,
+                "retry_after_ms": ready_msg.get("retry_after_ms"),
             }
             return
 
-        # 3. Stream audio and handle incoming bridge events
+        if ready_msg.get("type") != "stream.ready":
+            yield {
+                "type": "error",
+                "code": "INVALID_BRIDGE_HANDSHAKE",
+                "message": f"Unexpected handshake message: {ready_msg}",
+            }
+            return
+
         event_queue: asyncio.Queue = asyncio.Queue()
         stop_event = asyncio.Event()
 
@@ -217,7 +314,7 @@ async def stream_via_bridge(
                         if data.get("type") in ("transcript.completed", "error"):
                             break
             except Exception as recv_err:
-                logger.debug("Bridge receiver loop ended: %s", recv_err)
+                logger.debug("Streaming receiver loop ended: %s", recv_err)
             finally:
                 stop_event.set()
 
@@ -229,7 +326,6 @@ async def stream_via_bridge(
                     pcm_accumulator.extend(chunk)
                     await ws.send(chunk)
 
-                # Emit any pending events from bridge
                 while not event_queue.empty():
                     evt = event_queue.get_nowait()
                     mapped = _map_bridge_event(evt, target_model)
@@ -238,11 +334,9 @@ async def stream_via_bridge(
                     if evt.get("type") in ("transcript.completed", "error"):
                         break
 
-            # Client finished audio: commit
             await ws.send(json.dumps({"type": "audio.commit"}))
             await asyncio.wait_for(stop_event.wait(), timeout=timeout)
 
-            # Drain final events
             while not event_queue.empty():
                 evt = event_queue.get_nowait()
                 mapped = _map_bridge_event(evt, target_model)
@@ -258,7 +352,7 @@ async def stream_via_bridge(
                     pass
 
     except websockets.ConnectionClosed as cc:
-        logger.debug("Bridge WebSocket closed: %s", cc)
+        logger.debug("Streaming WebSocket closed: %s", cc)
     finally:
         if ws is not None:
             try:
@@ -270,11 +364,11 @@ async def stream_via_bridge(
 
 
 def _map_bridge_event(raw_evt: Dict[str, Any], default_model: str) -> Optional[Dict[str, Any]]:
-    """Map internal bridge events to the public event schemas."""
+    """Map internal native service events to public gateway event schemas."""
     etype = raw_evt.get("type")
 
     if etype == "transcript.partial":
-        return {
+        out: Dict[str, Any] = {
             "type": "transcript.partial",
             "seq": raw_evt.get("seq", 0),
             "confirmed": raw_evt.get("confirmed", ""),
@@ -283,6 +377,11 @@ def _map_bridge_event(raw_evt: Dict[str, Any], default_model: str) -> Optional[D
             "segment_id": raw_evt.get("segment_id", 0),
             "degraded": raw_evt.get("degraded", False),
         }
+        if "eou" in raw_evt:
+            out["eou"] = raw_evt["eou"]
+        if "eob" in raw_evt:
+            out["eob"] = raw_evt["eob"]
+        return out
     elif etype == "segment.final":
         return {
             "type": "segment.final",
@@ -291,18 +390,34 @@ def _map_bridge_event(raw_evt: Dict[str, Any], default_model: str) -> Optional[D
             "revised": raw_evt.get("revised", False),
             "final_degraded": raw_evt.get("final_degraded", False),
         }
-    elif etype == "transcript.completed":
+    elif etype == "stream.paused":
         return {
+            "type": "stream.paused",
+            "reason": raw_evt.get("reason", "voice_turn_active"),
+            "buffered_chunks": raw_evt.get("buffered_chunks", 0),
+        }
+    elif etype == "stream.resumed":
+        return {
+            "type": "stream.resumed",
+            "buffered_chunks": raw_evt.get("buffered_chunks", 0),
+        }
+    elif etype == "transcript.completed":
+        out = {
             "type": "transcript.completed",
             "text": raw_evt.get("text", ""),
             "model_used": raw_evt.get("model_used", default_model),
             "duration": raw_evt.get("duration", 0.0),
             "final_degraded": raw_evt.get("final_degraded", False),
         }
+        if "eou" in raw_evt:
+            out["eou"] = raw_evt["eou"]
+        if "eob" in raw_evt:
+            out["eob"] = raw_evt["eob"]
+        return out
     elif etype == "error":
         return {
             "type": "error",
             "code": raw_evt.get("code", "BRIDGE_ERROR"),
-            "message": raw_evt.get("message", "Bridge transcription error"),
+            "message": raw_evt.get("message", "Streaming transcription error"),
         }
     return None

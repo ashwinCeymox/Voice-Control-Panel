@@ -38,6 +38,7 @@ class ModelInfo(BaseModel):
     installed: Optional[bool] = True
     size_mb: Optional[int] = 0
     streaming_mode: Optional[str] = "none"
+    streaming_backend: Optional[str] = None
     transports: Optional[List[str]] = None
 
 
