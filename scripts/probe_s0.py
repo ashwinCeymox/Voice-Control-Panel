@@ -722,13 +722,62 @@ def worker_concurrency(mode: str, lib_path: str, model_path: str, n_streams: int
     }))
 
 
-def worker_continuous_stream(lib_path: str, model_path: str, wav_path: str, stop_event_file: str, expected_abi: int) -> None:
+def get_cpu_quota_info() -> dict[str, Any]:
+    info: dict[str, Any] = {"cpu_count": os.cpu_count()}
+    for p in ("/sys/fs/cgroup/cpu.max", "/sys/fs/cgroup/cpu/cpu.cfs_quota_us", "/sys/fs/cgroup/cpu/cpu.cfs_period_us"):
+        try:
+            if Path(p).is_file():
+                info[Path(p).name] = Path(p).read_text().strip()
+        except OSError:
+            pass
+    return info
+
+
+def worker_continuous_stream(
+    lib_path: str,
+    model_path: str,
+    wav_path: str,
+    stop_event_file: str,
+    expected_abi: int,
+    ready_file: str = "",
+    pause_file: str = "",
+) -> None:
     pcm = load_wav_16k_f32(Path(wav_path))
     capi = ParakeetCAPI(lib_path, expected_abi=expected_abi)
     ctx = capi.load(model_path)
+    chunk_samples = int(16000 * 0.160)
     try:
+        if ready_file:
+            Path(ready_file).write_text("ready")
         while not os.path.exists(stop_event_file):
-            stream_once(capi, ctx, pcm, chunk_ms=160, pace_realtime=True, print_partials=False)
+            stream = capi.begin_stream(ctx)
+            try:
+                t_start = time.perf_counter()
+                offset = 0
+                pending: list[list[float]] = []
+                while offset < len(pcm) and not os.path.exists(stop_event_file):
+                    chunk = pcm[offset : offset + chunk_samples]
+                    audio_pos_s = (offset + len(chunk)) / 16000.0
+                    target = t_start + audio_pos_s
+                    now = time.perf_counter()
+                    if target > now:
+                        time.sleep(target - now)
+                    pending.append(chunk)
+                    if pause_file and os.path.exists(pause_file):
+                        offset += chunk_samples
+                        continue
+                    while pending and not (pause_file and os.path.exists(pause_file)):
+                        capi.feed_json(stream, pending.pop(0))
+                    offset += chunk_samples
+                while pending and not os.path.exists(stop_event_file):
+                    if pause_file and os.path.exists(pause_file):
+                        time.sleep(0.05)
+                        continue
+                    capi.feed_json(stream, pending.pop(0))
+                if not os.path.exists(stop_event_file):
+                    capi.finalize_json(stream)
+            finally:
+                capi.free_stream(stream)
     finally:
         capi.free_ctx(ctx)
 
@@ -767,7 +816,15 @@ def detect_llm_model(base_url: str, headers: dict[str, str]) -> Optional[str]:
     return None
 
 
-def measure_voice_turns(base_url: str, tts_url: str, llm_model: str, headers: dict[str, str], turns: int = 20) -> dict[str, Any]:
+def measure_voice_turns(
+    base_url: str,
+    tts_url: str,
+    llm_model: str,
+    headers: dict[str, str],
+    turns: int = 20,
+    pause_file: str = "",
+    req_timeout: float = 30.0,
+) -> dict[str, Any]:
     llm_lat: list[float] = []
     tts_lat: list[float] = []
     tot_lat: list[float] = []
@@ -781,7 +838,7 @@ def measure_voice_turns(base_url: str, tts_url: str, llm_model: str, headers: di
             tts_stream_url,
             payload={"text": text, "model_id": "kokoro", "voice_settings": {"speed": 1.0}},
             headers=headers,
-            timeout=60.0,
+            timeout=req_timeout,
         )
         if st == 200:
             return
@@ -789,70 +846,115 @@ def measure_voice_turns(base_url: str, tts_url: str, llm_model: str, headers: di
             tts_fallback_url,
             payload={"model": "kokoro", "input": text, "voice": "af_bella", "speed": 1.0},
             headers=headers,
-            timeout=60.0,
+            timeout=req_timeout,
         )
         if st2 != 200:
             raise RuntimeError(f"TTS failed: HTTP {st} / fallback {st2}")
 
     # Warmup 2 turns
-    for _ in range(2):
-        http_json(
-            llm_url,
-            payload={
-                "model": llm_model,
-                "messages": [{"role": "user", "content": "Say hello in five words."}],
-                "max_tokens": 30,
-                "temperature": 0.2,
-            },
-            headers=headers,
-            timeout=60.0,
-        )
-        do_tts("Hello, ready to assist you.")
+    for w_idx in range(2):
+        if pause_file:
+            Path(pause_file).write_text("busy")
+        try:
+            try:
+                st_w, _ = http_json(
+                    llm_url,
+                    payload={
+                        "model": llm_model,
+                        "messages": [{"role": "user", "content": "Say hello in five words."}],
+                        "max_tokens": 30,
+                        "temperature": 0.2,
+                    },
+                    headers=headers,
+                    timeout=req_timeout,
+                )
+                if st_w != 200:
+                    raise RuntimeError(f"HTTP {st_w}")
+            except Exception as e:
+                return {"turns": 0, "turns_target": turns, "failed_at": f"warmup_{w_idx+1}_llm", "error": repr(e)}
+            try:
+                do_tts("Hello, ready to assist you.")
+            except Exception as e:
+                return {"turns": 0, "turns_target": turns, "failed_at": f"warmup_{w_idx+1}_tts", "error": repr(e)}
+        finally:
+            if pause_file and os.path.exists(pause_file):
+                os.unlink(pause_file)
+        if pause_file:
+            time.sleep(0.2)
 
-    for _ in range(turns):
+    failed_at: Optional[str] = None
+    error_msg: Optional[str] = None
+    for idx in range(turns):
+        if pause_file:
+            Path(pause_file).write_text("busy")
         t0 = time.perf_counter()
-        st1, _ = http_json(
-            llm_url,
-            payload={
-                "model": llm_model,
-                "messages": [
-                    {"role": "system", "content": "You are a concise voice assistant."},
-                    {"role": "user", "content": "Describe three key functions of an operating system kernel in 40 words."},
-                ],
-                "max_tokens": 50,
-                "temperature": 0.2,
-            },
-            headers=headers,
-            timeout=60.0,
-        )
-        t1 = time.perf_counter()
-        if st1 != 200:
-            raise RuntimeError(f"LLM turn failed: HTTP {st1}")
+        try:
+            st1, _ = http_json(
+                llm_url,
+                payload={
+                    "model": llm_model,
+                    "messages": [
+                        {"role": "system", "content": "You are a concise voice assistant."},
+                        {"role": "user", "content": "Describe three key functions of an operating system kernel in 40 words."},
+                    ],
+                    "max_tokens": 50,
+                    "temperature": 0.2,
+                },
+                headers=headers,
+                timeout=req_timeout,
+            )
+            t1 = time.perf_counter()
+            if st1 != 200:
+                raise RuntimeError(f"HTTP {st1}")
+        except Exception as e:
+            if pause_file and os.path.exists(pause_file):
+                os.unlink(pause_file)
+            failed_at = f"turn_{idx+1}_llm"
+            error_msg = repr(e)
+            break
 
-        do_tts("The kernel manages process scheduling, virtual memory allocation, and hardware device drivers.")
-        t2 = time.perf_counter()
+        try:
+            do_tts("The kernel manages process scheduling, virtual memory allocation, and hardware device drivers.")
+            t2 = time.perf_counter()
+        except Exception as e:
+            if pause_file and os.path.exists(pause_file):
+                os.unlink(pause_file)
+            failed_at = f"turn_{idx+1}_tts"
+            error_msg = repr(e)
+            break
+        finally:
+            if pause_file and os.path.exists(pause_file):
+                os.unlink(pause_file)
 
         llm_lat.append((t1 - t0) * 1000.0)
         tts_lat.append((t2 - t1) * 1000.0)
         tot_lat.append((t2 - t0) * 1000.0)
+        if pause_file:
+            time.sleep(0.25)  # allow buffered catch-up between user turns
 
     s_tot = sorted(tot_lat)
     s_llm = sorted(llm_lat)
     s_tts = sorted(tts_lat)
-    return {
-        "turns": turns,
-        "total_median_ms": round(statistics.median(s_tot), 1),
-        "total_p95_ms": round(percentile(s_tot, 0.95) or 0.0, 1),
-        "total_max_ms": round(max(s_tot), 1),
-        "llm_median_ms": round(statistics.median(s_llm), 1),
-        "llm_p95_ms": round(percentile(s_llm, 0.95) or 0.0, 1),
-        "tts_median_ms": round(statistics.median(s_tts), 1),
+    out: dict[str, Any] = {
+        "turns": len(tot_lat),
+        "turns_target": turns,
+        "total_median_ms": round(statistics.median(s_tot), 1) if s_tot else None,
+        "total_p95_ms": round(percentile(s_tot, 0.95) or 0.0, 1) if s_tot else None,
+        "total_max_ms": round(max(s_tot), 1) if s_tot else None,
+        "llm_median_ms": round(statistics.median(s_llm), 1) if s_llm else None,
+        "llm_p95_ms": round(percentile(s_llm, 0.95) or 0.0, 1) if s_llm else None,
+        "tts_median_ms": round(statistics.median(s_tts), 1) if s_tts else None,
     }
+    if failed_at:
+        out["failed_at"] = failed_at
+        out["error"] = error_msg
+    return out
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Phase S0 Feasibility Probe (Read-Only)")
     parser.add_argument("--discover-only", action="store_true")
+    parser.add_argument("--q6-only", action="store_true", help="Skip Q2-Q5 and run Q6 voice-turn interference diagnostics only")
     parser.add_argument("--library", default="", help="Override path to libparakeet.so / libparakeet.dylib")
     parser.add_argument("--models-dir", default="", help="Override LocalAI models directory")
     parser.add_argument("--expected-abi", type=int, default=EXPECTED_ABI_VERSION, help="Expected parakeet_capi ABI version")
@@ -861,7 +963,7 @@ def main() -> int:
     parser.add_argument("--wav", default="tests/fixtures/audio/quiet_normal_speech.wav")
     parser.add_argument("--out", default="tmp/agent/s0/results.json")
     parser.add_argument("--worker-concurrency", nargs=5, metavar=("MODE", "LIB", "MODEL", "N", "ABI"), help=argparse.SUPPRESS)
-    parser.add_argument("--worker-bg-stream", nargs=4, metavar=("LIB", "MODEL", "STOPFILE", "ABI"), help=argparse.SUPPRESS)
+    parser.add_argument("--worker-bg-stream", nargs=6, metavar=("LIB", "MODEL", "STOPFILE", "ABI", "READYFILE", "PAUSEFILE"), help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     if args.worker_concurrency:
@@ -870,13 +972,15 @@ def main() -> int:
         return 0
 
     if args.worker_bg_stream:
-        lib, model_path, stopfile, exp_abi = args.worker_bg_stream
-        worker_continuous_stream(lib, model_path, args.wav, stopfile, int(exp_abi))
+        lib, model_path, stopfile, exp_abi, readyfile, pausefile = args.worker_bg_stream
+        worker_continuous_stream(lib, model_path, args.wav, stopfile, int(exp_abi), readyfile, pausefile)
         return 0
 
+    cpu_quota = get_cpu_quota_info()
     results_doc: dict[str, Any] = {
         "host": platform.node(),
         "os": f"{platform.system()} {platform.machine()}",
+        "cpu_quota": cpu_quota,
         "expected_abi": args.expected_abi,
         "q1_discovery": {},
         "q8_configs": [],
@@ -886,7 +990,7 @@ def main() -> int:
     }
 
     print("=== PHASE S0 FEASIBILITY PROBE ===")
-    print(f"Host: {results_doc['host']} | OS: {results_doc['os']} | Expected ABI: {args.expected_abi}")
+    print(f"Host: {results_doc['host']} | OS: {results_doc['os']} | Expected ABI: {args.expected_abi} | CPU={cpu_quota}")
 
     # Q1: Discover artifacts
     disc = discover_artifacts()
@@ -1025,125 +1129,205 @@ def main() -> int:
     ]
 
     # Q2, Q3, Q7: Streaming functional + word-to-partial latency
-    print("\n--- Q2, Q3, Q7: Native Streaming Functional & Latency Tests (160 ms chunks) ---")
     stream_models_ready: list[tuple[str, dict[str, Any]]] = []
-    for label, cfg in tested_models:
-        if not cfg:
-            print(f"  [{label}] SKIPPED (installed config/GGUF not found)")
-            continue
-        print(f"\n  Testing {label}: {cfg['name']} ({cfg['resolved_path']})")
-        try:
-            rss0 = get_rss_mb()
-            t_load0 = time.perf_counter()
-            ctx = capi.load(cfg["resolved_path"])
-            load_ms = (time.perf_counter() - t_load0) * 1000.0
-            rss1 = get_rss_mb()
-            print(f"    Loaded ctx in {load_ms:.1f} ms | RSS {rss0:.1f} MB -> {rss1:.1f} MB (+{rss1-rss0:.1f} MB)")
-            res = stream_once(capi, ctx, pcm, chunk_ms=160, pace_realtime=True, print_partials=True)
-            res["load_ms"] = round(load_ms, 1)
-            res["rss_model_delta_mb"] = round(rss1 - rss0, 1)
-            res["works_plain_stream"] = True
-            if cfg is scene_cfg:
-                res["note"] = "Scene uses options (diarization+sound) requiring separate parakeet_capi_scene_stream_* API; plain stream_begin only exercises primary ASR weights."
-            results_doc["q2_q3_q7_streaming"][cfg["name"]] = res
-            print(f"    Summary: {json.dumps({k: v for k, v in res.items() if k != 'words_sample'})}")
-            if cfg in (eou_cfg, nemo_cfg):
-                stream_models_ready.append((label, cfg))
-            capi.free_ctx(ctx)
-        except Exception as e:
-            print(f"    [FAIL] Streaming failed on {label}: {e}")
-            results_doc["q2_q3_q7_streaming"][cfg["name"]] = {"works_plain_stream": False, "error": str(e)}
+    if args.q6_only:
+        print("\n--- Q2-Q5 SKIPPED (--q6-only) ---")
+    else:
+        print("\n--- Q2, Q3, Q7: Native Streaming Functional & Latency Tests (160 ms chunks) ---")
+        for label, cfg in tested_models:
+            if not cfg:
+                print(f"  [{label}] SKIPPED (installed config/GGUF not found)")
+                continue
+            print(f"\n  Testing {label}: {cfg['name']} ({cfg['resolved_path']})")
+            try:
+                rss0 = get_rss_mb()
+                t_load0 = time.perf_counter()
+                ctx = capi.load(cfg["resolved_path"])
+                load_ms = (time.perf_counter() - t_load0) * 1000.0
+                rss1 = get_rss_mb()
+                print(f"    Loaded ctx in {load_ms:.1f} ms | RSS {rss0:.1f} MB -> {rss1:.1f} MB (+{rss1-rss0:.1f} MB)")
+                res = stream_once(capi, ctx, pcm, chunk_ms=160, pace_realtime=True, print_partials=True)
+                res["load_ms"] = round(load_ms, 1)
+                res["rss_model_delta_mb"] = round(rss1 - rss0, 1)
+                res["works_plain_stream"] = True
+                if cfg is scene_cfg:
+                    res["note"] = "Scene uses options (diarization+sound) requiring separate parakeet_capi_scene_stream_* API; plain stream_begin only exercises primary ASR weights."
+                results_doc["q2_q3_q7_streaming"][cfg["name"]] = res
+                print(f"    Summary: {json.dumps({k: v for k, v in res.items() if k != 'words_sample'})}")
+                if cfg in (eou_cfg, nemo_cfg):
+                    stream_models_ready.append((label, cfg))
+                capi.free_ctx(ctx)
+            except Exception as e:
+                print(f"    [FAIL] Streaming failed on {label}: {e}")
+                results_doc["q2_q3_q7_streaming"][cfg["name"]] = {"works_plain_stream": False, "error": str(e)}
 
-    if not stream_models_ready and scene_cfg and results_doc["q2_q3_q7_streaming"].get(scene_cfg["name"], {}).get("works_plain_stream"):
-        stream_models_ready.append(("Realtime Scene primary GGUF", scene_cfg))
+        if not stream_models_ready and scene_cfg and results_doc["q2_q3_q7_streaming"].get(scene_cfg["name"], {}).get("works_plain_stream"):
+            stream_models_ready.append(("Realtime Scene primary GGUF", scene_cfg))
 
-    # Q4 & Q5: Concurrency Mode A (per stream ctx) & Mode B (shared ctx locked), 1/2/3 streams
-    print("\n--- Q4 & Q5: Concurrency (Mode A vs Mode B), RSS, & CPU Scaling ---")
-    for label, cfg in stream_models_ready:
-        print(f"\n  Model: {cfg['name']} ({label})")
-        ref_text = results_doc["q2_q3_q7_streaming"][cfg["name"]].get("final_text", "")
-        model_conc: list[dict[str, Any]] = []
-        for mode in ("mode_a_per_stream", "mode_b_shared_lock"):
-            for n in (1, 2, 3):
-                cmd = make_py_cmd([
-                    __file__,
-                    "--worker-concurrency",
-                    mode,
-                    usable_lib,
-                    cfg["resolved_path"],
-                    str(n),
-                    str(args.expected_abi),
-                    "--wav",
-                    str(wav_path),
-                ])
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-                if proc.returncode != 0:
-                    err_info = proc.stderr.strip()[:400]
-                    print(f"    [{mode:18s} n={n}] CRASHED / FAILED (rc={proc.returncode}): {err_info}")
-                    model_conc.append({"mode": mode, "n_streams": n, "status": f"CRASH_RC_{proc.returncode}", "error": err_info})
-                    break
-                lines = [ln for ln in proc.stdout.splitlines() if ln.strip().startswith("{")]
-                if not lines:
-                    print(f"    [{mode:18s} n={n}] NO JSON OUTPUT")
-                    continue
-                data = json.loads(lines[-1])
-                all_match = all(
-                    (t == ref_text and bool(t))
-                    for t in data.get("final_texts", [])
-                ) and not any(data.get("errors", []))
-                data["matches_baseline"] = all_match
-                model_conc.append(data)
-                print(
-                    f"    [{mode:18s} n={n}] match={all_match} | rss_peak={data['rss_peak_mb']} MB "
-                    f"(+{round(data['rss_after_load_mb']-data['rss_before_mb'], 1)} MB load) | "
-                    f"wall={data['wall_s']}s | cpu_cores={data['cpu_cores_avg']} | "
-                    f"chunk_p50={data['chunk_p50_ms']} ms"
-                )
-        results_doc["q4_q5_concurrency"][cfg["name"]] = model_conc
+        # Q4 & Q5: Concurrency Mode A (per stream ctx) & Mode B (shared ctx locked), 1/2/3 streams
+        print("\n--- Q4 & Q5: Concurrency (Mode A vs Mode B), RSS, & CPU Scaling ---")
+        for label, cfg in stream_models_ready:
+            print(f"\n  Model: {cfg['name']} ({label})")
+            ref_text = results_doc["q2_q3_q7_streaming"][cfg["name"]].get("final_text", "")
+            model_conc: list[dict[str, Any]] = []
+            for mode in ("mode_a_per_stream", "mode_b_shared_lock"):
+                for n in (1, 2, 3):
+                    cmd = make_py_cmd([
+                        __file__,
+                        "--worker-concurrency",
+                        mode,
+                        usable_lib,
+                        cfg["resolved_path"],
+                        str(n),
+                        str(args.expected_abi),
+                        "--wav",
+                        str(wav_path),
+                    ])
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                    if proc.returncode != 0:
+                        err_info = proc.stderr.strip()[:400]
+                        print(f"    [{mode:18s} n={n}] CRASHED / FAILED (rc={proc.returncode}): {err_info}")
+                        model_conc.append({"mode": mode, "n_streams": n, "status": f"CRASH_RC_{proc.returncode}", "error": err_info})
+                        break
+                    lines = [ln for ln in proc.stdout.splitlines() if ln.strip().startswith("{")]
+                    if not lines:
+                        print(f"    [{mode:18s} n={n}] NO JSON OUTPUT")
+                        continue
+                    data = json.loads(lines[-1])
+                    all_match = all(
+                        (t == ref_text and bool(t))
+                        for t in data.get("final_texts", [])
+                    ) and not any(data.get("errors", []))
+                    data["matches_baseline"] = all_match
+                    model_conc.append(data)
+                    print(
+                        f"    [{mode:18s} n={n}] match={all_match} | rss_peak={data['rss_peak_mb']} MB "
+                        f"(+{round(data['rss_after_load_mb']-data['rss_before_mb'], 1)} MB load) | "
+                        f"wall={data['wall_s']}s | cpu_cores={data['cpu_cores_avg']} | "
+                        f"chunk_p50={data['chunk_p50_ms']} ms"
+                    )
+            results_doc["q4_q5_concurrency"][cfg["name"]] = model_conc
 
-    # Q6: Voice-turn interference (20 turns LLM+TTS with 0 vs 1 native stream)
+    # Q6: Voice-turn interference (20 turns LLM+TTS with 0 vs 1 native stream & mitigations)
     print("\n--- Q6: Voice-Turn Interference (20 LLM+TTS turns) ---")
     llm_model = detect_llm_model(args.base_url, headers)
-    ref_cfg = eou_cfg or nemo_cfg or (stream_models_ready[0][1] if stream_models_ready else None)
+    ref_cfg = eou_cfg or nemo_cfg or (stream_models_ready[0][1] if stream_models_ready else scene_cfg)
     if not llm_model or not ref_cfg:
         print(f"  [SKIPPED] Missing active LLM ({llm_model}) on {args.base_url} or reference STT model.")
     else:
         print(f"  LLM={llm_model} ({args.base_url}) | TTS={args.tts_url} | STT bg stream={ref_cfg['name']}")
-        try:
-            base_turns = measure_voice_turns(args.base_url, args.tts_url, llm_model, headers, turns=20)
-            print(f"  Baseline (0 streams):  {json.dumps(base_turns)}")
 
-            stopfile = f"/tmp/s0_stop_{os.getpid()}"
-            if os.path.exists(stopfile):
-                os.unlink(stopfile)
-            bg = subprocess.Popen(make_py_cmd([
+        def _cleanup_paths(*paths: str) -> None:
+            for p in paths:
+                if p and os.path.exists(p):
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
+
+        def _measure_omp2_single_stream() -> dict[str, Any]:
+            env = os.environ.copy()
+            env.update({"OMP_NUM_THREADS": "2", "GOMP_WAIT_POLICY": "PASSIVE"})
+            cmd = make_py_cmd([
                 __file__,
-                "--worker-bg-stream",
+                "--worker-concurrency",
+                "mode_a_per_stream",
                 usable_lib,
                 ref_cfg["resolved_path"],
-                stopfile,
+                "1",
                 str(args.expected_abi),
                 "--wav",
                 str(wav_path),
-            ]), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            ])
+            proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
+            lines = [ln for ln in proc.stdout.splitlines() if ln.strip().startswith("{")]
+            if proc.returncode != 0 or not lines:
+                return {"rc": proc.returncode, "error": proc.stderr.strip()[:300]}
+            return json.loads(lines[-1])
+
+        def _run_with_bg_stream(tag: str, extra_env: Optional[dict[str, str]], use_pause: bool) -> dict[str, Any]:
+            pid = os.getpid()
+            stopfile = f"/tmp/s0_stop_{tag}_{pid}"
+            readyfile = f"/tmp/s0_ready_{tag}_{pid}"
+            pausefile = f"/tmp/s0_pause_{tag}_{pid}" if use_pause else ""
+            errfile = f"/tmp/s0_err_{tag}_{pid}.log"
+            _cleanup_paths(stopfile, readyfile, pausefile, errfile)
+
+            env = os.environ.copy()
+            if extra_env:
+                env.update(extra_env)
+
+            with open(errfile, "w") as err_fp:
+                bg = subprocess.Popen(
+                    make_py_cmd([
+                        __file__,
+                        "--worker-bg-stream",
+                        usable_lib,
+                        ref_cfg["resolved_path"],
+                        stopfile,
+                        str(args.expected_abi),
+                        readyfile,
+                        pausefile,
+                        "--wav",
+                        str(wav_path),
+                    ]),
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=err_fp,
+                )
             try:
-                time.sleep(2.5)
-                int_turns = measure_voice_turns(args.base_url, args.tts_url, llm_model, headers, turns=20)
-                print(f"  With 1 native stream:  {json.dumps(int_turns)}")
-                results_doc["q6_interference"] = {
-                    "llm_model": llm_model,
-                    "stt_model": ref_cfg["name"],
-                    "baseline_0_streams": base_turns,
-                    "with_1_native_stream": int_turns,
-                }
+                deadline = time.perf_counter() + 15.0
+                while not os.path.exists(readyfile) and time.perf_counter() < deadline:
+                    if bg.poll() is not None:
+                        err_txt = Path(errfile).read_text()[-400:] if os.path.exists(errfile) else ""
+                        return {"turns": 0, "failed_at": "bg_worker_startup", "error": f"rc={bg.returncode} {err_txt}"}
+                    time.sleep(0.05)
+                if not os.path.exists(readyfile):
+                    return {"turns": 0, "failed_at": "bg_worker_ready_timeout", "error": "bg stream did not become ready within 15s"}
+
+                res = measure_voice_turns(
+                    args.base_url,
+                    args.tts_url,
+                    llm_model,
+                    headers,
+                    turns=20,
+                    pause_file=pausefile,
+                    req_timeout=25.0,
+                )
+                if bg.poll() is not None:
+                    res["bg_worker_exited_rc"] = bg.returncode
+                    if os.path.exists(errfile):
+                        res["bg_worker_stderr"] = Path(errfile).read_text()[-300:]
+                return res
             finally:
                 Path(stopfile).write_text("stop")
                 try:
                     bg.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     bg.kill()
-                if os.path.exists(stopfile):
-                    os.unlink(stopfile)
+                _cleanup_paths(stopfile, readyfile, pausefile, errfile)
+
+        try:
+            q6_doc: dict[str, Any] = {"llm_model": llm_model, "stt_model": ref_cfg["name"], "cpu_quota": cpu_quota}
+
+            base_turns = measure_voice_turns(args.base_url, args.tts_url, llm_model, headers, turns=20, req_timeout=25.0)
+            print(f"  Baseline (0 streams):               {json.dumps(base_turns)}")
+            q6_doc["baseline_0_streams"] = base_turns
+
+            omp2_perf = _measure_omp2_single_stream()
+            print(f"  1 stream perf (OMP=2 PASSIVE):      {json.dumps({k: omp2_perf.get(k) for k in ('wall_s', 'cpu_cores_avg', 'chunk_p50_ms', 'chunk_p95_ms', 'word_lag_p50_ms', 'errors', 'error')})}")
+            q6_doc["omp2_single_stream_perf"] = omp2_perf
+
+            for key, label, env_ovr, use_pause in (
+                ("with_1_native_stream_default", "With 1 stream (default OMP)        ", None, False),
+                ("with_1_native_stream_omp2", "With 1 stream (OMP=2 PASSIVE)      ", {"OMP_NUM_THREADS": "2", "GOMP_WAIT_POLICY": "PASSIVE"}, False),
+                ("with_1_native_stream_paused", "With 1 stream (paused during turns)", None, True),
+            ):
+                res = _run_with_bg_stream(key, env_ovr, use_pause)
+                print(f"  {label}: {json.dumps(res)}")
+                q6_doc[key] = res
+
+            results_doc["q6_interference"] = q6_doc
         except Exception as e:
             print(f"  [FAIL] Voice-turn interference test error: {e}")
             results_doc["q6_interference"] = {"error": str(e)}
@@ -1153,7 +1337,7 @@ def main() -> int:
 
     # Print compact copy-paste summary table
     print("\n================ PHASE S0 COMPACT SUMMARY TABLE ================")
-    print(f"Library: {usable_lib} (ABI={abi_reported})")
+    print(f"Library: {usable_lib} (ABI={abi_reported}) | CPU={cpu_quota}")
     print(f"Models Dir: {models_dir}")
     for mname, s in results_doc["q2_q3_q7_streaming"].items():
         if s.get("works_plain_stream"):
@@ -1174,11 +1358,25 @@ def main() -> int:
             )
     if results_doc["q6_interference"]:
         q6 = results_doc["q6_interference"]
-        if "baseline_0_streams" in q6:
-            b = q6["baseline_0_streams"]
-            w = q6["with_1_native_stream"]
-            print(f"VOICE0 | med={b['total_median_ms']}ms p95={b['total_p95_ms']}ms max={b['total_max_ms']}ms (LLM med={b['llm_median_ms']}ms)")
-            print(f"VOICE1 | med={w['total_median_ms']}ms p95={w['total_p95_ms']}ms max={w['total_max_ms']}ms (LLM med={w['llm_median_ms']}ms)")
+        omp2 = q6.get("omp2_single_stream_perf")
+        if isinstance(omp2, dict):
+            print(
+                f"OMP2_1S     | wall={omp2.get('wall_s')}s | cpu_cores={omp2.get('cpu_cores_avg')} | "
+                f"chunk_p50={omp2.get('chunk_p50_ms')}ms p95={omp2.get('chunk_p95_ms')}ms"
+            )
+        for tag, key in (
+            ("VOICE0      ", "baseline_0_streams"),
+            ("VOICE1_DEF  ", "with_1_native_stream_default"),
+            ("VOICE1_OMP2 ", "with_1_native_stream_omp2"),
+            ("VOICE1_PAUSE", "with_1_native_stream_paused"),
+        ):
+            v = q6.get(key)
+            if isinstance(v, dict):
+                print(
+                    f"{tag} | turns={v.get('turns')}/{v.get('turns_target')} | "
+                    f"med={v.get('total_median_ms')}ms p95={v.get('total_p95_ms')}ms max={v.get('total_max_ms')}ms "
+                    f"(LLM med={v.get('llm_median_ms')}ms) | err={v.get('failed_at')} {v.get('error', '')}"
+                )
     print(f"Saved JSON report to {args.out}")
     print("================================================================")
     return 0
