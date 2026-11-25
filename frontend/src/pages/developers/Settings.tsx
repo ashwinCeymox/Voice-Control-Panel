@@ -54,7 +54,11 @@ export const Settings: React.FC = () => {
           const sttData = await fetchAdminJson<any>('/v1/admin/settings/stt');
           if (sttData) {
             if (sttData.stt_stream_enabled !== undefined) setSttStreamEnabled(Boolean(sttData.stt_stream_enabled));
-            if (sttData.streaming_bridge_enabled !== undefined) setStreamingBridgeEnabled(Boolean(sttData.streaming_bridge_enabled));
+            if (sttData.stt_stream_native_enabled !== undefined) {
+              setStreamingBridgeEnabled(Boolean(sttData.stt_stream_native_enabled));
+            } else if (sttData.streaming_bridge_enabled !== undefined) {
+              setStreamingBridgeEnabled(Boolean(sttData.streaming_bridge_enabled));
+            }
           }
         } catch {}
       } catch (err: any) {
@@ -89,6 +93,7 @@ export const Settings: React.FC = () => {
           method: 'PUT',
           body: JSON.stringify({
             stt_stream_enabled: sttStreamEnabled,
+            stt_stream_native_enabled: streamingBridgeEnabled,
             streaming_bridge_enabled: streamingBridgeEnabled,
           }),
         });
@@ -221,12 +226,12 @@ export const Settings: React.FC = () => {
           </div>
         </div>
 
-        {/* Streaming STT & Bridge Settings */}
+        {/* Streaming STT Settings */}
         <div className="bg-slate-950 border border-slate-800 rounded-xl p-6 space-y-4 text-xs">
           <div>
-            <h3 className="font-semibold text-slate-200 text-sm">Streaming STT & Simulated Bridge</h3>
+            <h3 className="font-semibold text-slate-200 text-sm">Streaming STT Configuration</h3>
             <p className="text-slate-400 mt-0.5">
-              Control live streaming speech recognition and the simulated streaming bridge without restarting the gateway.
+              Control live native streaming speech recognition services without restarting the gateway.
             </p>
           </div>
 
@@ -250,10 +255,10 @@ export const Settings: React.FC = () => {
             <div className="flex items-center justify-between p-3 bg-slate-900 border border-slate-800 rounded-lg">
               <div>
                 <div className="flex items-center gap-1.5">
-                  <span className="font-medium text-slate-200 block">Simulated Streaming Bridge</span>
-                  <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-amber-950/80 border border-amber-800 text-amber-300">Kill Switch</span>
+                  <span className="font-medium text-slate-200 block">Native Streaming STT (:8089)</span>
+                  <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-emerald-950/80 border border-emerald-800 text-emerald-400">Runtime Toggle</span>
                 </div>
-                <span className="text-[11px] text-slate-400">Routes LocalAI STT models through the streaming bridge (port 8089)</span>
+                <span className="text-[11px] text-slate-400">Enables native parakeet-cpp streaming service (port 8089, STT_STREAM_NATIVE_ENABLED)</span>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
                 <input

@@ -15,12 +15,14 @@ import { TranscriptResponse } from '../types/api';
 import { apiClient, getWebSocketUrl } from '../api/client';
 import { float32ToPCM16 } from '../audio/vadController';
 import { AudioResampler, StreamingAudioChunker } from '../audio/resampler';
+import { resolveSttStreamingUi } from '../utils/sttStreaming';
 
 interface STTModelItem {
   id: string;
   name: string;
   kind: 'batch' | 'streaming';
-  streaming_mode?: 'native' | 'simulated' | 'none';
+  streaming_mode?: 'native' | 'none';
+  streaming_backend?: string | null;
   transports?: string[];
   provider?: string;
   available?: boolean;
@@ -88,13 +90,13 @@ export const STTPlayground: React.FC = () => {
       const data = await apiClient<any>('/v1/models?task=stt&available=true');
       const rawList = data.data || data.models || (Array.isArray(data) ? data : []);
       const sttList: STTModelItem[] = rawList.map((m: any) => {
-        const isNative = m.streaming_mode === 'native' || m.engine === 'streaming-stt' || m.provider === 'stream-stt' || (m.id || '').toLowerCase().includes('sherpa') || (m.transports?.includes('ws_stream_native'));
-        const isSimulated = m.streaming_mode === 'simulated' || (m.kind === 'streaming' && !isNative) || (m.transports?.includes('ws_stream_bridge'));
+        const uiSpec = resolveSttStreamingUi(m);
         return {
           id: m.id,
           name: m.display_name || m.name || m.id,
           kind: m.kind === 'streaming' ? 'streaming' : 'batch',
-          streaming_mode: isNative ? 'native' : isSimulated ? 'simulated' : (m.streaming_mode || 'none'),
+          streaming_mode: uiSpec.streamingMode,
+          streaming_backend: uiSpec.streamingBackend,
           transports: m.transports || [],
           provider: m.engine,
           available: m.available !== false,
@@ -681,28 +683,17 @@ export const STTPlayground: React.FC = () => {
               <option value="" disabled>No {mode} model installed</option>
             ) : (
               currentModels.map((m) => {
-                const isNative = m.streaming_mode === 'native' || m.provider === 'streaming-stt' || m.provider === 'stream-stt' || m.id.toLowerCase().includes('sherpa') || m.transports?.includes('ws_stream_native');
-                const isSimulated = m.streaming_mode === 'simulated' || (m.kind === 'streaming' && !isNative) || m.transports?.includes('ws_stream_bridge');
-                const isBridgeUnavailable = isSimulated && (m.available === false || !m.transports?.includes('ws_stream_bridge'));
-
-                let prefix = '';
-                if (mode === 'streaming' || m.kind === 'streaming') {
-                  if (isNative) prefix = 'Live (native) • ';
-                  else if (isSimulated) prefix = 'Live (simulated) • ';
-                  else prefix = 'Live • ';
-                }
-
-                const isDisabled = m.available === false || isBridgeUnavailable;
+                const uiSpec = resolveSttStreamingUi(m, mode);
                 let reasonText = '';
-                if (isBridgeUnavailable) {
-                  reasonText = ' [Disabled: BRIDGE_UNAVAILABLE]';
-                } else if (m.available === false) {
+                if (m.available === false) {
                   reasonText = ` [Unavailable: ${m.unavailable_reason || 'runtime missing'}]`;
+                } else if (uiSpec.isStreamingDisabled) {
+                  reasonText = ' [Disabled: STREAMING_UNAVAILABLE]';
                 }
 
                 return (
-                  <option key={m.id} value={m.id} disabled={isDisabled}>
-                    {prefix}{m.name !== m.id ? `${m.name} (${m.id})` : m.id}{reasonText}
+                  <option key={m.id} value={m.id} disabled={uiSpec.isStreamingDisabled}>
+                    {uiSpec.labelPrefix}{m.name !== m.id ? `${m.name} (${m.id})` : m.id}{reasonText}
                   </option>
                 );
               })
@@ -711,33 +702,23 @@ export const STTPlayground: React.FC = () => {
 
           {selectedModel && (() => {
             const activeModel = installedModels.find((m) => m.id === selectedModel);
-            const isNative = activeModel?.streaming_mode === 'native' || activeModel?.provider === 'streaming-stt' || activeModel?.provider === 'stream-stt' || (activeModel?.id || '').toLowerCase().includes('sherpa') || activeModel?.transports?.includes('ws_stream_native');
-            const isSimulated = activeModel?.streaming_mode === 'simulated' || (activeModel?.kind === 'streaming' && !isNative) || activeModel?.transports?.includes('ws_stream_bridge');
-            const isBridgeUnavailable = isSimulated && (activeModel?.available === false || !activeModel?.transports?.includes('ws_stream_bridge'));
+            const uiSpec = resolveSttStreamingUi(activeModel, mode);
 
             if (mode === 'streaming') {
-              if (isBridgeUnavailable) {
+              if (uiSpec.isStreamingDisabled) {
                 return (
                   <div className="mt-2 p-2 bg-rose-950/40 border border-rose-900/60 rounded text-[11px] text-rose-300 flex items-center gap-1.5">
                     <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                    <span>Bridge is currently offline (BRIDGE_UNAVAILABLE). Start the bridge daemon or select a native model.</span>
+                    <span>Native streaming service is unavailable or disabled on this host. Select an active streaming model or batch mode.</span>
                   </div>
                 );
               }
-              if (isNative) {
+              if (uiSpec.isNative) {
                 return (
-                  <div className="mt-2 p-2 bg-emerald-950/40 border border-emerald-900/60 rounded text-[11px] text-emerald-400 flex items-center gap-1.5" title="True online streaming speech recognition over WebSocket via Sherpa-ONNX.">
+                  <div className="mt-2 p-2 bg-emerald-950/40 border border-emerald-900/60 rounded text-[11px] text-emerald-400 flex items-center gap-1.5" title="True online native WebSocket speech recognition.">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                     <strong className="font-semibold">Live (native)</strong>
-                    <span className="text-slate-400">— Online WebSocket streaming STT via Sherpa-ONNX.</span>
-                  </div>
-                );
-              }
-              if (isSimulated) {
-                return (
-                  <div className="mt-2 p-2 bg-amber-950/40 border border-amber-900/60 rounded text-[11px] text-amber-300 flex items-start gap-1.5" title="Simulated streaming: Uses recurrent batch decodes through LocalAI. Text may be revised on partials, and consumes additional host compute compared to native streaming.">
-                    <span className="text-amber-400 font-bold shrink-0">⚡ Live (simulated)</span>
-                    <span className="text-slate-400">— Recurrent batch decodes through LocalAI. Partial text may be revised, and consumes additional compute.</span>
+                    <span className="text-slate-400">— Online WebSocket native streaming STT ({uiSpec.streamingBackend || 'native'}).</span>
                   </div>
                 );
               }

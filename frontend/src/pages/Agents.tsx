@@ -19,6 +19,7 @@ import {
 import { Agent, Voice } from '../types/api';
 import { VAD_PRESETS } from '../audio/vadController';
 import { fetchWithAuth } from '../api/client';
+import { resolveSttStreamingUi } from '../utils/sttStreaming';
 
 const SYSTEM_PROMPT_PRESETS = [
   {
@@ -62,7 +63,8 @@ export const AgentsPage: React.FC = () => {
       id: string;
       name: string;
       kind?: string;
-      streaming_mode?: 'native' | 'simulated' | 'none';
+      streaming_mode?: 'native' | 'none';
+      streaming_backend?: string | null;
       transports?: string[];
       provider?: string;
       available?: boolean;
@@ -172,13 +174,13 @@ export const AgentsPage: React.FC = () => {
           const llms = Array.isArray(modData.llm) ? modData.llm.map((m: any) => ({ id: m.id, name: m.name || m.id, kind: m.kind, provider: m.provider })) : [];
           const stts = Array.isArray(modData.stt)
             ? modData.stt.map((m: any) => {
-                const isNative = m.streaming_mode === 'native' || m.provider === 'stream-stt' || (m.id || '').toLowerCase().includes('sherpa') || (m.transports?.includes('ws_stream_native'));
-                const isSimulated = m.streaming_mode === 'simulated' || (m.kind === 'streaming' && !isNative) || (m.transports?.includes('ws_stream_bridge'));
+                const uiSpec = resolveSttStreamingUi(m);
                 return {
                   id: m.id,
                   name: m.name || m.id,
                   kind: m.kind,
-                  streaming_mode: isNative ? 'native' : isSimulated ? 'simulated' : (m.streaming_mode || 'none'),
+                  streaming_mode: uiSpec.streamingMode,
+                  streaming_backend: uiSpec.streamingBackend,
                   transports: m.transports || [],
                   provider: m.provider,
                   available: m.available !== false,
@@ -827,9 +829,7 @@ export const AgentsPage: React.FC = () => {
                       onChange={(e) => {
                         const targetId = e.target.value;
                         const targetModel = installedModels.stt.find((m) => m.id === targetId);
-                        const isNative = targetModel?.streaming_mode === 'native' || targetModel?.provider === 'stream-stt' || (targetModel?.id || '').toLowerCase().includes('sherpa') || targetModel?.transports?.includes('ws_stream_native');
-                        const isSimulated = targetModel?.streaming_mode === 'simulated' || (targetModel?.kind === 'streaming' && !isNative) || targetModel?.transports?.includes('ws_stream_bridge');
-                        const streamMode = isNative ? 'native' : isSimulated ? 'simulated' : 'none';
+                        const streamMode = resolveSttStreamingUi(targetModel).streamingMode;
 
                         if (targetModel && targetModel.kind && targetModel.kind !== selectedAgent.stt.kind) {
                           setSelectedAgent({
@@ -856,104 +856,60 @@ export const AgentsPage: React.FC = () => {
                     >
                       {installedModels.stt.length === 0 ? (
                         <option value="" disabled>No STT model installed</option>
-                      ) : (
-                        <>
-                          <optgroup label={selectedAgent.stt.kind === 'streaming' ? 'Streaming Models' : 'Batch Models'}>
-                            {installedModels.stt
-                              .filter((m) => (selectedAgent.stt.kind === 'streaming' ? m.kind === 'streaming' : m.kind !== 'streaming'))
-                              .map((m) => {
-                                const isNative = m.streaming_mode === 'native' || m.provider === 'stream-stt' || m.id.toLowerCase().includes('sherpa') || m.transports?.includes('ws_stream_native');
-                                const isSimulated = m.streaming_mode === 'simulated' || (m.kind === 'streaming' && !isNative) || m.transports?.includes('ws_stream_bridge');
-                                const isBridgeUnavailable = isSimulated && (m.available === false || !m.transports?.includes('ws_stream_bridge'));
-
-                                let prefix = '';
-                                if (m.kind === 'streaming' || selectedAgent.stt.kind === 'streaming') {
-                                  if (isNative) prefix = 'Live (native) • ';
-                                  else if (isSimulated) prefix = 'Live (simulated) • ';
-                                  else prefix = 'Live • ';
-                                }
-
-                                const isDisabled = m.available === false || isBridgeUnavailable;
-                                let reasonText = '';
-                                if (isBridgeUnavailable) {
-                                  reasonText = ' [Disabled: BRIDGE_UNAVAILABLE]';
-                                } else if (m.available === false) {
-                                  reasonText = ` [Unavailable: ${m.unavailable_reason || 'runtime missing'}]`;
-                                }
-
-                                return (
-                                  <option key={m.id} value={m.id} disabled={isDisabled}>
-                                    {prefix}{m.name !== m.id ? `${m.name} (${m.id})` : m.id}{reasonText}
-                                  </option>
-                                );
-                              })}
-                          </optgroup>
-                          {installedModels.stt.some((m) => (selectedAgent.stt.kind === 'streaming' ? m.kind !== 'streaming' : m.kind === 'streaming')) && (
-                            <optgroup label={selectedAgent.stt.kind === 'streaming' ? 'Switch to Batch Models' : 'Switch to Streaming Models'}>
+                      ) : (() => {
+                        const renderSttOption = (m: typeof installedModels.stt[number], forceStreamingMode?: string) => {
+                          const uiSpec = resolveSttStreamingUi(m, forceStreamingMode);
+                          let reasonText = '';
+                          if (m.available === false) {
+                            reasonText = ` [Unavailable: ${m.unavailable_reason || 'runtime missing'}]`;
+                          } else if (uiSpec.isStreamingDisabled) {
+                            reasonText = ' [Disabled: STREAMING_UNAVAILABLE]';
+                          }
+                          return (
+                            <option key={m.id} value={m.id} disabled={uiSpec.isStreamingDisabled}>
+                              {uiSpec.labelPrefix}{m.name !== m.id ? `${m.name} (${m.id})` : m.id}{reasonText}
+                            </option>
+                          );
+                        };
+                        return (
+                          <>
+                            <optgroup label={selectedAgent.stt.kind === 'streaming' ? 'Streaming Models' : 'Batch Models'}>
                               {installedModels.stt
-                                .filter((m) => (selectedAgent.stt.kind === 'streaming' ? m.kind !== 'streaming' : m.kind === 'streaming'))
-                                .map((m) => {
-                                  const isNative = m.streaming_mode === 'native' || m.provider === 'stream-stt' || m.id.toLowerCase().includes('sherpa') || m.transports?.includes('ws_stream_native');
-                                  const isSimulated = m.streaming_mode === 'simulated' || (m.kind === 'streaming' && !isNative) || m.transports?.includes('ws_stream_bridge');
-                                  const isBridgeUnavailable = isSimulated && (m.available === false || !m.transports?.includes('ws_stream_bridge'));
-
-                                  let prefix = '';
-                                  if (m.kind === 'streaming') {
-                                    if (isNative) prefix = 'Live (native) • ';
-                                    else if (isSimulated) prefix = 'Live (simulated) • ';
-                                    else prefix = 'Live • ';
-                                  }
-
-                                  const isDisabled = m.available === false || isBridgeUnavailable;
-                                  let reasonText = '';
-                                  if (isBridgeUnavailable) {
-                                    reasonText = ' [Disabled: BRIDGE_UNAVAILABLE]';
-                                  } else if (m.available === false) {
-                                    reasonText = ` [Unavailable: ${m.unavailable_reason || 'runtime missing'}]`;
-                                  }
-
-                                  return (
-                                    <option key={m.id} value={m.id} disabled={isDisabled}>
-                                      {prefix}{m.name !== m.id ? `${m.name} (${m.id})` : m.id}{reasonText}
-                                    </option>
-                                  );
-                                })}
+                                .filter((m) => (selectedAgent.stt.kind === 'streaming' ? m.kind === 'streaming' : m.kind !== 'streaming'))
+                                .map((m) => renderSttOption(m, selectedAgent.stt.kind))}
                             </optgroup>
-                          )}
-                        </>
-                      )}
+                            {installedModels.stt.some((m) => (selectedAgent.stt.kind === 'streaming' ? m.kind !== 'streaming' : m.kind === 'streaming')) && (
+                              <optgroup label={selectedAgent.stt.kind === 'streaming' ? 'Switch to Batch Models' : 'Switch to Streaming Models'}>
+                                {installedModels.stt
+                                  .filter((m) => (selectedAgent.stt.kind === 'streaming' ? m.kind !== 'streaming' : m.kind === 'streaming'))
+                                  .map((m) => renderSttOption(m))}
+                              </optgroup>
+                            )}
+                          </>
+                        );
+                      })()}
                     </select>
 
                     {selectedAgent.stt.model && (
                       <>
                         {selectedAgent.stt.kind === 'streaming' && (() => {
                           const activeStt = installedModels.stt.find((m) => m.id === selectedAgent.stt.model);
-                          const isNative = activeStt?.streaming_mode === 'native' || activeStt?.provider === 'stream-stt' || (activeStt?.id || '').toLowerCase().includes('sherpa') || activeStt?.transports?.includes('ws_stream_native');
-                          const isSimulated = activeStt?.streaming_mode === 'simulated' || (activeStt?.kind === 'streaming' && !isNative) || activeStt?.transports?.includes('ws_stream_bridge');
-                          const isBridgeUnavailable = isSimulated && (activeStt?.available === false || !activeStt?.transports?.includes('ws_stream_bridge'));
+                          const uiSpec = resolveSttStreamingUi(activeStt, 'streaming');
 
-                          if (isBridgeUnavailable) {
+                          if (uiSpec.isStreamingDisabled) {
                             return (
                               <div className="flex items-center gap-1.5 mt-1.5 text-[11px] text-rose-300 bg-rose-950/40 border border-rose-900/60 rounded px-2.5 py-1.5">
                                 <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                                <span>Bridge is offline (BRIDGE_UNAVAILABLE). Start the bridge daemon or select a native streaming model.</span>
+                                <span>Native streaming service is unavailable or disabled on this host. Select an active streaming model or switch to batch.</span>
                               </div>
                             );
                           }
-                          if (isNative) {
+                          if (uiSpec.isNative) {
                             return (
-                              <div className="flex items-center gap-2 mt-1.5 text-[11px] text-emerald-400 bg-emerald-950/40 border border-emerald-900/60 rounded px-2.5 py-1.5" title="True online streaming speech recognition over WebSocket via Sherpa-ONNX.">
+                              <div className="flex items-center gap-2 mt-1.5 text-[11px] text-emerald-400 bg-emerald-950/40 border border-emerald-900/60 rounded px-2.5 py-1.5" title="True online native WebSocket speech recognition.">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                                 <strong className="font-semibold">Live (native)</strong>
-                                <span className="text-slate-400">— Online WebSocket streaming STT via Sherpa-ONNX.</span>
-                              </div>
-                            );
-                          }
-                          if (isSimulated) {
-                            return (
-                              <div className="flex items-start gap-2 mt-1.5 text-[11px] text-amber-300 bg-amber-950/40 border border-amber-900/60 rounded px-2.5 py-1.5" title="Simulated streaming: Uses recurrent batch decodes through LocalAI. Text may be revised on partials, and consumes additional host compute compared to native streaming.">
-                                <span className="text-amber-400 font-bold shrink-0">⚡ Live (simulated)</span>
-                                <span className="text-slate-400">— Recurrent batch decodes through LocalAI. Partial text may be revised, and consumes additional compute.</span>
+                                <span className="text-slate-400">— Online WebSocket native streaming STT ({uiSpec.streamingBackend || 'native'}).</span>
                               </div>
                             );
                           }

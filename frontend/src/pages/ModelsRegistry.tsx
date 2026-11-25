@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { GalleryModel, SystemResources, InstallJob } from '../types/api';
 import { fetchWithAuth } from '../api/client';
+import { resolveSttStreamingUi } from '../utils/sttStreaming';
 
 export const ModelsRegistry: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'explore' | 'installed'>('explore');
@@ -516,32 +517,39 @@ export const ModelsRegistry: React.FC = () => {
                         <h3 className="font-semibold text-slate-100 text-sm truncate">{model.name}</h3>
                         <span className="text-[11px] font-mono text-slate-500 truncate block">{model.id}</span>
                       </div>
-                      <span
-                        className={`text-[10px] uppercase font-mono px-2 py-0.5 rounded border shrink-0 ${
+                      {(() => {
+                        const uiSpec = resolveSttStreamingUi(model);
+                        const isSttStreaming = model.category === 'stt' && model.kind === 'streaming';
+                        const badgeClass =
                           model.category === 'stt'
-                            ? model.kind === 'streaming'
-                              ? (model.streaming_mode === 'simulated' || !model.id.toLowerCase().includes('sherpa'))
-                                ? 'bg-amber-950/80 border-amber-800 text-amber-300'
-                                : 'bg-emerald-950/80 border-emerald-800 text-emerald-400'
+                            ? isSttStreaming
+                              ? uiSpec.isNative
+                                ? 'bg-emerald-950/80 border-emerald-800 text-emerald-400'
+                                : 'bg-slate-900 border-slate-700 text-slate-400'
                               : 'bg-indigo-950/80 border-indigo-800 text-indigo-400'
-                            : 'bg-slate-900 border-slate-800 text-indigo-400'
-                        }`}
-                        title={
-                          model.category === 'stt' && model.kind === 'streaming'
-                            ? (model.streaming_mode === 'simulated' || !model.id.toLowerCase().includes('sherpa'))
-                              ? 'Simulated Streaming: Recurrent batch decodes through LocalAI. Partial text may be revised, and consumes additional host compute compared to native streaming.'
-                              : 'Native Streaming: True online neural streaming over WebSocket via Sherpa-ONNX.'
-                            : undefined
-                        }
-                      >
-                        {model.category === 'stt'
-                          ? model.kind === 'streaming'
-                            ? (model.streaming_mode === 'simulated' || !model.id.toLowerCase().includes('sherpa'))
-                              ? 'STT • Live (simulated)'
-                              : 'STT • Live (native)'
-                            : 'STT • BATCH'
-                          : model.category}
-                      </span>
+                            : 'bg-slate-900 border-slate-800 text-indigo-400';
+                        const badgeTitle = isSttStreaming
+                          ? uiSpec.isNative
+                            ? 'Native Streaming: True online neural streaming over WebSocket.'
+                            : 'Native streaming disabled or awaiting host calibration (enable STT_STREAM_NATIVE_ENABLED after calibration).'
+                          : undefined;
+                        const badgeText =
+                          model.category === 'stt'
+                            ? isSttStreaming
+                              ? uiSpec.isNative
+                                ? 'STT • Live (native)'
+                                : 'STT • Streaming (offline)'
+                              : 'STT • BATCH'
+                            : model.category;
+                        return (
+                          <span
+                            className={`text-[10px] uppercase font-mono px-2 py-0.5 rounded border shrink-0 ${badgeClass}`}
+                            title={badgeTitle}
+                          >
+                            {badgeText}
+                          </span>
+                        );
+                      })()}
                     </div>
 
                     <p className="text-xs text-slate-400 leading-relaxed line-clamp-2">

@@ -42,37 +42,41 @@ async def test_routing_flag_off_preserves_native_and_batch_transports(monkeypatc
     - bridge_available returns False.
     - No bridge connection or client is attempted.
     """
+    monkeypatch.setattr(settings, "STT_STREAM_NATIVE_ENABLED", False)
     monkeypatch.setattr(settings, "STREAMING_BRIDGE_ENABLED", False)
 
-    # 1. bridge_available must return False immediately
-    assert bridge_available("parakeet-cpp-realtime-scene") is False
+    # 1. native_service_available returns False immediately
+    assert bridge_available("parakeet-cpp-realtime_eou_120m-v1") is False
     assert bridge_available("sherpa-onnx-streaming-zipformer-en-20m") is False
 
-    # 2. Registry transports for Sherpa model
-    sherpa_transports = await model_registry.get_model_transports("sherpa-onnx-streaming-zipformer-en-20m")
-    assert "ws_stream_native" in sherpa_transports
-    assert "ws_stream_bridge" not in sherpa_transports
+    # 2. Registry spec for Sherpa model
+    sherpa_spec = await model_registry.get_model_streaming_spec("sherpa-onnx-streaming-zipformer-en-20m")
+    assert "ws_stream_native" in sherpa_spec["transports"]
+    assert sherpa_spec["streaming_backend"] == "sherpa"
 
-    # 3. Registry transports for LocalAI STT model
-    localai_transports = await model_registry.get_model_transports("parakeet-cpp-realtime-scene")
-    assert "batch_http" in localai_transports
-    assert "ws_stream_bridge" not in localai_transports
+    # 3. Registry transports for eligible Parakeet EOU model when flag is OFF
+    eou_spec = await model_registry.get_model_streaming_spec("parakeet-cpp-realtime_eou_120m-v1")
+    assert eou_spec["transports"] == ["batch_http"]
+    assert eou_spec["streaming_mode"] == "none"
+    assert eou_spec["streaming_backend"] is None
 
 
 # ==============================================================================
-# 2. Flag on, Calibrated Model: Bridge Transport Chosen
+# 2. Flag on, Eligible + Calibrated Model -> ws_stream_native (parakeet_native)
 # ==============================================================================
 
 @pytest.mark.asyncio
 async def test_routing_flag_on_calibrated_model_selects_bridge_transport(monkeypatch):
-    """When STREAMING_BRIDGE_ENABLED is True and calibration passes:
-    - LocalAI STT model gets ['batch_http', 'ws_stream_bridge'] with streaming_mode 'simulated'.
-    - Native Sherpa still gets ['ws_stream_native'] with streaming_mode 'native'.
+    """When STT_STREAM_NATIVE_ENABLED is True and calibration passes:
+    - Eligible model (`parakeet-cpp-realtime_eou_120m-v1`) gets ['batch_http', 'ws_stream_native']
+      with streaming_mode='native' and streaming_backend='parakeet_native'.
+    - Ineligible models (`parakeet-cpp-realtime-scene-speakers`, `nemotron`) stay batch_http / none.
+    - Sherpa keeps ['ws_stream_native'] with streaming_backend='sherpa'.
     """
-    monkeypatch.setattr(settings, "STREAMING_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(settings, "STT_STREAM_NATIVE_ENABLED", True)
     monkeypatch.setattr(settings, "STREAMING_BRIDGE_INTERNAL_TOKEN", "test-internal-token-1234")
+    monkeypatch.setattr(settings, "LOCALAI_MODELS_PATH", "/nonexistent-test-dir")
 
-    # Mock calibration passing for parakeet-cpp-realtime-scene
     import services.streaming_bridge.calibrate as calib_module
     monkeypatch.setattr(
         calib_module,
@@ -80,18 +84,110 @@ async def test_routing_flag_on_calibrated_model_selects_bridge_transport(monkeyp
         lambda model: (True, "OK", {"admitted_streams": 1}),
     )
 
-    # Helper confirms bridge availability
-    assert bridge_available("parakeet-cpp-realtime-scene") is True
+    # Eligible EOU model
+    assert bridge_available("parakeet-cpp-realtime_eou_120m-v1") is True
+    spec = await model_registry.get_model_streaming_spec("parakeet-cpp-realtime_eou_120m-v1")
+    assert "ws_stream_native" in spec["transports"]
+    assert "batch_http" in spec["transports"]
+    assert spec["streaming_mode"] == "native"
+    assert spec["streaming_backend"] == "parakeet_native"
 
-    # Transports for calibrated LocalAI STT model
-    transports = await model_registry.get_model_transports("parakeet-cpp-realtime-scene")
-    assert "ws_stream_bridge" in transports
-    assert "batch_http" in transports
+    # Excluded per S0 decision until tested: scene-speakers and nemotron
+    assert bridge_available("parakeet-cpp-realtime-scene-speakers") is False
+    scene_spec = await model_registry.get_model_streaming_spec("parakeet-cpp-realtime-scene-speakers")
+    assert scene_spec["transports"] == ["batch_http"]
+    assert scene_spec["streaming_mode"] == "none"
 
-    # Sherpa model still claims native streaming
-    sherpa_transports = await model_registry.get_model_transports("sherpa-onnx-streaming-zipformer-en-20m")
-    assert "ws_stream_native" in sherpa_transports
-    assert "ws_stream_bridge" not in sherpa_transports
+    assert bridge_available("parakeet-cpp-nemotron-3.5-asr-streaming-0.6b") is False
+    nemo_spec = await model_registry.get_model_streaming_spec("parakeet-cpp-nemotron-3.5-asr-streaming-0.6b")
+    assert nemo_spec["transports"] == ["batch_http"]
+
+    # Sherpa model still claims native streaming with sherpa backend
+    sherpa_spec = await model_registry.get_model_streaming_spec("sherpa-onnx-streaming-zipformer-en-20m")
+    assert "ws_stream_native" in sherpa_spec["transports"]
+    assert sherpa_spec["streaming_backend"] == "sherpa"
+
+    # Gateway routes strictly by registry streaming_backend (tested even with an arbitrary model alias)
+    called_backends = []
+    stt_client = StreamingSTTClient()
+
+    async def fake_bridge(audio_stream, m, lang, timeout):
+        called_backends.append(("parakeet_native", m))
+        yield {"type": "transcript.completed", "text": "routed by registry", "model_used": m}
+
+    import app.services.streaming_bridge_client as sbc
+    monkeypatch.setattr(sbc, "stream_via_bridge", fake_bridge)
+    monkeypatch.setattr(
+        model_registry,
+        "get_model_streaming_spec",
+        lambda _m: asyncio.sleep(0, result={
+            "transports": ["batch_http", "ws_stream_native"],
+            "streaming_mode": "native",
+            "streaming_backend": "parakeet_native",
+        }),
+    )
+
+    async def dummy_audio():
+        yield b"\x00\x05" * 1600
+
+    evts = [e async for e in stt_client.stream(dummy_audio(), model="arbitrary-registry-alias")]
+    assert called_backends == [("parakeet_native", "arbitrary-registry-alias")]
+    assert evts[-1]["text"] == "routed by registry"
+
+
+def test_flag_off_before_after_model_list_and_native_request_unchanged(client, monkeypatch):
+    """WSS.md S3 proof: compare before (flag OFF) vs after (flag ON + calibrated) on /v1/models and WS stream."""
+    auth_headers = {"Authorization": f"Bearer {settings.ADMIN_API_KEY}"} if settings.ADMIN_API_KEY else {"Authorization": "Bearer dev-admin-key"}
+    ws_url = f"/v1/audio/transcriptions/stream?api_key={settings.ADMIN_API_KEY or 'dev-voice-key-12345'}"
+
+    # 1. BEFORE: Flag OFF -> platform baseline unchanged
+    monkeypatch.setattr(settings, "STT_STREAM_NATIVE_ENABLED", False)
+    monkeypatch.setattr(settings, "STREAMING_BRIDGE_ENABLED", False)
+    model_registry.invalidate_cache()
+
+    resp_off = client.get("/v1/models?task=stt", headers=auth_headers)
+    assert resp_off.status_code == 200
+    for m in resp_off.json()["data"]:
+        assert m["streaming_mode"] in ("native", "none")
+        assert "ws_stream_bridge" not in m["transports"]
+        if "parakeet-cpp" in m["id"].lower():
+            assert m["transports"] == ["batch_http"]
+            assert m["streaming_mode"] == "none"
+
+    with client.websocket_connect(ws_url) as ws:
+        ws.send_text(json.dumps({"type": "stream.start", "model": "parakeet-cpp-realtime_eou_120m-v1"}))
+        err = ws.receive_json()
+        assert err["type"] == "error"
+        assert err["code"] == "STT_MODEL_UNAVAILABLE"
+
+    # 2. AFTER: Flag ON + passing calibration -> eligible EOU model exposes native WS + routes through gateway
+    monkeypatch.setattr(settings, "STT_STREAM_NATIVE_ENABLED", True)
+    monkeypatch.setattr(settings, "STREAMING_BRIDGE_INTERNAL_TOKEN", "test-internal-token-1234")
+    monkeypatch.setattr(settings, "LOCALAI_MODELS_PATH", "/nonexistent-test-dir")
+    model_registry.invalidate_cache()
+
+    import services.streaming_bridge.calibrate as calib_module
+    monkeypatch.setattr(
+        calib_module,
+        "is_host_calibrated_and_passing",
+        lambda model: (True, "OK", {"admitted_streams": 1}),
+    )
+
+    from app.api import stream_stt as stream_stt_api
+
+    async def fake_stream(audio_gen, model=None, language=None):
+        async for _ in audio_gen:
+            pass
+        yield {"type": "transcript.partial", "seq": 1, "confirmed": "hello", "tentative": "", "eou": True}
+        yield {"type": "transcript.completed", "text": "hello", "model_used": model, "duration": 0.1}
+
+    monkeypatch.setattr(stream_stt_api.streaming_client, "stream", fake_stream)
+    with client.websocket_connect(ws_url) as ws:
+        ws.send_text(json.dumps({"type": "stream.start", "model": "parakeet-cpp-realtime_eou_120m-v1"}))
+        ws.send_bytes(b"\x00\x01" * 160)
+        ws.send_text(json.dumps({"type": "audio.commit"}))
+        evts = [ws.receive_json(), ws.receive_json()]
+        assert any(e.get("type") == "transcript.completed" and e.get("text") == "hello" for e in evts)
 
 
 # ==============================================================================
@@ -105,7 +201,7 @@ async def test_routing_flag_on_uncalibrated_model_rejection_and_fallback(monkeyp
     - If STREAMING_BRIDGE_FALLBACK_TO_BATCH is False (default): explicit error raised/returned.
     - If STREAMING_BRIDGE_FALLBACK_TO_BATCH is True: announces fallback with stt.fallback event and runs batch.
     """
-    monkeypatch.setattr(settings, "STREAMING_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(settings, "STT_STREAM_NATIVE_ENABLED", True)
     monkeypatch.setattr(settings, "STREAMING_BRIDGE_INTERNAL_TOKEN", "test-internal-token-1234")
 
     import services.streaming_bridge.calibrate as calib_module
@@ -115,10 +211,10 @@ async def test_routing_flag_on_uncalibrated_model_rejection_and_fallback(monkeyp
         lambda model: (False, "Thresholds exceeded", {}),
     )
 
-    assert bridge_available("parakeet-cpp-realtime-scene") is False
+    assert bridge_available("parakeet-cpp-realtime_eou_120m-v1") is False
 
-    transports = await model_registry.get_model_transports("parakeet-cpp-realtime-scene")
-    assert "ws_stream_bridge" not in transports
+    transports = await model_registry.get_model_transports("parakeet-cpp-realtime_eou_120m-v1")
+    assert "ws_stream_native" not in transports
 
     stt_client = StreamingSTTClient()
 
@@ -128,7 +224,7 @@ async def test_routing_flag_on_uncalibrated_model_rejection_and_fallback(monkeyp
     # 1. Fallback flag OFF -> explicit error
     monkeypatch.setattr(settings, "STREAMING_BRIDGE_FALLBACK_TO_BATCH", False)
     with pytest.raises(StreamingModelNotLoadedError):
-        async for _ in stt_client.stream(dummy_audio(), model="parakeet-cpp-realtime-scene"):
+        async for _ in stt_client.stream(dummy_audio(), model="parakeet-cpp-realtime_eou_120m-v1"):
             pass
 
     # 2. Fallback flag ON -> announces stt.fallback then executes batch STT
@@ -138,7 +234,7 @@ async def test_routing_flag_on_uncalibrated_model_rejection_and_fallback(monkeyp
         async def transcribe(self, audio_bytes, model=None, language=None):
             class Resp:
                 text = "batch fallback result"
-                model = "parakeet-cpp-realtime-scene"
+                model = "parakeet-cpp-realtime_eou_120m-v1"
                 duration = 0.5
             return Resp()
 
@@ -146,7 +242,7 @@ async def test_routing_flag_on_uncalibrated_model_rejection_and_fallback(monkeyp
     monkeypatch.setattr(localai_module, "LocalAISTTClient", MockBatchSTT)
 
     events = []
-    async for evt in stt_client.stream(dummy_audio(), model="parakeet-cpp-realtime-scene"):
+    async for evt in stt_client.stream(dummy_audio(), model="parakeet-cpp-realtime_eou_120m-v1"):
         events.append(evt)
 
     assert len(events) == 2
@@ -265,6 +361,12 @@ def test_event_mapping_to_public_schema():
     assert obj_comp.text == "the weather is partly cloudy tomorrow."
     assert obj_comp.model_used == "parakeet-cpp-realtime-scene"
     assert obj_comp.final_degraded is False
+
+    # 4. Stream paused / resumed events map cleanly
+    paused_mapped = _map_bridge_event({"type": "stream.paused", "reason": "voice_turn_active", "buffered_chunks": 3}, "test-model")
+    assert paused_mapped == {"type": "stream.paused", "reason": "voice_turn_active", "buffered_chunks": 3}
+    resumed_mapped = _map_bridge_event({"type": "stream.resumed", "buffered_chunks": 3}, "test-model")
+    assert resumed_mapped == {"type": "stream.resumed", "buffered_chunks": 3}
 
 
 # ==============================================================================
