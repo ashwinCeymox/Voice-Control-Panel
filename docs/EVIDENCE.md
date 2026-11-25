@@ -390,3 +390,39 @@ CREATE TABLE admin_session (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, expir
   - LLM warm latency during parallel STT: 277.9 ms (no negative degradation)
   - Process memory delta: +6.0 MB
 - **Decision:** Recommended GO for Phase B2.
+
+---
+
+## Phase B7: UI Badges, Fallback Notice, & Admin Settings Kill Switch
+- **Date/Time:** 2026-11-25
+- **Git Commit:** `003e707`
+- **Deliverables:**
+  - `Live (native)` and `Live (simulated)` option labels and badges across Agents, Models Registry, and STT Playground.
+  - Disabled-with-reason state `[Disabled: BRIDGE_UNAVAILABLE]` when simulated models are selected while bridge is disabled/uncalibrated.
+  - Admin runtime kill switch via `GET/PUT /v1/admin/settings/stt` (`streaming_bridge_enabled`) and Developer Settings UI card.
+  - Model listing transports and mode backfill in `/v1/models/installed`.
+- **Verification:**
+  - `npm --prefix frontend run build`: Clean build in 3.49s.
+  - `pytest tests/unit/test_streaming_bridge_b7_ui_api.py -v`: 2/2 passed.
+  - Project unit tests: 273 passed, 0 regressions.
+
+---
+
+## Phase B8: Load, Soak, and Failure Tests
+- **Date/Time:** 2026-11-25
+- **Test Suite:** `tests/unit/test_streaming_bridge_b8_load_soak.py`
+- **Standalone Runner:** `scripts/bridge-soak-test.py`
+- **Scope & Coverage:**
+  1. **Concurrency Matrix (1, 3, 5, 6, 7 streams):** Verified streams 1 to 5 admitted; streams 6 and 7 receive `BRIDGE_BUSY` (`retry_after_ms: 2000`, WS 1013); slot release restores immediate admission.
+  2. **Concurrency Caps:** Verified peak decodes in LocalAI never exceeds `MAX_DECODES` (tested with `max_decodes=2`); verified single-inflight per stream skips intermediate partials (latest wins).
+  3. **Fair Scheduling:** Verified fast talker (20ms chunk cadence) does not starve slow talker (200ms chunk cadence); slow talker completed decodes without backlog.
+  4. **Slow LocalAI & Bounded Queue:** Verified stale partials (>50ms) are automatically dropped; finals (Priority 0) jump ahead of partials (Priority 1) in queue.
+  5. **Mid-Decode Cancellation:** Verified cancelling stream mid-decode marks job cancelled, releases semaphore immediately, and leaves 0 orphan jobs in queue.
+  6. **LocalAI Errors & Timeouts Resilience:** Verified LocalAI 500 errors and timeouts return degraded/fallback indicators without crashing the scheduler; subsequent turns recover cleanly.
+  7. **Stream Churn Soak:** 50 rapid stream lifecycles (mix of normal completions, mid-stream cancellations, and abrupt disconnects). Result: 0 task leaks (final tasks == initial tasks), 0 leaked sessions (`active_sessions == 0`), bounded memory RSS.
+  8. **Aligner Monotonicity:** Verified confirmed word prefix strictly grows; noise, hallucinations, and contradicting suffixes do not mutate confirmed words.
+- **Test Results:**
+  - Command: `.venv/bin/pytest tests/unit/test_streaming_bridge_*.py -v`
+  - Result: 49 passed, 5 warnings in 8.98s (Exit code: 0)
+  - Full Unit Test Suite: 281 passed, 12 expected Sherpa offline failures, 0 regressions.
+

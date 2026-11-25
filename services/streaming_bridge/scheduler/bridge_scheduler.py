@@ -33,6 +33,7 @@ class BridgeScheduler:
         partial_timeout_s: float = 8.0,
         final_timeout_s: float = 30.0,
         time_func: Optional[Callable[[], float]] = None,
+        queue: Optional[DecodePriorityQueue] = None,
     ):
         self.transcribe_func = transcribe_func
         self.max_decodes = max_decodes
@@ -42,11 +43,12 @@ class BridgeScheduler:
         self.final_timeout_s = final_timeout_s
         self.time_func = time_func or time.time
 
-        self.priority_queue = DecodePriorityQueue(partial_max_age_s=2.0)
+        self.priority_queue = queue if queue is not None else DecodePriorityQueue(partial_max_age_s=2.0)
         self._global_semaphore = asyncio.Semaphore(max_decodes)
         self._stream_locks: Dict[str, asyncio.Lock] = {}
         self._stream_models: Dict[str, str] = {}
         self._stream_languages: Dict[str, str] = {}
+        self._inflight_jobs: Dict[str, QueuedDecodeJob] = {}
 
         # Voice turn state
         self.voice_busy: bool = False
@@ -95,6 +97,11 @@ class BridgeScheduler:
     def cancel_stream(self, stream_id: str):
         """Cancel queued jobs and release resources for stream."""
         self.priority_queue.cancel_stream_jobs(stream_id)
+        if stream_id in self._inflight_jobs:
+            job = self._inflight_jobs[stream_id]
+            job.is_cancelled = True
+            if not job.future.done():
+                job.future.set_result(None)
         self.unregister_stream(stream_id)
 
     def set_voice_busy(self, busy: bool):
@@ -125,6 +132,7 @@ class BridgeScheduler:
                 logger.error("Error retrieving job from priority queue: %s", e)
                 continue
 
+            self._inflight_jobs[job.stream_id] = job
             try:
                 # 1. Yield-to-voice check for partials
                 # Finals (priority=0) are NEVER held or skipped
@@ -160,7 +168,10 @@ class BridgeScheduler:
                         self.total_decodes += 1
                         raw_text = res.get("text", "") if isinstance(res, dict) else str(res)
                         if not job.future.done():
-                            job.future.set_result(raw_text)
+                            if job.is_cancelled:
+                                job.future.set_result(None)
+                            else:
+                                job.future.set_result(raw_text)
                     except asyncio.TimeoutError:
                         logger.warning("Decode timed out after %.1fs for stream %s", timeout, job.stream_id)
                         if not job.future.done():
@@ -171,8 +182,12 @@ class BridgeScheduler:
                     except Exception as e:
                         logger.error("Decode execution failed for stream %s: %s", job.stream_id, e)
                         if not job.future.done():
-                            job.future.set_exception(e)
+                            if job.priority == 0:
+                                job.future.set_result({"text": None, "final_degraded": True})
+                            else:
+                                job.future.set_result(None)
             finally:
+                self._inflight_jobs.pop(job.stream_id, None)
                 self.priority_queue.task_done()
 
     async def schedule_decode(
