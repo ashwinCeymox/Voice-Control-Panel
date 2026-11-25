@@ -272,14 +272,25 @@ def parse_localai_yaml_simple(path: Path) -> dict[str, Any]:
     return result
 
 
-def scan_stt_configs(models_dir: Path) -> list[dict[str, Any]]:
+def scan_stt_configs(models_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     records: list[dict[str, Any]] = []
+    ggufs: list[dict[str, Any]] = []
     yaml_files: list[Path] = []
     for pattern in ("*.yaml", "*.yml"):
         try:
             yaml_files.extend(models_dir.rglob(pattern))
         except OSError:
             pass
+    try:
+        for gp in sorted(models_dir.rglob("*.gguf")):
+            if gp.is_file():
+                ggufs.append({
+                    "path": str(gp),
+                    "name": gp.name,
+                    "size_mb": round(gp.stat().st_size / (1024 * 1024), 1),
+                })
+    except OSError:
+        pass
 
     for yf in sorted(set(yaml_files)):
         parsed = parse_localai_yaml_simple(yf)
@@ -290,8 +301,10 @@ def scan_stt_configs(models_dir: Path) -> list[dict[str, Any]]:
         if isinstance(params, dict):
             model_rel = str(params.get("model", "") or "")
         if not model_rel:
+            model_rel = str(parsed.get("model", "") or "")
+        if not model_rel:
             continue
-        is_stt = any(x in backend.lower() or x in name.lower() for x in ("parakeet", "whisper", "nemo", "asr", "stt"))
+        is_stt = any(x in backend.lower() or x in name.lower() or x in model_rel.lower() for x in ("parakeet", "whisper", "nemo", "asr", "stt"))
         if not is_stt:
             continue
 
@@ -320,11 +333,37 @@ def scan_stt_configs(models_dir: Path) -> list[dict[str, Any]]:
             "size_mb": round(size_mb, 1),
             "options": safe_opts,
         })
-    return records
+    return records, ggufs
 
 
 class ABIMismatchError(RuntimeError):
     pass
+
+
+def make_py_cmd(script_args: list[str]) -> list[str]:
+    ld_so = os.environ.get("_S0_LD_SO")
+    ld_path = os.environ.get("_S0_LIB_PATH")
+    real_py = os.path.realpath(sys.executable)
+    if ld_so and ld_path and os.path.exists(ld_so):
+        return [ld_so, "--library-path", ld_path, real_py] + script_args
+    return [sys.executable] + script_args
+
+
+def _probe_ctypes_abi_subprocess(cmd: list[str], env: dict[str, str], lib_path: str) -> tuple[bool, str]:
+    code = (
+        "import ctypes, sys; "
+        "lib = ctypes.CDLL(sys.argv[1]); "
+        "lib.parakeet_capi_abi_version.restype = ctypes.c_int; "
+        "print('OK_ABI', lib.parakeet_capi_abi_version())"
+    )
+    try:
+        p = subprocess.run(cmd + ["-c", code, lib_path], env=env, capture_output=True, text=True, timeout=10)
+        out = (p.stdout + "\n" + p.stderr).strip()
+        if p.returncode == 0 and "OK_ABI" in out:
+            return True, out
+        return False, f"rc={p.returncode}: {out}"
+    except Exception as e:
+        return False, repr(e)
 
 
 class ParakeetCAPI:
@@ -336,24 +375,55 @@ class ParakeetCAPI:
         cur = os.environ.get(env_key, "")
         os.environ[env_key] = f"{lib_dir}:{parent_dir}:{cur}" if cur else f"{lib_dir}:{parent_dir}"
 
-        if platform.system() == "Linux":
-            skip_prefixes = ("ld.so", "ld-linux", "libc.so", "libm.so", "libpthread", "libdl.so", "librt.so")
-            for sib in sorted(list(Path(lib_dir).glob("*.so*")) + list(Path(parent_dir).glob("*.so*"))):
-                if sib.name.startswith(skip_prefixes) or sib.name.startswith("libparakeet"):
-                    continue
-                try:
-                    ctypes.CDLL(str(sib), mode=ctypes.RTLD_GLOBAL)
-                except Exception:
-                    pass
-
         try:
             self.lib = ctypes.CDLL(lib_path)
         except OSError as first_err:
-            if platform.system() == "Linux" and os.environ.get("_S0_REEXEC") != "1" and "cannot open shared object file" in str(first_err):
-                env = dict(os.environ)
-                env["_S0_REEXEC"] = "1"
-                env[env_key] = os.environ[env_key]
-                os.execve(sys.executable, [sys.executable] + sys.argv, env)
+            if platform.system() == "Linux" and os.environ.get("_S0_LOADER_TRIED") != "1":
+                real_py = os.path.realpath(sys.executable)
+                py_lib = str(Path(real_py).parent.parent / "lib")
+                lib_path_val = f"{lib_dir}:{parent_dir}:{py_lib}:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:{cur}"
+
+                # Strategy 1: re-exec with LD_LIBRARY_PATH set at process startup
+                env1 = dict(os.environ)
+                env1["_S0_LOADER_TRIED"] = "1"
+                env1[env_key] = lib_path_val
+                ok1, msg1 = _probe_ctypes_abi_subprocess([sys.executable], env1, lib_path)
+                if ok1:
+                    os.execve(sys.executable, [sys.executable] + sys.argv, env1)
+
+                # Strategy 2: re-exec with LD_LIBRARY_PATH + LD_PRELOAD packaged libstdc++ / libgcc_s
+                preloads = [
+                    str(p) for p in sorted(Path(lib_dir).glob("libstdc++.so*")) + sorted(Path(lib_dir).glob("libgcc_s.so*"))
+                    if p.is_file()
+                ]
+                if preloads:
+                    env2 = dict(env1)
+                    env2["LD_PRELOAD"] = ":".join(preloads)
+                    ok2, msg2 = _probe_ctypes_abi_subprocess([sys.executable], env2, lib_path)
+                    if ok2:
+                        os.execve(sys.executable, [sys.executable] + sys.argv, env2)
+                else:
+                    msg2 = "no packaged libstdc++ in lib_dir"
+
+                # Strategy 3: invoke via LocalAI's packaged lib/ld.so (matches run.sh!)
+                ld_so = Path(lib_dir) / "ld.so"
+                if ld_so.is_file():
+                    env3 = dict(os.environ)
+                    env3["_S0_LOADER_TRIED"] = "1"
+                    env3["_S0_LD_SO"] = str(ld_so)
+                    env3["_S0_LIB_PATH"] = lib_path_val
+                    ok3, msg3 = _probe_ctypes_abi_subprocess(
+                        [str(ld_so), "--library-path", lib_path_val, real_py], env3, lib_path
+                    )
+                    if ok3:
+                        os.execve(
+                            str(ld_so),
+                            [str(ld_so), "--library-path", lib_path_val, real_py] + sys.argv,
+                            env3,
+                        )
+                    raise OSError(f"{first_err}\n  [loader attempts] env={msg1} | preload={msg2} | ld.so={msg3}")
+
+                raise OSError(f"{first_err}\n  [loader attempts] env={msg1} | preload={msg2}")
             raise
 
         self.lib.parakeet_capi_abi_version.argtypes = []
@@ -822,6 +892,12 @@ def main() -> int:
 
     print("\n--- Q1: Shared Library, Headers, CLI Discovery ---")
     print(f"  Discovered shared libs: {disc['libs']}")
+    for lc in disc["libs"]:
+        try:
+            entries = sorted(p.name for p in Path(lc).parent.iterdir())
+            print(f"  Files in {Path(lc).parent}: {entries}")
+        except OSError:
+            pass
     print(f"  Loaded in running procs: {disc['loaded_in_proc']}")
     print(f"  Headers found:          {disc['headers']}")
     print(f"  parakeet-cli found:     {disc['clis']}")
@@ -875,13 +951,19 @@ def main() -> int:
     print("\n--- Q8: LocalAI Model Config Discovery ---")
     print(f"  Models directory: {models_dir}")
     configs: list[dict[str, Any]] = []
+    ggufs: list[dict[str, Any]] = []
     if models_dir and models_dir.is_dir():
-        configs = scan_stt_configs(models_dir)
+        configs, ggufs = scan_stt_configs(models_dir)
         results_doc["q8_configs"] = configs
+        results_doc["q8_ggufs"] = ggufs
         for c in configs:
             print(f"  Model={c['name']} | backend={c['backend']} | file={c['resolved_path']} (exists={c['exists']}, {c['size_mb']} MB)")
             if c.get("options"):
                 print(f"    options={c['options']}")
+        if ggufs:
+            print("  All .gguf files under models_dir:")
+            for g in ggufs:
+                print(f"    - {g['path']} ({g['size_mb']} MB)")
     else:
         print("  [MISSING] No LocalAI models directory found.")
 
@@ -914,6 +996,15 @@ def main() -> int:
     scene_cfg = next((c for c in configs if "realtime-scene" in c["name"].lower() and c["exists"]), None)
     eou_cfg = next((c for c in configs if c is not scene_cfg and "eou" in (c["name"] + " " + c["model_param"]).lower() and c["exists"]), None)
     nemo_cfg = next((c for c in configs if "nemotron" in (c["name"] + " " + c["model_param"]).lower() and "parakeet" in c["backend"].lower() and c["exists"]), None)
+
+    if not eou_cfg:
+        eou_disk = next((g for g in ggufs if "eou" in g["name"].lower()), None)
+        if eou_disk:
+            eou_cfg = {"name": eou_disk["name"], "resolved_path": eou_disk["path"], "backend": "parakeet-cpp", "exists": True}
+    if not nemo_cfg:
+        nemo_disk = next((g for g in ggufs if "nemotron" in g["name"].lower() and "asr" in g["name"].lower() and "diarization" not in g["name"].lower()), None)
+        if nemo_disk:
+            nemo_cfg = {"name": nemo_disk["name"], "resolved_path": nemo_disk["path"], "backend": "parakeet-cpp", "exists": True}
 
     tested_models: list[tuple[str, Optional[dict[str, Any]]]] = [
         ("EOU (120M)", eou_cfg),
@@ -962,8 +1053,7 @@ def main() -> int:
         model_conc: list[dict[str, Any]] = []
         for mode in ("mode_a_per_stream", "mode_b_shared_lock"):
             for n in (1, 2, 3):
-                cmd = [
-                    sys.executable,
+                cmd = make_py_cmd([
                     __file__,
                     "--worker-concurrency",
                     mode,
@@ -973,7 +1063,7 @@ def main() -> int:
                     str(args.expected_abi),
                     "--wav",
                     str(wav_path),
-                ]
+                ])
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
                 if proc.returncode != 0:
                     err_info = proc.stderr.strip()[:400]
@@ -1014,8 +1104,7 @@ def main() -> int:
             stopfile = f"/tmp/s0_stop_{os.getpid()}"
             if os.path.exists(stopfile):
                 os.unlink(stopfile)
-            bg = subprocess.Popen([
-                sys.executable,
+            bg = subprocess.Popen(make_py_cmd([
                 __file__,
                 "--worker-bg-stream",
                 usable_lib,
@@ -1024,7 +1113,7 @@ def main() -> int:
                 str(args.expected_abi),
                 "--wav",
                 str(wav_path),
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            ]), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
                 time.sleep(2.5)
                 int_turns = measure_voice_turns(args.base_url, args.tts_url, llm_model, headers, turns=20)
