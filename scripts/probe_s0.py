@@ -41,7 +41,7 @@ import wave
 from pathlib import Path
 from typing import Any, Optional
 
-EXPECTED_ABI_VERSION = 10
+EXPECTED_ABI_VERSION = 11
 
 
 def get_rss_mb() -> float:
@@ -386,6 +386,7 @@ class ParakeetCAPI:
                 # Strategy 1: re-exec with LD_LIBRARY_PATH set at process startup
                 env1 = dict(os.environ)
                 env1["_S0_LOADER_TRIED"] = "1"
+                env1["_S0_LOADER_MODE"] = "ld_library_path_reexec"
                 env1[env_key] = lib_path_val
                 ok1, msg1 = _probe_ctypes_abi_subprocess([sys.executable], env1, lib_path)
                 if ok1:
@@ -398,6 +399,7 @@ class ParakeetCAPI:
                 ]
                 if preloads:
                     env2 = dict(env1)
+                    env2["_S0_LOADER_MODE"] = "ld_preload_libstdcxx"
                     env2["LD_PRELOAD"] = ":".join(preloads)
                     ok2, msg2 = _probe_ctypes_abi_subprocess([sys.executable], env2, lib_path)
                     if ok2:
@@ -410,6 +412,7 @@ class ParakeetCAPI:
                 if ld_so.is_file():
                     env3 = dict(os.environ)
                     env3["_S0_LOADER_TRIED"] = "1"
+                    env3["_S0_LOADER_MODE"] = "packaged_ld_so"
                     env3["_S0_LD_SO"] = str(ld_so)
                     env3["_S0_LIB_PATH"] = lib_path_val
                     ok3, msg3 = _probe_ctypes_abi_subprocess(
@@ -917,7 +920,12 @@ def main() -> int:
                 "parakeet_capi_scene_stream_feed_json",
                 "parakeet_capi_scene_stream_free",
             ))
-            print(f"  [OK] Loaded via ctypes: {lib_cand} (ABI version = {abi_reported}, scene_stream_syms = {scene_syms})")
+            has_v11_opts = capi.has_symbol("parakeet_capi_stream_begin_opts")
+            loader_mode = os.environ.get("_S0_LOADER_MODE", "direct")
+            print(
+                f"  [OK] Loaded via ctypes ({loader_mode}): {lib_cand} "
+                f"(ABI={abi_reported}, stream_begin_opts={has_v11_opts}, scene_stream_syms={scene_syms})"
+            )
             break
         except ABIMismatchError as e:
             print(f"  [REFUSED] {e}")
@@ -934,6 +942,8 @@ def main() -> int:
         **disc,
         "usable_lib": usable_lib,
         "abi_version": abi_reported,
+        "loader_mode": os.environ.get("_S0_LOADER_MODE", "direct") if usable_lib else None,
+        "stream_begin_opts": capi.has_symbol("parakeet_capi_stream_begin_opts") if capi else False,
         "ctypes_errors": load_errors,
     }
 
@@ -953,6 +963,8 @@ def main() -> int:
     configs: list[dict[str, Any]] = []
     ggufs: list[dict[str, Any]] = []
     if models_dir and models_dir.is_dir():
+        all_yamls = sorted(set(list(models_dir.rglob("*.yaml")) + list(models_dir.rglob("*.yml"))))
+        print(f"  All YAML configs found ({len(all_yamls)}): {[str(p.relative_to(models_dir)) for p in all_yamls]}")
         configs, ggufs = scan_stt_configs(models_dir)
         results_doc["q8_configs"] = configs
         results_doc["q8_ggufs"] = ggufs
