@@ -92,17 +92,17 @@ def build_worker_env(
     if omp_num_threads is not None and str(omp_num_threads).strip():
         env["OMP_NUM_THREADS"] = str(omp_num_threads).strip()
     elif is_cpu_bound:
-        env.setdefault("OMP_NUM_THREADS", "1")
+        env["OMP_NUM_THREADS"] = "1"
 
     if gomp_wait_policy is not None and str(gomp_wait_policy).strip():
         env["GOMP_WAIT_POLICY"] = str(gomp_wait_policy).strip()
     elif is_cpu_bound:
-        env.setdefault("GOMP_WAIT_POLICY", "PASSIVE")
+        env["GOMP_WAIT_POLICY"] = "PASSIVE"
 
     if omp_proc_bind is not None and str(omp_proc_bind).strip():
         env["OMP_PROC_BIND"] = str(omp_proc_bind).strip()
     elif is_cpu_bound:
-        env.setdefault("OMP_PROC_BIND", "false")
+        env["OMP_PROC_BIND"] = "false"
 
     return env
 

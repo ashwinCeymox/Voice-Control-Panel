@@ -145,3 +145,100 @@ async def test_worker_crash_ends_only_affected_streams_and_restarts(tmp_path):
 
     await engine.close()
     assert engine.worker_pid is None
+
+
+@pytest.mark.asyncio
+async def test_worker_spawn_receives_cpu_bound_env_and_nice(tmp_path, monkeypatch):
+    """Verify ParakeetNativeEngine._build_launch_spec and spawned worker receive CPU-bound env and nice 19."""
+    import json
+    import os
+
+    fake_lib = tmp_path / "libparakeet.so"
+    fake_lib.write_bytes(b"")
+
+    monkeypatch.setenv("OMP_NUM_THREADS", "64")
+    monkeypatch.setenv("GOMP_WAIT_POLICY", "ACTIVE")
+    monkeypatch.setenv("OMP_PROC_BIND", "true")
+
+    engine = ParakeetNativeEngine(lib_path=str(fake_lib), is_cpu_bound=True)
+    assert engine.worker_nice == 19
+    cmd, env = engine._build_launch_spec()
+    assert "--nice" in cmd and cmd[cmd.index("--nice") + 1] == "19"
+    assert env["OMP_NUM_THREADS"] == "1"
+    assert env["GOMP_WAIT_POLICY"] == "PASSIVE"
+    assert env["OMP_PROC_BIND"] == "false"
+
+    # Spawn a real subprocess using the built env and verify the child sees those exact env vars
+    probe_worker = tmp_path / "env_probe_worker.py"
+    probe_worker.write_text(textwrap.dedent("""
+        import json, os, sys
+        observed = {
+            "OMP_NUM_THREADS": os.environ.get("OMP_NUM_THREADS"),
+            "GOMP_WAIT_POLICY": os.environ.get("GOMP_WAIT_POLICY"),
+            "OMP_PROC_BIND": os.environ.get("OMP_PROC_BIND"),
+        }
+        sys.stdout.write(json.dumps({"ready": True, "abi": 11, "pid": os.getpid()}) + "\\n")
+        sys.stdout.flush()
+        for raw in sys.stdin:
+            req = json.loads(raw)
+            op = req.get("op")
+            if op == "load":
+                sys.stdout.write(json.dumps({"ok": True, "observed": observed}) + "\\n")
+            elif op == "open_stream":
+                sys.stdout.write(json.dumps({"ok": True, "stream_id": "s1"}) + "\\n")
+            elif op == "feed":
+                sys.stdout.write(json.dumps({"ok": True, "result": {"text": json.dumps(observed), "eou": 1}}) + "\\n")
+            elif op == "finalize":
+                sys.stdout.write(json.dumps({"ok": True, "result": {"text": "", "eou": 0}}) + "\\n")
+            elif op == "shutdown":
+                sys.stdout.write(json.dumps({"ok": True}) + "\\n")
+                sys.stdout.flush()
+                break
+            sys.stdout.flush()
+    """))
+    spawned = ParakeetNativeEngine(
+        is_cpu_bound=True,
+        worker_cmd_factory=lambda: ([sys.executable, str(probe_worker)], env),
+    )
+    await spawned.load("fake.gguf")
+    sid = await spawned.open_stream()
+    res = await spawned.feed(sid, b"\x00\x01" * 160)
+    seen = json.loads(res.text_delta)
+    assert seen == {
+        "OMP_NUM_THREADS": "1",
+        "GOMP_WAIT_POLICY": "PASSIVE",
+        "OMP_PROC_BIND": "false",
+    }
+    await spawned.finalize(sid)
+    await spawned.close()
+
+
+@pytest.mark.asyncio
+async def test_calibration_records_at_least_50_chunks_and_sample_count(tmp_path, monkeypatch):
+    """Calibration must measure >=50 chunks while voice turns run and record chunk_samples."""
+    import services.streaming_bridge.calibrate as cal
+    from services.streaming_bridge.engines.fake_engine import FakeStreamingEngine
+
+    async def fake_turn(client, base_url, tts_url, headers):
+        return (50.0, 50.0, 100.0)
+
+    class FastFakeEngine(FakeStreamingEngine):
+        def __init__(self, *args, **kwargs):
+            super().__init__(feed_latency_s=0.0, finalize_latency_s=0.0)
+
+    monkeypatch.setattr(cal, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(cal, "run_voice_turn", fake_turn)
+    monkeypatch.setattr(cal, "ParakeetNativeEngine", FastFakeEngine)
+    monkeypatch.setattr(cal, "resolve_parakeet_library", lambda: str(tmp_path / "libparakeet.so"))
+    monkeypatch.setattr(cal, "inspect_host_service_threads", lambda: [])
+    # Speed up 0.16s sleep in bg_feeder so 50 chunks complete in <0.2s
+    real_sleep = cal.asyncio.sleep
+    monkeypatch.setattr(cal.asyncio, "sleep", lambda s: real_sleep(0.001))
+
+    res = await cal.run_calibration(
+        model="parakeet-cpp-realtime_eou_120m-v1",
+        model_path="fake.gguf",
+        turns=2,
+        min_chunks=50,
+    )
+    assert res["measurements"]["chunk_samples"] >= 50

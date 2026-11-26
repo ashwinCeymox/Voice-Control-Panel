@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 from typing import Any, Callable, Dict
 import pytest
 from fastapi.testclient import TestClient
@@ -9,6 +10,36 @@ from fastapi.testclient import TestClient
 from app.core.config import settings
 from app.main import app
 from app.storage.database import init_db
+
+
+@pytest.fixture(autouse=True)
+def hermetic_streaming_bridge_flags(monkeypatch):
+    """Ensure unit tests never depend on .env streaming bridge flags."""
+    bridge_env_keys = (
+        "STT_STREAM_NATIVE_ENABLED",
+        "STREAMING_BRIDGE_ENABLED",
+        "STREAMING_BRIDGE_INTERNAL_TOKEN",
+        "STREAMING_NATIVE_LIB_PATH",
+        "STREAMING_NATIVE_OMP_NUM_THREADS",
+        "STREAMING_NATIVE_GOMP_WAIT_POLICY",
+        "STREAMING_NATIVE_OMP_PROC_BIND",
+        "STREAMING_NATIVE_WORKER_NICE",
+        "STREAMING_NATIVE_CPU_AFFINITY",
+        "STREAMING_NATIVE_VOICE_PAUSE_ENABLED",
+    )
+    for key in bridge_env_keys:
+        monkeypatch.delenv(key, raising=False)
+
+    monkeypatch.setattr(settings, "STT_STREAM_NATIVE_ENABLED", False)
+    monkeypatch.setattr(settings, "STREAMING_BRIDGE_ENABLED", False)
+    monkeypatch.setattr(settings, "STREAMING_BRIDGE_INTERNAL_TOKEN", None)
+    monkeypatch.setattr(settings, "STREAMING_NATIVE_LIB_PATH", None)
+    monkeypatch.setattr(settings, "STREAMING_NATIVE_OMP_NUM_THREADS", None)
+    monkeypatch.setattr(settings, "STREAMING_NATIVE_GOMP_WAIT_POLICY", None)
+    monkeypatch.setattr(settings, "STREAMING_NATIVE_OMP_PROC_BIND", None)
+    monkeypatch.setattr(settings, "STREAMING_NATIVE_WORKER_NICE", None)
+    monkeypatch.setattr(settings, "STREAMING_NATIVE_CPU_AFFINITY", "")
+    monkeypatch.setattr(settings, "STREAMING_NATIVE_VOICE_PAUSE_ENABLED", None)
 
 
 @pytest.fixture(autouse=True)

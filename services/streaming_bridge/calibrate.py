@@ -219,6 +219,7 @@ async def run_calibration(
     tts_url: str = "http://127.0.0.1:8880",
     api_key: str = "",
     turns: int = 20,
+    min_chunks: int = 50,
 ) -> dict:
     """Execute S0b-parity offline calibration against real ParakeetNativeEngine and save JSON."""
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
@@ -255,12 +256,16 @@ async def run_calibration(
         sid = await engine.open_stream()
         running_bg = True
 
+        bg_failed = False
+
         async def bg_feeder() -> None:
+            nonlocal bg_failed
             while running_bg:
                 t_c0 = time.perf_counter()
                 try:
                     await engine.feed(sid, chunk_bytes, sample_rate=16000)
                 except Exception:
+                    bg_failed = True
                     break
                 chunk_times_ms.append((time.perf_counter() - t_c0) * 1000.0)
                 await asyncio.sleep(0.16)
@@ -273,6 +278,10 @@ async def run_calibration(
                     stream_times.append(tot)
                 except Exception as e:
                     logger.warning("1-stream turn %d error: %s", i + 1, e)
+            # Ensure at least min_chunks (default 50) are measured even if turns finish quickly
+            deadline = time.perf_counter() + max(10.0, min_chunks * 0.5)
+            while not bg_failed and len(chunk_times_ms) < min_chunks and time.perf_counter() < deadline:
+                await asyncio.sleep(0.05)
         finally:
             running_bg = False
             bg_task.cancel()
@@ -312,6 +321,7 @@ async def run_calibration(
             "stream_p95_ms": round(stream_p95, 1),
             "chunk_p50_ms": round(chunk_p50, 2),
             "chunk_p95_ms": round(chunk_p95, 2),
+            "chunk_samples": len(chunk_times_ms),
         },
         "passed": overall_pass,
         "admitted_streams": admitted_streams,

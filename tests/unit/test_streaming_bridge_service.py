@@ -18,7 +18,8 @@ from services.streaming_bridge.server import app, startup_event
 
 
 @pytest.fixture
-def test_client():
+def test_client(monkeypatch):
+    monkeypatch.setattr(settings, "STREAMING_BRIDGE_INTERNAL_TOKEN", "test-bridge-token")
     bridge_module.active_sessions.clear()
     with TestClient(app) as client:
         yield client
