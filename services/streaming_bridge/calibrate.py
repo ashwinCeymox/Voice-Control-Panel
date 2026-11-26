@@ -35,6 +35,7 @@ from services.streaming_bridge.engines.parakeet_native import (
     ParakeetNativeEngine,
     resolve_parakeet_library,
 )
+from services.streaming_bridge.model_resolver import resolve_streaming_model_gguf
 from services.streaming_bridge.scheduler.bridge_scheduler import (
     BridgeScheduler,
     PauseBufferOverflowError,
@@ -283,7 +284,7 @@ async def run_calibration(
     logger.info("STARTING NATIVE STREAMING CALIBRATION (%s) FOR MODEL: %s", mode.upper(), model)
     logger.info("Host: %s | is_cpu_bound=%s | service_threads=%s", host_info, host_info["is_cpu_bound"], service_threads)
 
-    resolved_model_path = model_path or os.environ.get("LOCALAI_MODELS_PATH", "models") + "/parakeet-cpp/realtime_eou_120m-v1-f16.gguf"
+    resolved_model_path = model_path or resolve_streaming_model_gguf(model)
     lib_path = resolve_parakeet_library()
 
     chunk_bytes = b"\x00\x05" * 2560  # 160 ms @ 16kHz PCM16

@@ -118,8 +118,8 @@ class ParakeetWorkerBinding:
         ctx = self.lib.parakeet_capi_load(model_path.encode("utf-8"))
         if not ctx:
             err_b = self.lib.parakeet_capi_load_error()
-            msg = err_b.decode("utf-8", "replace") if err_b else f"Failed loading {model_path}"
-            raise RuntimeError(msg)
+            detail = err_b.decode("utf-8", "replace") if err_b else "unknown parakeet_capi_load error"
+            raise RuntimeError(f"parakeet_capi_load failed for '{model_path}': {detail}")
         if engine_threads is not None and int(engine_threads) > 0 and hasattr(self.lib, "parakeet_capi_set_concurrency"):
             self.lib.parakeet_capi_set_concurrency(ctypes.c_void_p(ctx), 1, int(engine_threads))
         return int(ctx)

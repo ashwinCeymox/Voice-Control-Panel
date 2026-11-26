@@ -44,6 +44,10 @@ from services.streaming_bridge.engines.base import (
     UnsupportedAudioFormatError,
 )
 from services.streaming_bridge.engines.parakeet_native import ParakeetNativeEngine
+from services.streaming_bridge.model_resolver import (
+    ModelResolutionError,
+    resolve_streaming_model_gguf,
+)
 from services.streaming_bridge.scheduler.bridge_scheduler import (
     BridgeScheduler,
     PauseBufferOverflowError,
@@ -58,6 +62,7 @@ app = FastAPI(title="Native Streaming STT Service", version="2.0.0")
 active_sessions: Dict[str, Dict[str, Any]] = {}
 scheduler: Optional[BridgeScheduler] = None
 engine: Optional[StreamingEngine] = None
+_resolved_model_cache: Dict[str, str] = {}
 
 
 def _build_default_engine() -> ParakeetNativeEngine:
@@ -256,9 +261,25 @@ async def websocket_stream(
         if active_engine is None:
             active_engine = _build_default_engine()
 
-        if not active_engine.health().get("ready"):
-            model_path = str(calib_data.get("model_path") or model)
-            await active_engine.load(model_path, language=language)
+        is_fake_engine = active_engine.health().get("engine") == "FakeStreamingEngine"
+        if is_fake_engine:
+            resolved_model_path = str(calib_data.get("model_path") or model)
+        else:
+            resolved_model_path = _resolved_model_cache.get(model)
+            if not resolved_model_path:
+                resolved_model_path = resolve_streaming_model_gguf(model)
+                _resolved_model_cache[model] = resolved_model_path
+
+        loaded_path = getattr(active_engine, "_model_path", None) or getattr(active_engine, "model_path", None)
+        if not active_engine.health().get("ready") or loaded_path != resolved_model_path:
+            try:
+                await active_engine.load(resolved_model_path, language=language)
+            except Exception as load_exc:
+                err_msg = f"Failed loading model '{model}' from '{resolved_model_path}': {load_exc}"
+                logger.error("Stream %s model load failed: %s", stream_id, err_msg)
+                await send_event({"type": "error", "code": "MODEL_LOAD_FAILED", "message": err_msg})
+                await websocket.close(code=1011)
+                return
 
         engine_stream_id = await active_engine.open_stream(language=language)
 
@@ -381,7 +402,8 @@ async def websocket_stream(
 
     except WebSocketDisconnect:
         logger.info("Stream %s disconnected", stream_id)
-    except (UnsupportedAudioFormatError, EngineABIMismatchError) as exc:
+    except (UnsupportedAudioFormatError, EngineABIMismatchError, ModelResolutionError) as exc:
+        logger.error("Stream %s rejected: %s", stream_id, exc)
         await send_event({"type": "error", "code": "ENGINE_UNSUPPORTED", "message": str(exc)})
         try:
             await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA)
