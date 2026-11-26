@@ -152,6 +152,7 @@ class ParakeetNativeEngine(StreamingEngine):
         omp_proc_bind: Optional[str] = None,
         worker_nice: Optional[int] = None,
         cpu_affinity: str = "",
+        engine_threads: Optional[int] = None,
         startup_timeout_s: float = 15.0,
         rpc_timeout_s: float = 15.0,
         worker_cmd_factory: Optional[Callable[[], Tuple[List[str], Dict[str, str]]]] = None,
@@ -164,6 +165,7 @@ class ParakeetNativeEngine(StreamingEngine):
         self.omp_proc_bind = omp_proc_bind
         self.worker_nice = worker_nice if worker_nice is not None else (19 if is_cpu_bound else None)
         self.cpu_affinity = cpu_affinity
+        self.engine_threads = engine_threads if engine_threads is not None else (4 if is_cpu_bound else None)
         self.startup_timeout_s = startup_timeout_s
         self.rpc_timeout_s = rpc_timeout_s
         self.worker_cmd_factory = worker_cmd_factory
@@ -311,7 +313,10 @@ class ParakeetNativeEngine(StreamingEngine):
         return resp
 
     async def _send_load_raw(self, model_path: str) -> None:
-        await self._send_raw({"op": "load", "model_path": model_path})
+        payload: Dict[str, Any] = {"op": "load", "model_path": model_path}
+        if self.engine_threads is not None:
+            payload["engine_threads"] = int(self.engine_threads)
+        await self._send_raw(payload)
         self._loaded = True
 
     async def load(self, model_path: str, language: str = "en") -> None:
@@ -415,6 +420,7 @@ class ParakeetNativeEngine(StreamingEngine):
             "ready": self._loaded and self.worker_pid is not None,
             "worker_pid": self.worker_pid,
             "worker_abi": self._worker_abi,
+            "engine_threads": self.engine_threads,
             "active_streams": self.active_streams,
             "crash_count": self.crash_count,
             "restart_count": self.restart_count,

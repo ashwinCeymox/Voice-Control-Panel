@@ -318,3 +318,137 @@ async def test_calibration_tags_voice_turn_vs_topup_chunks(tmp_path, monkeypatch
     assert m["topup_chunk_samples"] > 0
     assert m["total_chunk_samples"] >= 50
     assert m["chunk_samples"] + m["topup_chunk_samples"] == m["total_chunk_samples"]
+
+
+@pytest.mark.asyncio
+async def test_engine_passes_engine_threads_and_worker_calls_set_concurrency(tmp_path):
+    """ParakeetNativeEngine defaults engine_threads=4 on CPU-bound hosts and worker calls parakeet_capi_set_concurrency."""
+    import json
+    from services.streaming_bridge.engines.parakeet_worker import ParakeetWorkerBinding
+
+    eng_cpu = ParakeetNativeEngine(is_cpu_bound=True)
+    eng_gpu = ParakeetNativeEngine(is_cpu_bound=False)
+    assert eng_cpu.engine_threads == 4
+    assert eng_gpu.engine_threads is None
+
+    # Verify load RPC includes engine_threads
+    probe_worker = tmp_path / "threads_worker.py"
+    probe_worker.write_text(textwrap.dedent("""
+        import json, sys
+        sys.stdout.write(json.dumps({"ready": True, "abi": 11, "pid": 1}) + "\\n")
+        sys.stdout.flush()
+        seen_threads = None
+        for raw in sys.stdin:
+            req = json.loads(raw)
+            op = req.get("op")
+            if op == "load":
+                seen_threads = req.get("engine_threads")
+                sys.stdout.write(json.dumps({"ok": True}) + "\\n")
+            elif op == "open_stream":
+                sys.stdout.write(json.dumps({"ok": True, "stream_id": "s1"}) + "\\n")
+            elif op == "feed":
+                sys.stdout.write(json.dumps({"ok": True, "result": {"text": str(seen_threads), "eou": 1}}) + "\\n")
+            elif op == "finalize":
+                sys.stdout.write(json.dumps({"ok": True, "result": {"text": "", "eou": 0}}) + "\\n")
+            elif op == "shutdown":
+                sys.stdout.write(json.dumps({"ok": True}) + "\\n")
+                sys.stdout.flush()
+                break
+            sys.stdout.flush()
+    """))
+    eng = ParakeetNativeEngine(
+        is_cpu_bound=True,
+        engine_threads=4,
+        worker_cmd_factory=lambda: ([sys.executable, str(probe_worker)], {}),
+    )
+    await eng.load("fake.gguf")
+    sid = await eng.open_stream()
+    res = await eng.feed(sid, b"\x00\x01" * 160)
+    assert res.text_delta == "4"
+    await eng.finalize(sid)
+    await eng.close()
+
+    # Verify ParakeetWorkerBinding.load invokes parakeet_capi_set_concurrency(ctx, 1, 4)
+    from unittest.mock import MagicMock
+    import ctypes
+
+    fake_lib = MagicMock()
+    fake_lib.parakeet_capi_abi_version.return_value = 11
+    fake_lib.parakeet_capi_load.return_value = 12345
+    fake_lib.parakeet_capi_set_concurrency.return_value = 0
+
+    orig_cdll = ctypes.CDLL
+    ctypes.CDLL = lambda path: fake_lib
+    try:
+        binding = ParakeetWorkerBinding("libparakeet.so", expected_abi=11)
+        ctx = binding.load("fake.gguf", engine_threads=4)
+        assert ctx == 12345
+        fake_lib.parakeet_capi_set_concurrency.assert_called_once()
+        args = fake_lib.parakeet_capi_set_concurrency.call_args[0]
+        assert (args[0].value, args[1], args[2]) == (12345, 1, 4)
+    finally:
+        ctypes.CDLL = orig_cdll
+
+
+@pytest.mark.asyncio
+async def test_paused_mode_calibration_uses_scheduler_and_passes(tmp_path, monkeypatch):
+    """Paused-mode calibration drives BridgeScheduler, records pause/catchup metrics, and admits host."""
+    import services.streaming_bridge.calibrate as cal
+    from services.streaming_bridge.engines.fake_engine import FakeStreamingEngine
+
+    real_sleep = cal.asyncio.sleep
+
+    async def slow_turn(client, base_url, tts_url, headers):
+        await real_sleep(0.02)
+        return (10.0, 10.0, 20.0)
+
+    class FastFakeEngine(FakeStreamingEngine):
+        def __init__(self, *args, **kwargs):
+            super().__init__(feed_latency_s=0.0, finalize_latency_s=0.0)
+
+    monkeypatch.setattr(cal, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(cal, "run_voice_turn", slow_turn)
+    monkeypatch.setattr(cal, "ParakeetNativeEngine", FastFakeEngine)
+    monkeypatch.setattr(cal, "resolve_parakeet_library", lambda: str(tmp_path / "libparakeet.so"))
+    monkeypatch.setattr(cal, "inspect_host_service_threads", lambda: [])
+    monkeypatch.setattr(cal.asyncio, "sleep", lambda s: real_sleep(0.002))
+
+    res = await cal.run_calibration(
+        model="parakeet-cpp-realtime_eou_120m-v1",
+        model_path="fake.gguf",
+        turns=2,
+        min_chunks=10,
+        mode="paused",
+    )
+    assert res["calibration_mode"] == "paused"
+    assert res["status"] == "pass"
+    assert res["passed"] is True
+    assert res["admitted_streams"] == 1
+    m = res["measurements"]
+    assert m["overflow_count"] == 0
+    assert m["chunk_samples"] >= 10
+    assert m["pause_duration_p50_ms"] > 0
+    assert m["catchup_lag_p95_ms"] >= 0
+
+    ok, _, _ = cal.is_host_calibrated_and_passing("parakeet-cpp-realtime_eou_120m-v1")
+    assert ok is True
+
+
+def test_paused_mode_calibration_fails_on_overflow():
+    """Paused-mode pass rule must reject if any chunk overflowed the pause buffer."""
+    from services.streaming_bridge.calibrate import evaluate_paused_pass_rule
+
+    passed, admitted, reason = evaluate_paused_pass_rule(
+        turns_completed=20,
+        turns_target=20,
+        base_med_ms=900.0,
+        base_p95_ms=1900.0,
+        stream_med_ms=910.0,
+        stream_p95_ms=1920.0,
+        chunk_p95_ms=25.0,
+        catchup_lag_p95_ms=800.0,
+        overflow_count=2,
+    )
+    assert passed is False
+    assert admitted == 0
+    assert "overflowed" in reason

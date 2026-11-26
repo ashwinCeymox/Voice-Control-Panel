@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import deque
 import glob
 import hashlib
 import json
@@ -25,13 +26,18 @@ from pathlib import Path
 import platform
 import sys
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 import httpx
 import numpy as np
 
+from app.core.config import settings
 from services.streaming_bridge.engines.parakeet_native import (
     ParakeetNativeEngine,
     resolve_parakeet_library,
+)
+from services.streaming_bridge.scheduler.bridge_scheduler import (
+    BridgeScheduler,
+    PauseBufferOverflowError,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -153,6 +159,47 @@ def evaluate_pass_rule(
     return passed, admitted, reason
 
 
+def evaluate_paused_pass_rule(
+    *,
+    turns_completed: int,
+    turns_target: int,
+    base_med_ms: float,
+    base_p95_ms: float,
+    stream_med_ms: float,
+    stream_p95_ms: float,
+    chunk_p95_ms: float,
+    catchup_lag_p95_ms: float,
+    overflow_count: int,
+    chunk_budget_ms: float = 160.0,
+    catchup_lag_budget_ms: float = 3000.0,
+) -> Tuple[bool, int, str]:
+    """Paused-mode pass rule modeling production BridgeScheduler pause + <=2x catch-up."""
+    if turns_completed < turns_target or base_med_ms <= 0 or base_p95_ms <= 0:
+        return False, 0, f"Incomplete voice turns ({turns_completed}/{turns_target})"
+    if overflow_count > 0:
+        return False, 0, f"Pause buffer overflowed ({overflow_count} chunk(s) dropped)"
+
+    med_ratio = stream_med_ms / base_med_ms
+    p95_ratio = stream_p95_ms / base_p95_ms
+    med_ok = stream_med_ms <= (1.15 * base_med_ms)
+    p95_ok = stream_p95_ms <= (1.50 * base_p95_ms)
+    chunk_ok = 0.0 < chunk_p95_ms < chunk_budget_ms
+    lag_ok = 0.0 <= catchup_lag_p95_ms <= catchup_lag_budget_ms
+
+    passed = med_ok and p95_ok and chunk_ok and lag_ok
+    admitted = 1 if passed else 0
+    reason = (
+        "Paused-mode thresholds met"
+        if passed
+        else (
+            f"Paused-mode thresholds failed (med={med_ratio:.2f}x<=1.15, "
+            f"p95={p95_ratio:.2f}x<=1.50, chunk_p95={chunk_p95_ms:.1f}ms<{chunk_budget_ms:.0f}ms, "
+            f"catchup_lag_p95={catchup_lag_p95_ms:.1f}ms<={catchup_lag_budget_ms:.0f}ms)"
+        )
+    )
+    return passed, admitted, reason
+
+
 def is_host_calibrated_and_passing(model: str) -> Tuple[bool, str, dict]:
     """Check if a valid, passing calibration file exists for this host and model."""
     calib_file = get_calibration_file_path(model)
@@ -221,13 +268,19 @@ async def run_calibration(
     api_key: str = "",
     turns: int = 20,
     min_chunks: int = 50,
+    mode: str = "unpaused",
+    engine_threads: Optional[int] = None,
 ) -> dict:
-    """Execute S0b-parity offline calibration against real ParakeetNativeEngine and save JSON."""
+    """Execute offline calibration (unpaused or paused) against ParakeetNativeEngine and save JSON."""
+    if mode not in ("unpaused", "paused"):
+        raise ValueError(f"Unsupported calibration mode: {mode!r}")
+
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     host_info = get_host_fingerprint()
     service_threads = inspect_host_service_threads()
+    eff_engine_threads = engine_threads if engine_threads is not None else settings.STREAMING_NATIVE_ENGINE_THREADS
 
-    logger.info("STARTING NATIVE STREAMING CALIBRATION FOR MODEL: %s", model)
+    logger.info("STARTING NATIVE STREAMING CALIBRATION (%s) FOR MODEL: %s", mode.upper(), model)
     logger.info("Host: %s | is_cpu_bound=%s | service_threads=%s", host_info, host_info["is_cpu_bound"], service_threads)
 
     resolved_model_path = model_path or os.environ.get("LOCALAI_MODELS_PATH", "models") + "/parakeet-cpp/realtime_eou_120m-v1-f16.gguf"
@@ -235,6 +288,9 @@ async def run_calibration(
 
     chunk_bytes = b"\x00\x05" * 2560  # 160 ms @ 16kHz PCM16
     chunk_samples_tagged: List[Dict[str, Any]] = []
+    catchup_lags_ms: List[float] = []
+    pause_durations_ms: List[float] = []
+    overflow_count = 0
     baseline_times: List[float] = []
     stream_times: List[float] = []
     bg_error: Optional[str] = None
@@ -254,89 +310,196 @@ async def run_calibration(
         engine = ParakeetNativeEngine(
             lib_path=lib_path,
             is_cpu_bound=bool(host_info["is_cpu_bound"]),
+            engine_threads=eff_engine_threads,
         )
         await engine.load(resolved_model_path)
         sid = await engine.open_stream()
         running_bg = True
 
-        async def bg_feeder() -> None:
-            nonlocal bg_error
-            while running_bg:
-                started_during_turn = voice_turn_active
-                t_c0 = time.perf_counter()
+        if mode == "paused":
+            scheduler = BridgeScheduler(
+                max_streams=1,
+                pause_enabled=True,
+                max_buffered_chunks=settings.STREAMING_NATIVE_PAUSE_MAX_CHUNKS,
+                catchup_rate=settings.STREAMING_NATIVE_CATCHUP_RATE,
+            )
+            scheduler.start()
+            pending_capture_times: Deque[float] = deque()
+
+            async def on_chunk_paused(pcm_chunk: bytes) -> None:
+                nonlocal bg_error
+                t_cap = pending_capture_times.popleft() if pending_capture_times else time.perf_counter()
+                t_f0 = time.perf_counter()
                 try:
-                    await engine.feed(sid, chunk_bytes, sample_rate=16000)
+                    await engine.feed(sid, pcm_chunk, sample_rate=16000)
                 except Exception as exc:
                     bg_error = f"{type(exc).__name__}: {exc}"
-                    logger.error("Calibration background feeder failed: %s", bg_error)
-                    print(f"ERROR: Calibration background feeder failed: {bg_error}", file=sys.stderr)
-                    break
-                elapsed_ms = (time.perf_counter() - t_c0) * 1000.0
-                overlapped = started_during_turn or voice_turn_active
+                    logger.error("Calibration paused feeder failed: %s", bg_error)
+                    print(f"ERROR: Calibration paused feeder failed: {bg_error}", file=sys.stderr)
+                    return
+                t_done = time.perf_counter()
                 chunk_samples_tagged.append({
-                    "latency_ms": elapsed_ms,
-                    "during_voice_turn": overlapped,
+                    "latency_ms": (t_done - t_f0) * 1000.0,
+                    "during_voice_turn": False,
                 })
-                await asyncio.sleep(0.16)
+                catchup_lags_ms.append((t_done - t_cap) * 1000.0)
 
-        bg_task = asyncio.create_task(bg_feeder())
-        try:
-            for i in range(turns):
-                if bg_error is not None:
-                    break
-                voice_turn_active = True
-                try:
-                    _, _, tot = await run_voice_turn(client, base_url, tts_url, headers)
-                    stream_times.append(tot)
-                except Exception as e:
-                    logger.warning("1-stream turn %d error: %s", i + 1, e)
-                finally:
-                    voice_turn_active = False
+            scheduler.register_stream(sid, model, "en", pause_enabled=True, on_chunk=on_chunk_paused)
 
-            # Ensure at least min_chunks (default 50) total samples are collected unless feeder errored
-            deadline = time.perf_counter() + max(10.0, min_chunks * 0.5)
-            while bg_error is None and len(chunk_samples_tagged) < min_chunks and time.perf_counter() < deadline:
-                await asyncio.sleep(0.05)
-        finally:
-            voice_turn_active = False
-            running_bg = False
-            bg_task.cancel()
+            async def bg_feeder() -> None:
+                nonlocal overflow_count
+                while running_bg and bg_error is None:
+                    pending_capture_times.append(time.perf_counter())
+                    try:
+                        await scheduler.handle_audio_chunk(sid, chunk_bytes, on_chunk_paused)
+                    except PauseBufferOverflowError:
+                        if pending_capture_times:
+                            pending_capture_times.pop()
+                        overflow_count += 1
+                    await asyncio.sleep(0.16)
+
+            bg_task = asyncio.create_task(bg_feeder())
             try:
-                await bg_task
-            except asyncio.CancelledError:
-                pass
-            await engine.close_stream(sid)
-            await engine.close()
+                for i in range(turns):
+                    if bg_error is not None:
+                        break
+                    t_p0 = time.perf_counter()
+                    await scheduler.set_voice_busy(True)
+                    try:
+                        _, _, tot = await run_voice_turn(client, base_url, tts_url, headers)
+                        stream_times.append(tot)
+                    except Exception as e:
+                        logger.warning("Paused 1-stream turn %d error: %s", i + 1, e)
+                    finally:
+                        await scheduler.set_voice_busy(False)
+                        pause_durations_ms.append((time.perf_counter() - t_p0) * 1000.0)
 
-    turn_chunk_times_ms = [s["latency_ms"] for s in chunk_samples_tagged if s["during_voice_turn"]]
-    topup_chunk_times_ms = [s["latency_ms"] for s in chunk_samples_tagged if not s["during_voice_turn"]]
+                    drain_deadline = time.perf_counter() + 10.0
+                    st = scheduler._streams.get(sid)
+                    while bg_error is None and st is not None and st.buffer and time.perf_counter() < drain_deadline:
+                        await asyncio.sleep(0.05)
 
-    stream_med = float(np.median(stream_times)) if stream_times else 0.0
-    stream_p95 = float(np.percentile(stream_times, 95)) if stream_times else 0.0
-    chunk_p50 = float(np.median(turn_chunk_times_ms)) if turn_chunk_times_ms else 0.0
-    chunk_p95 = float(np.percentile(turn_chunk_times_ms, 95)) if turn_chunk_times_ms else 0.0
-    topup_p50 = float(np.median(topup_chunk_times_ms)) if topup_chunk_times_ms else 0.0
-    topup_p95 = float(np.percentile(topup_chunk_times_ms, 95)) if topup_chunk_times_ms else 0.0
+                deadline = time.perf_counter() + max(10.0, min_chunks * 0.5)
+                while bg_error is None and len(chunk_samples_tagged) < min_chunks and time.perf_counter() < deadline:
+                    await asyncio.sleep(0.05)
+            finally:
+                running_bg = False
+                bg_task.cancel()
+                try:
+                    await bg_task
+                except asyncio.CancelledError:
+                    pass
+                await scheduler.flush_buffered(sid, on_chunk_paused)
+                await scheduler.stop()
+                await engine.close_stream(sid)
+                await engine.close()
+        else:
+            async def bg_feeder() -> None:
+                nonlocal bg_error
+                while running_bg:
+                    started_during_turn = voice_turn_active
+                    t_c0 = time.perf_counter()
+                    try:
+                        await engine.feed(sid, chunk_bytes, sample_rate=16000)
+                    except Exception as exc:
+                        bg_error = f"{type(exc).__name__}: {exc}"
+                        logger.error("Calibration background feeder failed: %s", bg_error)
+                        print(f"ERROR: Calibration background feeder failed: {bg_error}", file=sys.stderr)
+                        break
+                    elapsed_ms = (time.perf_counter() - t_c0) * 1000.0
+                    overlapped = started_during_turn or voice_turn_active
+                    chunk_samples_tagged.append({
+                        "latency_ms": elapsed_ms,
+                        "during_voice_turn": overlapped,
+                    })
+                    await asyncio.sleep(0.16)
 
-    measurements = {
-        "turns_completed": len(stream_times),
-        "turns_target": turns,
-        "baseline_median_ms": round(base_med, 1),
-        "baseline_p95_ms": round(base_p95, 1),
-        "stream_median_ms": round(stream_med, 1),
-        "stream_p95_ms": round(stream_p95, 1),
-        "chunk_p50_ms": round(chunk_p50, 2),
-        "chunk_p95_ms": round(chunk_p95, 2),
-        "chunk_samples": len(turn_chunk_times_ms),
-        "topup_chunk_p50_ms": round(topup_p50, 2),
-        "topup_chunk_p95_ms": round(topup_p95, 2),
-        "topup_chunk_samples": len(topup_chunk_times_ms),
-        "total_chunk_samples": len(chunk_samples_tagged),
-    }
+            bg_task = asyncio.create_task(bg_feeder())
+            try:
+                for i in range(turns):
+                    if bg_error is not None:
+                        break
+                    voice_turn_active = True
+                    try:
+                        _, _, tot = await run_voice_turn(client, base_url, tts_url, headers)
+                        stream_times.append(tot)
+                    except Exception as e:
+                        logger.warning("1-stream turn %d error: %s", i + 1, e)
+                    finally:
+                        voice_turn_active = False
+
+                deadline = time.perf_counter() + max(10.0, min_chunks * 0.5)
+                while bg_error is None and len(chunk_samples_tagged) < min_chunks and time.perf_counter() < deadline:
+                    await asyncio.sleep(0.05)
+            finally:
+                voice_turn_active = False
+                running_bg = False
+                bg_task.cancel()
+                try:
+                    await bg_task
+                except asyncio.CancelledError:
+                    pass
+                await engine.close_stream(sid)
+                await engine.close()
+
+    if mode == "paused":
+        all_chunk_times = [s["latency_ms"] for s in chunk_samples_tagged]
+        stream_med = float(np.median(stream_times)) if stream_times else 0.0
+        stream_p95 = float(np.percentile(stream_times, 95)) if stream_times else 0.0
+        chunk_p50 = float(np.median(all_chunk_times)) if all_chunk_times else 0.0
+        chunk_p95 = float(np.percentile(all_chunk_times, 95)) if all_chunk_times else 0.0
+        lag_p50 = float(np.median(catchup_lags_ms)) if catchup_lags_ms else 0.0
+        lag_p95 = float(np.percentile(catchup_lags_ms, 95)) if catchup_lags_ms else 0.0
+        pause_p50 = float(np.median(pause_durations_ms)) if pause_durations_ms else 0.0
+        pause_p95 = float(np.percentile(pause_durations_ms, 95)) if pause_durations_ms else 0.0
+
+        measurements = {
+            "turns_completed": len(stream_times),
+            "turns_target": turns,
+            "baseline_median_ms": round(base_med, 1),
+            "baseline_p95_ms": round(base_p95, 1),
+            "stream_median_ms": round(stream_med, 1),
+            "stream_p95_ms": round(stream_p95, 1),
+            "chunk_p50_ms": round(chunk_p50, 2),
+            "chunk_p95_ms": round(chunk_p95, 2),
+            "chunk_samples": len(all_chunk_times),
+            "catchup_lag_p50_ms": round(lag_p50, 2),
+            "catchup_lag_p95_ms": round(lag_p95, 2),
+            "pause_duration_p50_ms": round(pause_p50, 1),
+            "pause_duration_p95_ms": round(pause_p95, 1),
+            "overflow_count": overflow_count,
+        }
+    else:
+        turn_chunk_times_ms = [s["latency_ms"] for s in chunk_samples_tagged if s["during_voice_turn"]]
+        topup_chunk_times_ms = [s["latency_ms"] for s in chunk_samples_tagged if not s["during_voice_turn"]]
+
+        stream_med = float(np.median(stream_times)) if stream_times else 0.0
+        stream_p95 = float(np.percentile(stream_times, 95)) if stream_times else 0.0
+        chunk_p50 = float(np.median(turn_chunk_times_ms)) if turn_chunk_times_ms else 0.0
+        chunk_p95 = float(np.percentile(turn_chunk_times_ms, 95)) if turn_chunk_times_ms else 0.0
+        topup_p50 = float(np.median(topup_chunk_times_ms)) if topup_chunk_times_ms else 0.0
+        topup_p95 = float(np.percentile(topup_chunk_times_ms, 95)) if topup_chunk_times_ms else 0.0
+
+        measurements = {
+            "turns_completed": len(stream_times),
+            "turns_target": turns,
+            "baseline_median_ms": round(base_med, 1),
+            "baseline_p95_ms": round(base_p95, 1),
+            "stream_median_ms": round(stream_med, 1),
+            "stream_p95_ms": round(stream_p95, 1),
+            "chunk_p50_ms": round(chunk_p50, 2),
+            "chunk_p95_ms": round(chunk_p95, 2),
+            "chunk_samples": len(turn_chunk_times_ms),
+            "topup_chunk_p50_ms": round(topup_p50, 2),
+            "topup_chunk_p95_ms": round(topup_p95, 2),
+            "topup_chunk_samples": len(topup_chunk_times_ms),
+            "total_chunk_samples": len(chunk_samples_tagged),
+        }
 
     if bg_error is not None:
         result_data = {
             "model": model,
+            "calibration_mode": mode,
             "calibrated_at": time.time(),
             "host": host_info,
             "service_threads": service_threads,
@@ -348,17 +511,31 @@ async def run_calibration(
             "verdict_reason": f"feeder_error: {bg_error}",
         }
     else:
-        overall_pass, admitted_streams, verdict_reason = evaluate_pass_rule(
-            turns_completed=len(stream_times),
-            turns_target=turns,
-            base_med_ms=base_med,
-            base_p95_ms=base_p95,
-            stream_med_ms=stream_med,
-            stream_p95_ms=stream_p95,
-            chunk_p95_ms=chunk_p95,
-        )
+        if mode == "paused":
+            overall_pass, admitted_streams, verdict_reason = evaluate_paused_pass_rule(
+                turns_completed=len(stream_times),
+                turns_target=turns,
+                base_med_ms=base_med,
+                base_p95_ms=base_p95,
+                stream_med_ms=stream_med,
+                stream_p95_ms=stream_p95,
+                chunk_p95_ms=chunk_p95,
+                catchup_lag_p95_ms=lag_p95,
+                overflow_count=overflow_count,
+            )
+        else:
+            overall_pass, admitted_streams, verdict_reason = evaluate_pass_rule(
+                turns_completed=len(stream_times),
+                turns_target=turns,
+                base_med_ms=base_med,
+                base_p95_ms=base_p95,
+                stream_med_ms=stream_med,
+                stream_p95_ms=stream_p95,
+                chunk_p95_ms=chunk_p95,
+            )
         result_data = {
             "model": model,
+            "calibration_mode": mode,
             "calibrated_at": time.time(),
             "host": host_info,
             "service_threads": service_threads,
@@ -383,8 +560,20 @@ def main() -> None:
     parser.add_argument("--base-url", default=os.environ.get("LOCALAI_BASE_URL", "http://127.0.0.1:8080"))
     parser.add_argument("--tts-url", default=os.environ.get("TTS_URL", "http://127.0.0.1:8880"))
     parser.add_argument("--api-key", default=os.environ.get("LOCALAI_API_KEY", ""))
+    parser.add_argument("--mode", choices=["unpaused", "paused"], default="unpaused")
+    parser.add_argument("--engine-threads", type=int, default=None)
     args = parser.parse_args()
-    asyncio.run(run_calibration(args.model, args.model_path or None, args.base_url, args.tts_url, args.api_key))
+    asyncio.run(
+        run_calibration(
+            args.model,
+            args.model_path or None,
+            args.base_url,
+            args.tts_url,
+            args.api_key,
+            mode=args.mode,
+            engine_threads=args.engine_threads,
+        )
+    )
 
 
 if __name__ == "__main__":

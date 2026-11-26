@@ -99,6 +99,10 @@ class ParakeetWorkerBinding:
         L.parakeet_capi_free_string.argtypes = [ctypes.c_void_p]
         L.parakeet_capi_free_string.restype = None
 
+        if hasattr(L, "parakeet_capi_set_concurrency"):
+            L.parakeet_capi_set_concurrency.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+            L.parakeet_capi_set_concurrency.restype = ctypes.c_int
+
     def _consume_owned_json(self, ptr: Optional[int], ctx: Optional[int]) -> Dict[str, Any]:
         if not ptr:
             err_b = self.lib.parakeet_capi_last_error(ctypes.c_void_p(ctx)) if ctx else None
@@ -110,12 +114,14 @@ class ParakeetWorkerBinding:
         finally:
             self.lib.parakeet_capi_free_string(ctypes.c_void_p(ptr))
 
-    def load(self, model_path: str) -> int:
+    def load(self, model_path: str, engine_threads: Optional[int] = None) -> int:
         ctx = self.lib.parakeet_capi_load(model_path.encode("utf-8"))
         if not ctx:
             err_b = self.lib.parakeet_capi_load_error()
             msg = err_b.decode("utf-8", "replace") if err_b else f"Failed loading {model_path}"
             raise RuntimeError(msg)
+        if engine_threads is not None and int(engine_threads) > 0 and hasattr(self.lib, "parakeet_capi_set_concurrency"):
+            self.lib.parakeet_capi_set_concurrency(ctypes.c_void_p(ctx), 1, int(engine_threads))
         return int(ctx)
 
     def free_ctx(self, ctx: int) -> None:
@@ -215,7 +221,11 @@ def run_worker_loop(
                         capi.free_ctx(ctx)
                         ctx = None
                     model_path = str(req["model_path"])
-                    ctx = capi.load(model_path)
+                    engine_threads = req.get("engine_threads")
+                    ctx = capi.load(
+                        model_path,
+                        engine_threads=int(engine_threads) if engine_threads is not None else None,
+                    )
                     _emit({"ok": True})
                 elif op == "open_stream":
                     if ctx is None:

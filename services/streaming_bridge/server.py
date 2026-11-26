@@ -71,6 +71,7 @@ def _build_default_engine() -> ParakeetNativeEngine:
         omp_proc_bind=settings.STREAMING_NATIVE_OMP_PROC_BIND,
         worker_nice=settings.STREAMING_NATIVE_WORKER_NICE,
         cpu_affinity=settings.STREAMING_NATIVE_CPU_AFFINITY,
+        engine_threads=settings.STREAMING_NATIVE_ENGINE_THREADS,
     )
 
 
