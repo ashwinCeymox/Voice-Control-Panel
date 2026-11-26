@@ -251,3 +251,36 @@ def test_ops_map_script_syntax_and_no_secret_leak(tmp_path):
     assert "STT_STREAM_NATIVE_ENABLED" in run.stdout
     assert fake_secret_1 not in combined
     assert fake_secret_2 not in combined
+
+
+def test_tts_facts_script_syntax_and_no_secret_leak(tmp_path):
+    """scripts/tts-facts.sh must pass bash -n, refuse ENVIRONMENT=production, and never print .env secrets."""
+    import subprocess
+    from pathlib import Path
+
+    script = Path("scripts/tts-facts.sh").resolve()
+    assert script.exists(), "scripts/tts-facts.sh missing"
+
+    syntax = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
+    assert syntax.returncode == 0, f"bash -n failed: {syntax.stderr}"
+
+    # Refuses when ENVIRONMENT=production
+    prod_env = tmp_path / ".env"
+    prod_env.write_text("ENVIRONMENT=production\nADMIN_API_KEY=PROD_SECRET_111\n", encoding="utf-8")
+    prod_run = subprocess.run(["bash", str(script)], cwd=str(tmp_path), capture_output=True, text=True)
+    assert prod_run.returncode != 0
+    assert "PROD_SECRET_111" not in (prod_run.stdout + prod_run.stderr)
+
+    # Safe non-prod run prints no .env values
+    fake_secret = "FAKE_TTS_ENV_SECRET_998877"
+    dev_env = tmp_path / ".env"
+    dev_env.write_text(f"ENVIRONMENT=development\nADMIN_API_KEY={fake_secret}\n", encoding="utf-8")
+    dev_run = subprocess.run(
+        ["bash", str(script)],
+        cwd=str(tmp_path),
+        env={"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "IDLE_SAMPLE_S": "0"},
+        capture_output=True,
+        text=True,
+    )
+    assert dev_run.returncode == 0, f"tts-facts.sh failed: {dev_run.stderr}"
+    assert fake_secret not in (dev_run.stdout + dev_run.stderr)
