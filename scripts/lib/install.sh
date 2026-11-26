@@ -219,6 +219,34 @@ install_node_and_frontend() {
     fi
 }
 
+# Ensure CPU parakeet-cpp backend is installed on non-NVIDIA Linux hosts (avoid ROCm misdetection on AMD CPU)
+ensure_cpu_parakeet_backend() {
+    local localai_bin="${1:-${LOCALAI_EXEC:-}}"
+    if [ "${PLATFORM}" != "linux" ] || command -v nvidia-smi >/dev/null 2>&1; then
+        return 0
+    fi
+    local target_lib="${ROOT_DIR}/backends/cpu-parakeet-cpp/lib/libparakeet.so"
+    if [ -f "${target_lib}" ]; then
+        log_ok "CPU parakeet-cpp backend already present at ${target_lib}"
+        return 0
+    fi
+    if [ -z "${localai_bin}" ] || [ ! -x "${localai_bin}" ]; then
+        return 0
+    fi
+    mkdir -p "${ROOT_DIR}/backends"
+    log_info "Installing CPU parakeet-cpp backend (LOCALAI_FORCE_META_BACKEND_CAPABILITY=cpu)..."
+    LOCALAI_FORCE_META_BACKEND_CAPABILITY=cpu \
+    LOCALAI_BACKENDS_PATH="${ROOT_DIR}/backends" \
+        "${localai_bin}" backends install cpu-parakeet-cpp >/dev/null 2>&1 || \
+    LOCALAI_FORCE_META_BACKEND_CAPABILITY=cpu \
+    LOCALAI_BACKENDS_PATH="${ROOT_DIR}/backends" \
+        "${localai_bin}" backends install localai@parakeet-cpp >/dev/null 2>&1 || \
+        log_warn "Automated cpu-parakeet-cpp backend install failed; install manually if native streaming STT is needed."
+    if [ -f "${target_lib}" ]; then
+        log_ok "CPU parakeet-cpp backend verified at ${target_lib}"
+    fi
+}
+
 # 5. Setup LocalAI binary
 install_localai_engine() {
     # Check if system-wide local-ai binary is present and valid
@@ -226,16 +254,19 @@ install_localai_engine() {
         LOCALAI_EXEC="$(command -v local-ai)"
         LOCALAI_MODELS_PATH="${ROOT_DIR}/models"
         log_ok "Using system LocalAI binary at ${LOCALAI_EXEC}"
+        ensure_cpu_parakeet_backend "${LOCALAI_EXEC}"
         return 0
     elif [ -x "${HOME}/.local/bin/local-ai" ] && is_valid_binary "${HOME}/.local/bin/local-ai"; then
         LOCALAI_EXEC="${HOME}/.local/bin/local-ai"
         LOCALAI_MODELS_PATH="${ROOT_DIR}/models"
         log_ok "Using user LocalAI binary at ${LOCALAI_EXEC}"
+        ensure_cpu_parakeet_backend "${LOCALAI_EXEC}"
         return 0
     elif [ -x "/usr/local/bin/local-ai" ] && is_valid_binary "/usr/local/bin/local-ai"; then
         LOCALAI_EXEC="/usr/local/bin/local-ai"
         LOCALAI_MODELS_PATH="${ROOT_DIR}/models"
         log_ok "Using system LocalAI binary at ${LOCALAI_EXEC}"
+        ensure_cpu_parakeet_backend "${LOCALAI_EXEC}"
         return 0
     fi
 
@@ -244,6 +275,7 @@ install_localai_engine() {
         LOCALAI_EXEC="${ROOT_DIR}/../LocalAI/local-ai"
         LOCALAI_MODELS_PATH="${ROOT_DIR}/../LocalAI/models"
         log_ok "Using resident LocalAI binary at ${LOCALAI_EXEC}"
+        ensure_cpu_parakeet_backend "${LOCALAI_EXEC}"
         return 0
     fi
 
@@ -253,6 +285,7 @@ install_localai_engine() {
             LOCALAI_EXEC="${TOOLS_DIR}/localai/local-ai"
             LOCALAI_MODELS_PATH="${ROOT_DIR}/models"
             log_ok "Using installed LocalAI binary at ${LOCALAI_EXEC}"
+            ensure_cpu_parakeet_backend "${LOCALAI_EXEC}"
             return 0
         else
             log_warn "Existing file at ${TOOLS_DIR}/localai/local-ai failed binary validation (e.g. 404 HTML text). Removing corrupted file..."
@@ -296,6 +329,7 @@ install_localai_engine() {
         if [ "${success}" = "true" ]; then
             LOCALAI_MODELS_PATH="${ROOT_DIR}/models"
             log_ok "LocalAI engine installed and verified at ${LOCALAI_EXEC}"
+            ensure_cpu_parakeet_backend "${LOCALAI_EXEC}"
             return 0
         fi
 

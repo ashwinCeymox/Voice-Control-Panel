@@ -284,3 +284,14 @@ def test_tts_facts_script_syntax_and_no_secret_leak(tmp_path):
     )
     assert dev_run.returncode == 0, f"tts-facts.sh failed: {dev_run.stderr}"
     assert fake_secret not in (dev_run.stdout + dev_run.stderr)
+
+
+def test_installer_forces_cpu_parakeet_on_non_nvidia_linux():
+    """Verify install.sh and services.sh force CPU capability on non-NVIDIA Linux hosts."""
+    from pathlib import Path
+    install_sh = Path("scripts/lib/install.sh").read_text(encoding="utf-8")
+    services_sh = Path("scripts/lib/services.sh").read_text(encoding="utf-8")
+    assert "ensure_cpu_parakeet_backend" in install_sh
+    assert "cpu-parakeet-cpp" in install_sh
+    assert "LOCALAI_FORCE_META_BACKEND_CAPABILITY=cpu" in install_sh
+    assert "LOCALAI_FORCE_META_BACKEND_CAPABILITY=cpu" in services_sh

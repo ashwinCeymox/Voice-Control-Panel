@@ -111,6 +111,7 @@ start_localai() {
         fi
         if ! command -v nvidia-smi >/dev/null 2>&1; then
             export LOCALAI_DISABLE_HARDWARE_DEFAULTS=true
+            export LOCALAI_FORCE_META_BACKEND_CAPABILITY=cpu
         fi
     fi
 
