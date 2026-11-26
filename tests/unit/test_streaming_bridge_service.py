@@ -126,7 +126,7 @@ def test_websocket_native_lifecycle_empty_finalize_and_zero_leaks(test_client, m
     model = "parakeet-cpp-realtime_eou_120m-v1"
     cf = _write_passing_calibration(model, admitted_streams=2, is_cpu_bound=False)
     fake = FakeStreamingEngine(
-        chunk_script=[{"text": "hello", "eou": False}, {"text": "world", "eou": True}],
+        chunk_script=[{"text": "hello", "eou": False}, {"text": " world", "eou": True}],
         finalize_tail_text="",
     )
     monkeypatch.setattr(bridge_module, "engine", fake)
@@ -194,7 +194,7 @@ def test_admitted_streams_cap_returns_bridge_busy_1013(test_client, monkeypatch)
 def test_voice_turn_pause_resume_and_bounded_overflow(test_client, monkeypatch):
     model = "parakeet-pause-test"
     cf = _write_passing_calibration(model, admitted_streams=1, is_cpu_bound=True)
-    fake = FakeStreamingEngine(chunk_script=[{"text": "buffered", "eou": False}, {"text": "speech", "eou": True}])
+    fake = FakeStreamingEngine(chunk_script=[{"text": "buffered", "eou": False}, {"text": " speech", "eou": True}])
     monkeypatch.setattr(bridge_module, "engine", fake)
     monkeypatch.setattr(bridge_module.scheduler, "max_buffered_chunks", 2)
     monkeypatch.setattr(bridge_module.scheduler, "catchup_rate", 2.0)

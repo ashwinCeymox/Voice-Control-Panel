@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+import re
 import struct
 from typing import Any, Dict, List
 
@@ -75,18 +76,15 @@ def pcm16_to_float32(
 
 
 def join_transcript_parts(accumulated: str, piece: str) -> str:
-    """Merge an incremental finalized piece or tail onto accumulated transcript text.
+    """Merge an incremental token piece or finalize tail onto accumulated transcript text.
 
-    In parakeet_capi ABI 11, stream_feed_json returns only newly-finalized text since
-    the previous call and stream_finalize_json returns only the trailing remainder
-    ("" when nothing new remains). Preserves prior partials cleanly on empty tails.
+    In parakeet_capi ABI 11, stream_feed_json and stream_finalize_json emit token pieces
+    where a new word starts with a leading space (e.g. ' part', ' clou') and sub-word
+    continuations have none (e.g. 'ly', 'dy'). Concatenate pieces as-is without inserting
+    spaces, normalize repeated whitespace, and strip leading/trailing whitespace.
     """
-    clean_piece = (piece or "").strip()
-    if not clean_piece:
-        return accumulated
-    if not accumulated:
-        return clean_piece
-    return f"{accumulated} {clean_piece}"
+    combined = f"{accumulated or ''}{piece or ''}"
+    return re.sub(r"\s+", " ", combined).strip()
 
 
 class StreamingEngine(ABC):

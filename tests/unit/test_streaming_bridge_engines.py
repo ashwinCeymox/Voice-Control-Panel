@@ -48,7 +48,30 @@ def test_join_transcript_parts_preserves_partials_on_empty_tail():
     assert acc == "hello world"
     assert join_transcript_parts(acc, "") == "hello world"
     assert join_transcript_parts(acc, "   ") == "hello world"
-    assert join_transcript_parts(acc, "again") == "hello world again"
+    assert join_transcript_parts(acc, " again") == "hello world again"
+
+
+def test_join_transcript_parts_subword_token_pieces():
+    acc = ""
+    for piece in [" part", "ly", " clou", "dy"]:
+        acc = join_transcript_parts(acc, piece)
+    assert acc == "partly cloudy"
+    assert join_transcript_parts(acc, "") == "partly cloudy"
+    assert join_transcript_parts(acc, "   ") == "partly cloudy"
+
+
+@pytest.mark.asyncio
+async def test_fake_engine_default_subword_pieces_and_empty_finalize():
+    engine = FakeStreamingEngine(finalize_tail_text="")
+    await engine.load("fake-model.gguf", language="en")
+    sid = await engine.open_stream("en")
+    chunk_pcm = b"\x00\x02" * 1600
+    for _ in range(len(engine.chunk_script)):
+        res = await engine.feed(sid, chunk_pcm, sample_rate=16000)
+    assert res.accumulated_text == "the weather today is partly cloudy"
+    final = await engine.finalize(sid)
+    assert final.tail_text == ""
+    assert final.full_text == "the weather today is partly cloudy"
 
 
 @pytest.mark.asyncio
@@ -57,7 +80,7 @@ async def test_fake_engine_finalize_empty_plus_accumulated_partials():
     engine = FakeStreamingEngine(
         chunk_script=[
             {"text": "good morning", "eou": False},
-            {"text": "alice", "eou": True},
+            {"text": " alice", "eou": True},
         ],
         finalize_tail_text="",
     )
@@ -71,7 +94,7 @@ async def test_fake_engine_finalize_empty_plus_accumulated_partials():
     assert r1.eou is False
 
     r2 = await engine.feed(sid, chunk_pcm, sample_rate=16000)
-    assert r2.text_delta == "alice"
+    assert r2.text_delta == " alice"
     assert r2.accumulated_text == "good morning alice"
     assert r2.eou is True
 
@@ -89,13 +112,13 @@ async def test_fake_engine_finalize_empty_plus_accumulated_partials():
 async def test_fake_engine_merges_non_empty_finalize_tail():
     engine = FakeStreamingEngine(
         chunk_script=[{"text": "test", "eou": False}],
-        finalize_tail_text="phrase",
+        finalize_tail_text=" phrase",
     )
     await engine.load("fake-model.gguf")
     sid = await engine.open_stream()
     await engine.feed(sid, b"\x00\x01" * 800, sample_rate=16000)
     final = await engine.finalize(sid)
-    assert final.tail_text == "phrase"
+    assert final.tail_text == " phrase"
     assert final.full_text == "test phrase"
     assert engine.active_streams == 0
 

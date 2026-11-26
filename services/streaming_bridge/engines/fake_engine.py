@@ -43,9 +43,14 @@ class FakeStreamingEngine(StreamingEngine):
         self.feed_latency_s = feed_latency_s
         self.finalize_latency_s = finalize_latency_s
         self.chunk_script = list(chunk_script) if chunk_script is not None else [
-            {"text": "the weather", "eou": False},
-            {"text": "today is", "eou": False},
-            {"text": "partly cloudy", "eou": True},
+            {"text": " the", "eou": False},
+            {"text": " weather", "eou": False},
+            {"text": " today", "eou": False},
+            {"text": " is", "eou": False},
+            {"text": " part", "eou": False},
+            {"text": "ly", "eou": False},
+            {"text": " clou", "eou": False},
+            {"text": "dy", "eou": True},
         ]
         self.finalize_tail_text = finalize_tail_text
         self.crash_on_feed_call = crash_on_feed_call
