@@ -215,3 +215,39 @@ def test_scripts_support_stt_stream_native_flag_and_docs():
     assert "bridge-relay-v1" in changes_doc
     assert "bridge-calibrate.sh" in changes_doc
     assert "STT_STREAM_NATIVE_ENABLED" in changes_doc
+
+
+def test_ops_map_script_syntax_and_no_secret_leak(tmp_path):
+    """scripts/ops-map.sh must pass bash -n and never print .env secret values."""
+    import subprocess
+    from pathlib import Path
+
+    script = Path("scripts/ops-map.sh").resolve()
+    assert script.exists(), "scripts/ops-map.sh missing"
+
+    syntax = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
+    assert syntax.returncode == 0, f"bash -n failed: {syntax.stderr}"
+
+    fake_env = tmp_path / ".env"
+    fake_secret_1 = "FAKE_ADMIN_SECRET_VALUE_987654"
+    fake_secret_2 = "FAKE_BRIDGE_TOKEN_VALUE_123456"
+    fake_env.write_text(
+        f"ADMIN_API_KEY={fake_secret_1}\n"
+        f"STREAMING_BRIDGE_INTERNAL_TOKEN={fake_secret_2}\n"
+        "STT_STREAM_NATIVE_ENABLED=false\n",
+        encoding="utf-8",
+    )
+
+    run = subprocess.run(
+        ["bash", str(script)],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode == 0, f"ops-map.sh failed: {run.stderr}"
+    combined = run.stdout + "\n" + run.stderr
+    assert "ADMIN_API_KEY" in run.stdout
+    assert "STREAMING_BRIDGE_INTERNAL_TOKEN" in run.stdout
+    assert "STT_STREAM_NATIVE_ENABLED" in run.stdout
+    assert fake_secret_1 not in combined
+    assert fake_secret_2 not in combined
