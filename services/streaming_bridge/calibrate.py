@@ -23,6 +23,7 @@ import logging
 import os
 from pathlib import Path
 import platform
+import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import httpx
@@ -233,9 +234,11 @@ async def run_calibration(
     lib_path = resolve_parakeet_library()
 
     chunk_bytes = b"\x00\x05" * 2560  # 160 ms @ 16kHz PCM16
-    chunk_times_ms: List[float] = []
+    chunk_samples_tagged: List[Dict[str, Any]] = []
     baseline_times: List[float] = []
     stream_times: List[float] = []
+    bg_error: Optional[str] = None
+    voice_turn_active = False
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         for i in range(turns):
@@ -256,33 +259,46 @@ async def run_calibration(
         sid = await engine.open_stream()
         running_bg = True
 
-        bg_failed = False
-
         async def bg_feeder() -> None:
-            nonlocal bg_failed
+            nonlocal bg_error
             while running_bg:
+                started_during_turn = voice_turn_active
                 t_c0 = time.perf_counter()
                 try:
                     await engine.feed(sid, chunk_bytes, sample_rate=16000)
-                except Exception:
-                    bg_failed = True
+                except Exception as exc:
+                    bg_error = f"{type(exc).__name__}: {exc}"
+                    logger.error("Calibration background feeder failed: %s", bg_error)
+                    print(f"ERROR: Calibration background feeder failed: {bg_error}", file=sys.stderr)
                     break
-                chunk_times_ms.append((time.perf_counter() - t_c0) * 1000.0)
+                elapsed_ms = (time.perf_counter() - t_c0) * 1000.0
+                overlapped = started_during_turn or voice_turn_active
+                chunk_samples_tagged.append({
+                    "latency_ms": elapsed_ms,
+                    "during_voice_turn": overlapped,
+                })
                 await asyncio.sleep(0.16)
 
         bg_task = asyncio.create_task(bg_feeder())
         try:
             for i in range(turns):
+                if bg_error is not None:
+                    break
+                voice_turn_active = True
                 try:
                     _, _, tot = await run_voice_turn(client, base_url, tts_url, headers)
                     stream_times.append(tot)
                 except Exception as e:
                     logger.warning("1-stream turn %d error: %s", i + 1, e)
-            # Ensure at least min_chunks (default 50) are measured even if turns finish quickly
+                finally:
+                    voice_turn_active = False
+
+            # Ensure at least min_chunks (default 50) total samples are collected unless feeder errored
             deadline = time.perf_counter() + max(10.0, min_chunks * 0.5)
-            while not bg_failed and len(chunk_times_ms) < min_chunks and time.perf_counter() < deadline:
+            while bg_error is None and len(chunk_samples_tagged) < min_chunks and time.perf_counter() < deadline:
                 await asyncio.sleep(0.05)
         finally:
+            voice_turn_active = False
             running_bg = False
             bg_task.cancel()
             try:
@@ -292,41 +308,66 @@ async def run_calibration(
             await engine.close_stream(sid)
             await engine.close()
 
+    turn_chunk_times_ms = [s["latency_ms"] for s in chunk_samples_tagged if s["during_voice_turn"]]
+    topup_chunk_times_ms = [s["latency_ms"] for s in chunk_samples_tagged if not s["during_voice_turn"]]
+
     stream_med = float(np.median(stream_times)) if stream_times else 0.0
     stream_p95 = float(np.percentile(stream_times, 95)) if stream_times else 0.0
-    chunk_p50 = float(np.median(chunk_times_ms)) if chunk_times_ms else 0.0
-    chunk_p95 = float(np.percentile(chunk_times_ms, 95)) if chunk_times_ms else 0.0
+    chunk_p50 = float(np.median(turn_chunk_times_ms)) if turn_chunk_times_ms else 0.0
+    chunk_p95 = float(np.percentile(turn_chunk_times_ms, 95)) if turn_chunk_times_ms else 0.0
+    topup_p50 = float(np.median(topup_chunk_times_ms)) if topup_chunk_times_ms else 0.0
+    topup_p95 = float(np.percentile(topup_chunk_times_ms, 95)) if topup_chunk_times_ms else 0.0
 
-    overall_pass, admitted_streams, verdict_reason = evaluate_pass_rule(
-        turns_completed=len(stream_times),
-        turns_target=turns,
-        base_med_ms=base_med,
-        base_p95_ms=base_p95,
-        stream_med_ms=stream_med,
-        stream_p95_ms=stream_p95,
-        chunk_p95_ms=chunk_p95,
-    )
-
-    result_data = {
-        "model": model,
-        "calibrated_at": time.time(),
-        "host": host_info,
-        "service_threads": service_threads,
-        "measurements": {
-            "turns_completed": len(stream_times),
-            "turns_target": turns,
-            "baseline_median_ms": round(base_med, 1),
-            "baseline_p95_ms": round(base_p95, 1),
-            "stream_median_ms": round(stream_med, 1),
-            "stream_p95_ms": round(stream_p95, 1),
-            "chunk_p50_ms": round(chunk_p50, 2),
-            "chunk_p95_ms": round(chunk_p95, 2),
-            "chunk_samples": len(chunk_times_ms),
-        },
-        "passed": overall_pass,
-        "admitted_streams": admitted_streams,
-        "verdict_reason": verdict_reason,
+    measurements = {
+        "turns_completed": len(stream_times),
+        "turns_target": turns,
+        "baseline_median_ms": round(base_med, 1),
+        "baseline_p95_ms": round(base_p95, 1),
+        "stream_median_ms": round(stream_med, 1),
+        "stream_p95_ms": round(stream_p95, 1),
+        "chunk_p50_ms": round(chunk_p50, 2),
+        "chunk_p95_ms": round(chunk_p95, 2),
+        "chunk_samples": len(turn_chunk_times_ms),
+        "topup_chunk_p50_ms": round(topup_p50, 2),
+        "topup_chunk_p95_ms": round(topup_p95, 2),
+        "topup_chunk_samples": len(topup_chunk_times_ms),
+        "total_chunk_samples": len(chunk_samples_tagged),
     }
+
+    if bg_error is not None:
+        result_data = {
+            "model": model,
+            "calibrated_at": time.time(),
+            "host": host_info,
+            "service_threads": service_threads,
+            "measurements": measurements,
+            "status": "error",
+            "error": bg_error,
+            "passed": False,
+            "admitted_streams": 0,
+            "verdict_reason": f"feeder_error: {bg_error}",
+        }
+    else:
+        overall_pass, admitted_streams, verdict_reason = evaluate_pass_rule(
+            turns_completed=len(stream_times),
+            turns_target=turns,
+            base_med_ms=base_med,
+            base_p95_ms=base_p95,
+            stream_med_ms=stream_med,
+            stream_p95_ms=stream_p95,
+            chunk_p95_ms=chunk_p95,
+        )
+        result_data = {
+            "model": model,
+            "calibrated_at": time.time(),
+            "host": host_info,
+            "service_threads": service_threads,
+            "measurements": measurements,
+            "status": "pass" if overall_pass else "fail",
+            "passed": overall_pass,
+            "admitted_streams": admitted_streams,
+            "verdict_reason": verdict_reason,
+        }
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     out_path = get_calibration_file_path(model)

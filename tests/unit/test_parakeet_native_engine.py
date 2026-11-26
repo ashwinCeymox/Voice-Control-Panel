@@ -241,4 +241,80 @@ async def test_calibration_records_at_least_50_chunks_and_sample_count(tmp_path,
         turns=2,
         min_chunks=50,
     )
-    assert res["measurements"]["chunk_samples"] >= 50
+    assert res["measurements"]["total_chunk_samples"] >= 50
+    assert (
+        res["measurements"]["chunk_samples"] + res["measurements"]["topup_chunk_samples"]
+        == res["measurements"]["total_chunk_samples"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_calibration_feeder_exception_records_error_and_zero_streams(tmp_path, monkeypatch, capsys):
+    """If bg_feeder raises, calibration must record status='error', admitted_streams=0, and print the exception."""
+    import services.streaming_bridge.calibrate as cal
+    from services.streaming_bridge.engines.fake_engine import FakeStreamingEngine
+
+    async def fake_turn(client, base_url, tts_url, headers):
+        return (50.0, 50.0, 100.0)
+
+    class CrashingEngine(FakeStreamingEngine):
+        def __init__(self, *args, **kwargs):
+            super().__init__(crash_on_feed_call=2)
+
+    monkeypatch.setattr(cal, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(cal, "run_voice_turn", fake_turn)
+    monkeypatch.setattr(cal, "ParakeetNativeEngine", CrashingEngine)
+    monkeypatch.setattr(cal, "resolve_parakeet_library", lambda: str(tmp_path / "libparakeet.so"))
+    monkeypatch.setattr(cal, "inspect_host_service_threads", lambda: [])
+    real_sleep = cal.asyncio.sleep
+    monkeypatch.setattr(cal.asyncio, "sleep", lambda s: real_sleep(0.001))
+
+    res = await cal.run_calibration(
+        model="parakeet-cpp-realtime_eou_120m-v1",
+        model_path="fake.gguf",
+        turns=2,
+        min_chunks=50,
+    )
+    assert res["status"] == "error"
+    assert res["passed"] is False
+    assert res["admitted_streams"] == 0
+    assert "EngineCrashedError" in res["error"]
+    captured = capsys.readouterr()
+    assert "EngineCrashedError" in captured.err
+
+
+@pytest.mark.asyncio
+async def test_calibration_tags_voice_turn_vs_topup_chunks(tmp_path, monkeypatch):
+    """chunk_p50_ms and chunk_p95_ms must be computed only from chunks tagged during voice turns."""
+    import services.streaming_bridge.calibrate as cal
+    from services.streaming_bridge.engines.fake_engine import FakeStreamingEngine
+
+    real_sleep = cal.asyncio.sleep
+
+    async def slow_turn(client, base_url, tts_url, headers):
+        await real_sleep(0.03)
+        return (15.0, 15.0, 30.0)
+
+    class FastFakeEngine(FakeStreamingEngine):
+        def __init__(self, *args, **kwargs):
+            super().__init__(feed_latency_s=0.0, finalize_latency_s=0.0)
+
+    monkeypatch.setattr(cal, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(cal, "run_voice_turn", slow_turn)
+    monkeypatch.setattr(cal, "ParakeetNativeEngine", FastFakeEngine)
+    monkeypatch.setattr(cal, "resolve_parakeet_library", lambda: str(tmp_path / "libparakeet.so"))
+    monkeypatch.setattr(cal, "inspect_host_service_threads", lambda: [])
+    monkeypatch.setattr(cal.asyncio, "sleep", lambda s: real_sleep(0.001))
+
+    res = await cal.run_calibration(
+        model="parakeet-cpp-realtime_eou_120m-v1",
+        model_path="fake.gguf",
+        turns=2,
+        min_chunks=50,
+    )
+    m = res["measurements"]
+    assert res["status"] in ("pass", "fail")
+    assert m["chunk_samples"] > 0
+    assert m["topup_chunk_samples"] > 0
+    assert m["total_chunk_samples"] >= 50
+    assert m["chunk_samples"] + m["topup_chunk_samples"] == m["total_chunk_samples"]
