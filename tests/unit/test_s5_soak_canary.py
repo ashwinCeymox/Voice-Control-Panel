@@ -308,11 +308,15 @@ def test_s5_docs_and_scripts_present():
         "scripts/canary-stt-native.py",
         "scripts/bridge-soak-test.py",
         "scripts/bridge-calibrate.sh",
+        "scripts/parakeet-thread-sweep.py",
         "docs/STREAMING_BRIDGE.md",
         "docs/STREAMING_BRIDGE_CHANGES.md",
     ]
     for path in required:
         assert Path(path).exists(), f"Missing S5 artefact: {path}"
+
+    import py_compile
+    py_compile.compile("scripts/parakeet-thread-sweep.py", doraise=True)
 
     canary_txt = Path("scripts/canary-stt-native.py").read_text()
     assert "parakeet-cpp-realtime_eou_120m-v1" in canary_txt
