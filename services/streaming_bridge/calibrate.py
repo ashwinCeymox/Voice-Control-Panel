@@ -26,6 +26,7 @@ from pathlib import Path
 import platform
 import sys
 import time
+import wave
 from typing import Any, Deque, Dict, List, Optional, Tuple
 import httpx
 import numpy as np
@@ -261,6 +262,28 @@ async def run_voice_turn(
     return dur_llm, dur_tts, (time.perf_counter() - t0) * 1000.0
 
 
+def _load_stream_only_chunks(wav_path: Optional[str]) -> Tuple[List[bytes], str]:
+    """Load 160 ms PCM-16 chunks from a 16 kHz mono WAV, or generate synthetic 16 kHz mono fallback."""
+    chunk_bytes = 5120  # 160 ms @ 16 kHz mono int16
+    cand = Path(wav_path) if wav_path else Path("tests/fixtures/audio/quiet_normal_speech.wav")
+    if cand.is_file():
+        with wave.open(str(cand), "rb") as wf:
+            if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() != 16000:
+                raise ValueError(
+                    f"WAV {cand} must be 16kHz mono PCM-16, got ch={wf.getnchannels()} "
+                    f"width={wf.getsampwidth()} rate={wf.getframerate()}"
+                )
+            raw = wf.readframes(wf.getnframes())
+        chunks = [raw[i:i + chunk_bytes] for i in range(0, len(raw), chunk_bytes) if len(raw[i:i + chunk_bytes]) == chunk_bytes]
+        if chunks:
+            return chunks, str(cand)
+    # Fallback synthetic 5.0 s 16 kHz mono PCM-16 sine wave if no WAV is present
+    t = np.arange(16000 * 5, dtype=np.float64) / 16000.0
+    pcm = (np.sin(2.0 * np.pi * 440.0 * t) * 4000.0).astype(np.int16).tobytes()
+    chunks = [pcm[i:i + chunk_bytes] for i in range(0, len(pcm), chunk_bytes) if len(pcm[i:i + chunk_bytes]) == chunk_bytes]
+    return chunks, "synthetic_16khz_sine_5s"
+
+
 async def run_calibration(
     model: str,
     model_path: Optional[str] = None,
@@ -271,9 +294,10 @@ async def run_calibration(
     min_chunks: int = 50,
     mode: str = "unpaused",
     engine_threads: Optional[int] = None,
+    wav_path: Optional[str] = None,
 ) -> dict:
-    """Execute offline calibration (unpaused or paused) against ParakeetNativeEngine and save JSON."""
-    if mode not in ("unpaused", "paused"):
+    """Execute offline calibration (unpaused, paused, or stream-only) against ParakeetNativeEngine and save JSON."""
+    if mode not in ("unpaused", "paused", "stream-only"):
         raise ValueError(f"Unsupported calibration mode: {mode!r}")
 
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
@@ -286,6 +310,110 @@ async def run_calibration(
 
     resolved_model_path = model_path or resolve_streaming_model_gguf(model)
     lib_path = resolve_parakeet_library()
+
+    if mode == "stream-only":
+        chunks, wav_source = _load_stream_only_chunks(wav_path)
+        chunk_times_ms: List[float] = []
+        overflow_count = 0
+        bg_error: Optional[str] = None
+        transcript = ""
+
+        engine = ParakeetNativeEngine(
+            lib_path=lib_path,
+            is_cpu_bound=bool(host_info["is_cpu_bound"]),
+            engine_threads=eff_engine_threads,
+        )
+        await engine.load(resolved_model_path)
+        sid = await engine.open_stream()
+        scheduler = BridgeScheduler(
+            max_streams=1,
+            pause_enabled=False,
+            max_buffered_chunks=settings.STREAMING_NATIVE_PAUSE_MAX_CHUNKS,
+            catchup_rate=settings.STREAMING_NATIVE_CATCHUP_RATE,
+        )
+        scheduler.start()
+
+        async def on_chunk_stream_only(pcm_chunk: bytes) -> None:
+            nonlocal bg_error
+            t_f0 = time.perf_counter()
+            try:
+                await engine.feed(sid, pcm_chunk, sample_rate=16000)
+            except Exception as exc:
+                bg_error = f"{type(exc).__name__}: {exc}"
+                logger.error("Stream-only calibration feed failed: %s", bg_error)
+                print(f"ERROR: Stream-only calibration feed failed: {bg_error}", file=sys.stderr)
+                return
+            chunk_times_ms.append((time.perf_counter() - t_f0) * 1000.0)
+
+        scheduler.register_stream(sid, model, "en", pause_enabled=False, on_chunk=on_chunk_stream_only)
+        try:
+            for c in chunks:
+                if bg_error is not None:
+                    break
+                try:
+                    await scheduler.handle_audio_chunk(sid, c, on_chunk_stream_only)
+                except PauseBufferOverflowError:
+                    overflow_count += 1
+                await asyncio.sleep(0.16)
+            if bg_error is None:
+                fin = await engine.finalize(sid)
+                transcript = fin.full_text
+        finally:
+            await scheduler.stop()
+            if bg_error is not None:
+                await engine.close_stream(sid)
+            await engine.close()
+
+        chunk_p50 = float(np.median(chunk_times_ms)) if chunk_times_ms else 0.0
+        chunk_p95 = float(np.percentile(chunk_times_ms, 95)) if chunk_times_ms else 0.0
+        measurements = {
+            "wav_source": wav_source,
+            "chunk_p50_ms": round(chunk_p50, 2),
+            "chunk_p95_ms": round(chunk_p95, 2),
+            "chunk_samples": len(chunk_times_ms),
+            "overflow_count": overflow_count,
+            "transcript": transcript,
+        }
+        if bg_error is not None:
+            result_data = {
+                "model": model,
+                "calibration_mode": mode,
+                "calibrated_at": time.time(),
+                "host": host_info,
+                "service_threads": service_threads,
+                "measurements": measurements,
+                "status": "error",
+                "error": bg_error,
+                "passed": False,
+                "admitted_streams": 0,
+                "verdict_reason": f"feeder_error: {bg_error}",
+            }
+        else:
+            overall_pass = (overflow_count == 0 and 0.0 < chunk_p95 < 160.0 and len(chunk_times_ms) > 0)
+            admitted_streams = 1 if overall_pass else 0
+            verdict_reason = (
+                "Stream-only thresholds met"
+                if overall_pass
+                else f"Stream-only failed (chunk_p95={chunk_p95:.2f}ms<160ms, overflow={overflow_count})"
+            )
+            result_data = {
+                "model": model,
+                "calibration_mode": mode,
+                "calibrated_at": time.time(),
+                "host": host_info,
+                "service_threads": service_threads,
+                "measurements": measurements,
+                "status": "pass" if overall_pass else "fail",
+                "passed": overall_pass,
+                "admitted_streams": admitted_streams,
+                "verdict_reason": verdict_reason,
+            }
+
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        out_path = get_calibration_file_path(model)
+        with open(out_path, "w") as f:
+            json.dump(result_data, f, indent=2)
+        return result_data
 
     chunk_bytes = b"\x00\x05" * 2560  # 160 ms @ 16kHz PCM16
     chunk_samples_tagged: List[Dict[str, Any]] = []
@@ -561,8 +689,9 @@ def main() -> None:
     parser.add_argument("--base-url", default=os.environ.get("LOCALAI_BASE_URL", "http://127.0.0.1:8080"))
     parser.add_argument("--tts-url", default=os.environ.get("TTS_URL", "http://127.0.0.1:8880"))
     parser.add_argument("--api-key", default=os.environ.get("LOCALAI_API_KEY", ""))
-    parser.add_argument("--mode", choices=["unpaused", "paused"], default="unpaused")
+    parser.add_argument("--mode", choices=["unpaused", "paused", "stream-only"], default="unpaused")
     parser.add_argument("--engine-threads", type=int, default=None)
+    parser.add_argument("--wav-path", default="tests/fixtures/audio/quiet_normal_speech.wav")
     args = parser.parse_args()
     asyncio.run(
         run_calibration(
@@ -573,6 +702,7 @@ def main() -> None:
             args.api_key,
             mode=args.mode,
             engine_threads=args.engine_threads,
+            wav_path=args.wav_path,
         )
     )
 

@@ -48,50 +48,21 @@ def _parse_yaml_mapping(yaml_text: str) -> Dict[str, Any]:
     return result
 
 
-def _is_model_allowlisted(
-    model_name: str,
-    allowed_models: Optional[Sequence[str]] = None,
-) -> bool:
-    """Enforce LOCALAI_ALLOWED_STT_MODELS / STREAMING_BRIDGE_ALLOWED_MODELS allow-listing."""
-    if allowed_models is not None:
-        allowed_set = {m.strip() for m in allowed_models if m and m.strip()}
-        return model_name in allowed_set
-
-    env_allowed = getattr(settings, "LOCALAI_ALLOWED_STT_MODELS", None)
-    if env_allowed and str(env_allowed).strip():
-        allowed_set = {m.strip() for m in str(env_allowed).split(",") if m.strip()}
-        if model_name not in allowed_set:
-            return False
-
-    bridge_allowed = getattr(settings, "STREAMING_BRIDGE_ALLOWED_MODELS", "auto")
-    if bridge_allowed and str(bridge_allowed).strip().lower() != "auto":
-        allowed_set = {m.strip() for m in str(bridge_allowed).split(",") if m.strip()}
-        if model_name not in allowed_set:
-            return False
-
-    return True
-
-
 def resolve_streaming_model_gguf(
     model_name: str,
     *,
     models_dir: Optional[str | Path] = None,
-    allowed_models: Optional[Sequence[str]] = None,
 ) -> str:
     """Resolve a LocalAI streaming STT model name to a validated GGUF file path.
 
     Reads `${LOCALAI_MODELS_PATH:-models}/<model_name>.yaml`, extracts `parameters.model`
     (falling back to top-level `model`), verifies the resolved path stays inside
     `models_dir` (no `..` traversal), and verifies the target GGUF file exists.
+    No allow-list restriction is applied (empty/unset = allow-all).
     """
     name = (model_name or "").strip()
     if not name or "/" in name or "\\" in name or ".." in name:
         raise ModelResolutionError(f"Invalid streaming model name: {model_name!r}")
-
-    if not _is_model_allowlisted(name, allowed_models=allowed_models):
-        raise ModelResolutionError(
-            f"Model '{name}' is not allow-listed for native streaming STT"
-        )
 
     raw_dir = models_dir or getattr(settings, "LOCALAI_MODELS_PATH", None) or os.environ.get("LOCALAI_MODELS_PATH") or "models"
     base_dir = Path(str(raw_dir)).resolve()

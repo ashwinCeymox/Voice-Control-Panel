@@ -58,7 +58,7 @@ def test_resolve_rejects_traversal_and_non_allowlisted(tmp_path, monkeypatch):
     with pytest.raises(ModelResolutionError, match="escapes models dir"):
         resolve_streaming_model_gguf("parakeet-evil", models_dir=tmp_path)
 
-    # 3. Allow-list guard
+    # 3. No allow-list restriction (even if LOCALAI_ALLOWED_STT_MODELS is set, valid parakeet YAML resolves)
     gguf = tmp_path / "parakeet-cpp" / "ok.gguf"
     gguf.parent.mkdir(parents=True, exist_ok=True)
     gguf.write_bytes(b"gguf")
@@ -67,8 +67,7 @@ def test_resolve_rejects_traversal_and_non_allowlisted(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr(settings, "LOCALAI_ALLOWED_STT_MODELS", "other-model")
-    with pytest.raises(ModelResolutionError, match="not allow-listed"):
-        resolve_streaming_model_gguf("parakeet-ok", models_dir=tmp_path)
+    assert resolve_streaming_model_gguf("parakeet-ok", models_dir=tmp_path) == str(gguf.resolve())
 
     # 4. Non-parakeet backend rejected
     monkeypatch.setattr(settings, "LOCALAI_ALLOWED_STT_MODELS", None)

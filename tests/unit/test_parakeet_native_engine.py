@@ -452,3 +452,43 @@ def test_paused_mode_calibration_fails_on_overflow():
     assert passed is False
     assert admitted == 0
     assert "overflowed" in reason
+
+
+@pytest.mark.asyncio
+async def test_stream_only_mode_calibration(tmp_path, monkeypatch):
+    """stream-only mode feeds WAV with pause_enabled=False, no LLM/TTS turns, and reports chunk stats + transcript."""
+    import services.streaming_bridge.calibrate as cal
+    from services.streaming_bridge.engines.fake_engine import FakeStreamingEngine
+
+    real_sleep = cal.asyncio.sleep
+
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("run_voice_turn must not be called in stream-only mode")
+
+    class FastFakeEngine(FakeStreamingEngine):
+        def __init__(self, *args, **kwargs):
+            super().__init__(feed_latency_s=0.0, finalize_latency_s=0.0)
+
+    monkeypatch.setattr(cal, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(cal, "run_voice_turn", fail_if_called)
+    monkeypatch.setattr(cal, "ParakeetNativeEngine", FastFakeEngine)
+    monkeypatch.setattr(cal, "resolve_parakeet_library", lambda: str(tmp_path / "libparakeet.so"))
+    monkeypatch.setattr(cal, "inspect_host_service_threads", lambda: [])
+    monkeypatch.setattr(cal.asyncio, "sleep", lambda s: real_sleep(0.001))
+
+    res = await cal.run_calibration(
+        model="parakeet-cpp-realtime_eou_120m-v1",
+        model_path="fake.gguf",
+        mode="stream-only",
+        wav_path="tests/fixtures/audio/quiet_normal_speech.wav",
+    )
+    assert res["calibration_mode"] == "stream-only"
+    assert res["status"] == "pass"
+    assert res["passed"] is True
+    assert res["admitted_streams"] == 1
+    m = res["measurements"]
+    assert m["overflow_count"] == 0
+    assert m["chunk_samples"] >= 30
+    assert m["chunk_p50_ms"] >= 0
+    assert 0 < m["chunk_p95_ms"] < 160.0
+    assert "partly cloudy" in m["transcript"]
