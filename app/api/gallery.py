@@ -896,19 +896,25 @@ async def get_installed_models_data() -> Dict[str, List[Dict[str, Any]]]:
 # In-memory cache for LocalAI's dynamic available models catalog
 _AVAILABLE_MODELS_CACHE: Optional[List[Dict[str, Any]]] = None
 _AVAILABLE_MODELS_TIMESTAMP: float = 0.0
-_AVAILABLE_MODELS_TTL: float = 300.0  # 5 minutes
+_AVAILABLE_MODELS_TTL: float = 600.0  # 10 minutes
 
 
-async def fetch_localai_available_models() -> List[Dict[str, Any]]:
+async def fetch_localai_available_models(
+    *,
+    force_refresh: bool = False,
+    raise_on_error: bool = False,
+) -> List[Dict[str, Any]]:
     global _AVAILABLE_MODELS_CACHE, _AVAILABLE_MODELS_TIMESTAMP
     now = time.time()
     if (
-        _AVAILABLE_MODELS_CACHE is not None
+        not force_refresh
+        and _AVAILABLE_MODELS_CACHE is not None
         and (now - _AVAILABLE_MODELS_TIMESTAMP) < _AVAILABLE_MODELS_TTL
     ):
         return _AVAILABLE_MODELS_CACHE
+    timeout_cfg = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=10.0)
     try:
-        async with httpx.AsyncClient(timeout=6.0) as client:
+        async with httpx.AsyncClient(timeout=timeout_cfg) as client:
             resp = await client.get(
                 f"{settings.LOCALAI_BASE_URL}/models/available",
                 headers=_localai_headers(),
@@ -919,8 +925,17 @@ async def fetch_localai_available_models() -> List[Dict[str, Any]]:
                     _AVAILABLE_MODELS_CACHE = data
                     _AVAILABLE_MODELS_TIMESTAMP = now
                     return data
+            err_detail = f"LocalAI /models/available returned HTTP {resp.status_code}"
+            logger.warning(err_detail)
+            if raise_on_error:
+                raise HTTPException(status_code=503, detail=err_detail)
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.debug("LocalAI /models/available not reachable or timed out: %s", e)
+        err_detail = f"LocalAI /models/available unreachable or timed out ({type(e).__name__}: {e})"
+        logger.warning(err_detail)
+        if raise_on_error:
+            raise HTTPException(status_code=503, detail=err_detail)
     return _AVAILABLE_MODELS_CACHE or []
 
 
@@ -929,6 +944,7 @@ async def list_gallery_models(
     category: Optional[str] = Query(None, description="stt, llm, tts, or all"),
     fits_only: bool = Query(False),
     q: Optional[str] = Query(None),
+    refresh: bool = Query(False, description="Force re-fetch from LocalAI /models/available"),
     user: str = Depends(require_api_key),
 ):
     mem = get_mac_memory_info()
@@ -940,7 +956,10 @@ async def list_gallery_models(
     }
 
     curated_map = {c["id"]: c for c in GALLERY_CATALOG}
-    localai_models = await fetch_localai_available_models()
+    localai_models = await fetch_localai_available_models(
+        force_refresh=refresh,
+        raise_on_error=True,
+    )
 
     seen_ids = set()
     results: List[Dict[str, Any]] = []
@@ -970,13 +989,18 @@ async def list_gallery_models(
 
         tags = [str(t).lower() for t in lm.get("tags", [])]
         name_lower = raw_name.lower()
+        backend_lower = str(lm.get("backend") or "").lower()
 
-        # Infer category
+        # Infer category from curated enrichment, tags, backend, or model name
         if curated and curated.get("category"):
             cat = curated["category"]
         elif any(
             t in tags for t in ("stt", "asr", "speech-to-text", "transcription")
-        ) or any(k in name_lower for k in ("whisper", "parakeet", "crispasr")):
+        ) or any(
+            k in name_lower for k in ("whisper", "parakeet", "crispasr", "nemo", "nemotron", "zipformer", "sherpa")
+        ) or any(
+            b in backend_lower for b in ("whisper", "parakeet", "nemo", "sherpa")
+        ):
             cat = "stt"
         elif any(t in tags for t in ("tts", "text-to-speech", "voice-model")) or any(
             k in name_lower for k in ("vits", "piper", "kokoro", "kitten")
@@ -1091,6 +1115,8 @@ async def list_gallery_models(
             lower_name = raw_name.lower()
             is_streaming = (
                 (curated and curated.get("kind") == "streaming")
+                or any(t in ("streaming", "realtime", "live", "stream", "online") for t in tags)
+                or any(b in backend_lower for b in ("parakeet", "nemo", "sherpa"))
                 or any(
                     k in lower_name
                     for k in (
@@ -1100,6 +1126,9 @@ async def list_gallery_models(
                         "eou",
                         "zipformer",
                         "online",
+                        "rnnt",
+                        "ctc",
+                        "nemotron",
                     )
                 )
                 or (curated and curated.get("provider") == "stream-stt")
@@ -1128,10 +1157,12 @@ async def list_gallery_models(
             }
         )
 
-    # 2. Add any curated models that weren't in LocalAI's models/available (e.g. Kokoro TTS, Sherpa Zipformer)
+    # 2. Add non-LocalAI curated entries (e.g. Kokoro TTS, Sherpa Zipformer) not in LocalAI's gallery
     for c in GALLERY_CATALOG:
         cid = c["id"]
         if cid in seen_ids:
+            continue
+        if c.get("provider") == "localai":
             continue
         if category and category != "all" and c["category"] != category:
             continue
