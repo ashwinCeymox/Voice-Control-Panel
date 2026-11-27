@@ -988,24 +988,40 @@ async def list_gallery_models(
         curated = curated_map.get(raw_name) or curated_map.get(base_name)
 
         tags = [str(t).lower() for t in lm.get("tags", [])]
+        usecases = [str(u).lower() for u in (lm.get("known_usecases") or lm.get("usecases") or [])]
+        all_labels = set(tags + usecases)
         name_lower = raw_name.lower()
         backend_lower = str(lm.get("backend") or "").lower()
 
-        # Infer category from curated enrichment, tags, backend, or model name
+        is_vision_or_vlm = any(
+            v in all_labels for v in ("vision", "vlm", "multimodal", "image-to-text", "ocr")
+        ) or any(
+            v in name_lower for v in ("moondream", "llava", "qwen-vl", "qwen2-vl", "pixtral", "vision", "bakllava")
+        )
+        is_tts_model = any(
+            t in all_labels for t in ("tts", "text-to-speech", "voice-model")
+        ) or any(k in name_lower for k in ("vits", "piper", "kokoro", "kitten"))
+        is_asr_tagged = any(
+            t in all_labels for t in ("stt", "asr", "speech-to-text", "transcription", "transcript", "audio-transcription")
+        )
+        is_asr_name = any(
+            k in name_lower for k in ("whisper", "crispasr", "zipformer", "sherpa", "nemotron", "eou", "speech")
+        ) or (
+            ("parakeet" in name_lower or "nemo" in name_lower)
+            and not is_vision_or_vlm
+            and not any(x in name_lower for x in ("chat", "instruct", "coder"))
+        )
+        is_asr_backend = backend_lower in ("whisper", "faster-whisper", "sherpa", "nemo", "nemo-speech-cpp")
+
+        # Infer category strictly: exclude vision/VLM and TTS before matching STT
         if curated and curated.get("category"):
             cat = curated["category"]
-        elif any(
-            t in tags for t in ("stt", "asr", "speech-to-text", "transcription")
-        ) or any(
-            k in name_lower for k in ("whisper", "parakeet", "crispasr", "nemo", "nemotron", "zipformer", "sherpa")
-        ) or any(
-            b in backend_lower for b in ("whisper", "parakeet", "nemo", "sherpa")
-        ):
-            cat = "stt"
-        elif any(t in tags for t in ("tts", "text-to-speech", "voice-model")) or any(
-            k in name_lower for k in ("vits", "piper", "kokoro", "kitten")
-        ):
+        elif is_vision_or_vlm:
+            cat = "llm"
+        elif is_tts_model:
             cat = "tts"
+        elif is_asr_tagged or is_asr_name or is_asr_backend:
+            cat = "stt"
         elif "silero" in name_lower and "vad" in name_lower:
             continue  # Utility model, omit from agent model gallery
         else:
@@ -1111,12 +1127,12 @@ async def list_gallery_models(
             seen_ids.add(base_name)
 
         model_kind = None
+        streaming_meta: Dict[str, Any] = {}
         if cat == "stt":
             lower_name = raw_name.lower()
             is_streaming = (
                 (curated and curated.get("kind") == "streaming")
-                or any(t in ("streaming", "realtime", "live", "stream", "online") for t in tags)
-                or any(b in backend_lower for b in ("parakeet", "nemo", "sherpa"))
+                or any(t in ("streaming", "realtime", "live", "stream", "online") for t in all_labels)
                 or any(
                     k in lower_name
                     for k in (
@@ -1127,13 +1143,33 @@ async def list_gallery_models(
                         "zipformer",
                         "online",
                         "rnnt",
-                        "ctc",
+                        "tdt",
                         "nemotron",
                     )
                 )
                 or (curated and curated.get("provider") == "stream-stt")
             )
             model_kind = "streaming" if is_streaming else "batch"
+            if model_kind == "streaming":
+                from app.services.streaming_bridge_client import (
+                    is_native_parakeet_eligible,
+                    native_service_available,
+                    resolve_stt_streaming_metadata,
+                )
+                if curated and curated.get("provider") == "stream-stt":
+                    streaming_meta = resolve_stt_streaming_metadata(
+                        raw_name, is_streaming_stt=True, streaming_backend="sherpa"
+                    )
+                elif is_native_parakeet_eligible(raw_name) and native_service_available(raw_name):
+                    streaming_meta = resolve_stt_streaming_metadata(
+                        raw_name, is_streaming_stt=True, streaming_backend="parakeet_native"
+                    )
+                else:
+                    streaming_meta = {
+                        "transports": ["batch_http"],
+                        "streaming_mode": "none",
+                        "streaming_backend": None,
+                    }
 
         results.append(
             {
@@ -1141,6 +1177,7 @@ async def list_gallery_models(
                 "name": disp_name,
                 "category": cat,
                 "kind": model_kind,
+                **streaming_meta,
                 "provider": curated.get("provider", "localai")
                 if curated
                 else "localai",

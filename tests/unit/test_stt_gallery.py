@@ -78,9 +78,10 @@ def test_gallery_surfaces_full_localai_catalog_including_parakeet_and_nemotron(m
         {"id": "parakeet-cpp-ctc-0.6b", "name": "parakeet-cpp-ctc-0.6b", "backend": "parakeet-cpp", "tags": ["stt"]},
         {"id": "parakeet-cpp-nemotron-3.5-asr-streaming-0.6b", "name": "parakeet-cpp-nemotron-3.5-asr-streaming-0.6b", "backend": "parakeet-cpp", "tags": ["stt"]},
         {"id": "nemo-parakeet-tdt-0.6b", "name": "nemo-parakeet-tdt-0.6b", "backend": "nemo", "tags": ["stt"]},
+        {"id": "parakeet-cpp-moondream-redux", "name": "parakeet-cpp-moondream-redux", "backend": "parakeet-cpp", "tags": ["vision", "multimodal"]},
     ] + [
         {"id": f"llm-model-{i}", "name": f"llm-model-{i}", "tags": ["llm"]}
-        for i in range(2351)
+        for i in range(2350)
     ]
 
     fetch_count = 0
@@ -120,8 +121,13 @@ def test_gallery_surfaces_full_localai_catalog_including_parakeet_and_nemotron(m
     assert "parakeet-cpp-ctc-0.6b" in stt_models
     assert "parakeet-cpp-nemotron-3.5-asr-streaming-0.6b" in stt_models
     assert "nemo-parakeet-tdt-0.6b" in stt_models
+    # Vision model (moondream) must NOT be misclassified as STT
+    assert "parakeet-cpp-moondream-redux" not in stt_models
     assert stt_models["parakeet-cpp-realtime_eou_120m-v1"]["kind"] == "streaming"
-    assert stt_models["parakeet-cpp-ctc-0.6b"]["kind"] == "streaming"
+    # Flag is off in hermetic tests -> Live (native) must be false (streaming_mode='none')
+    assert stt_models["parakeet-cpp-realtime_eou_120m-v1"]["streaming_mode"] == "none"
+    # Non-streaming CTC ASR model without realtime/streaming cue -> batch
+    assert stt_models["parakeet-cpp-ctc-0.6b"]["kind"] == "batch"
     assert stt_models["parakeet-cpp-nemotron-3.5-asr-streaming-0.6b"]["kind"] == "streaming"
 
     # Second call uses cache (no second LocalAI fetch); refresh=true forces re-fetch

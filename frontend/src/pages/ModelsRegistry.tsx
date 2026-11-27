@@ -531,14 +531,14 @@ export const ModelsRegistry: React.FC = () => {
                         const badgeTitle = isSttStreaming
                           ? uiSpec.isNative
                             ? 'Native Streaming: True online neural streaming over WebSocket.'
-                            : 'Native streaming disabled or awaiting host calibration (enable STT_STREAM_NATIVE_ENABLED after calibration).'
+                            : 'Streaming-capable ASR (native live streaming is disabled, uncalibrated, or model not yet installed).'
                           : undefined;
                         const badgeText =
                           model.category === 'stt'
                             ? isSttStreaming
                               ? uiSpec.isNative
                                 ? 'STT • Live (native)'
-                                : 'STT • Streaming (offline)'
+                                : 'STT • Streaming'
                               : 'STT • BATCH'
                             : model.category;
                         return (
