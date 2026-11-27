@@ -492,3 +492,54 @@ async def test_stream_only_mode_calibration(tmp_path, monkeypatch):
     assert m["chunk_p50_ms"] >= 0
     assert 0 < m["chunk_p95_ms"] < 160.0
     assert "partly cloudy" in m["transcript"]
+
+
+@pytest.mark.asyncio
+async def test_stream_only_omp_threads_override(monkeypatch, tmp_path):
+    """stream-only passes omp_threads / STREAMING_NATIVE_OMP_NUM_THREADS to ParakeetNativeEngine."""
+    import asyncio
+    from services.streaming_bridge import calibrate as cal
+    from services.streaming_bridge.engines.fake_engine import FakeStreamingEngine
+
+    real_sleep = asyncio.sleep
+    seen_omp = []
+
+    class CapturingEngine(FakeStreamingEngine):
+        def __init__(self, *args, **kwargs):
+            seen_omp.append(kwargs.get("omp_num_threads"))
+            super().__init__(feed_latency_s=0.0, finalize_latency_s=0.0)
+
+    monkeypatch.setattr(cal, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(cal, "ParakeetNativeEngine", CapturingEngine)
+    monkeypatch.setattr(cal, "resolve_parakeet_library", lambda: str(tmp_path / "libparakeet.so"))
+    monkeypatch.setattr(cal, "inspect_host_service_threads", lambda: [])
+    monkeypatch.setattr(cal.asyncio, "sleep", lambda s: real_sleep(0.001))
+
+    # 1. Default unset -> None (preserves OMP_NUM_THREADS=1 on cpu-bound hosts)
+    monkeypatch.setattr(cal.settings, "STREAMING_NATIVE_OMP_NUM_THREADS", None)
+    await cal.run_calibration(
+        model="parakeet-cpp-realtime_eou_120m-v1",
+        model_path="fake.gguf",
+        mode="stream-only",
+        wav_path="tests/fixtures/audio/quiet_normal_speech.wav",
+    )
+
+    # 2. Env/settings override
+    monkeypatch.setattr(cal.settings, "STREAMING_NATIVE_OMP_NUM_THREADS", "4")
+    await cal.run_calibration(
+        model="parakeet-cpp-realtime_eou_120m-v1",
+        model_path="fake.gguf",
+        mode="stream-only",
+        wav_path="tests/fixtures/audio/quiet_normal_speech.wav",
+    )
+
+    # 3. Explicit CLI omp_threads overrides settings
+    await cal.run_calibration(
+        model="parakeet-cpp-realtime_eou_120m-v1",
+        model_path="fake.gguf",
+        mode="stream-only",
+        omp_threads=8,
+        wav_path="tests/fixtures/audio/quiet_normal_speech.wav",
+    )
+
+    assert seen_omp == [None, "4", "8"]

@@ -294,6 +294,7 @@ async def run_calibration(
     min_chunks: int = 50,
     mode: str = "unpaused",
     engine_threads: Optional[int] = None,
+    omp_threads: Optional[int] = None,
     wav_path: Optional[str] = None,
 ) -> dict:
     """Execute offline calibration (unpaused, paused, or stream-only) against ParakeetNativeEngine and save JSON."""
@@ -304,9 +305,18 @@ async def run_calibration(
     host_info = get_host_fingerprint()
     service_threads = inspect_host_service_threads()
     eff_engine_threads = engine_threads if engine_threads is not None else settings.STREAMING_NATIVE_ENGINE_THREADS
+    raw_omp_threads = str(omp_threads) if omp_threads is not None else settings.STREAMING_NATIVE_OMP_NUM_THREADS
+    eff_omp_threads: Optional[str] = raw_omp_threads.strip() if raw_omp_threads and raw_omp_threads.strip() else None
 
     logger.info("STARTING NATIVE STREAMING CALIBRATION (%s) FOR MODEL: %s", mode.upper(), model)
-    logger.info("Host: %s | is_cpu_bound=%s | service_threads=%s", host_info, host_info["is_cpu_bound"], service_threads)
+    logger.info(
+        "Host: %s | is_cpu_bound=%s | engine_threads=%s | omp_num_threads=%s | service_threads=%s",
+        host_info,
+        host_info["is_cpu_bound"],
+        eff_engine_threads,
+        eff_omp_threads,
+        service_threads,
+    )
 
     resolved_model_path = model_path or resolve_streaming_model_gguf(model)
     lib_path = resolve_parakeet_library()
@@ -321,6 +331,7 @@ async def run_calibration(
         engine = ParakeetNativeEngine(
             lib_path=lib_path,
             is_cpu_bound=bool(host_info["is_cpu_bound"]),
+            omp_num_threads=eff_omp_threads,
             engine_threads=eff_engine_threads,
         )
         await engine.load(resolved_model_path)
@@ -439,6 +450,7 @@ async def run_calibration(
         engine = ParakeetNativeEngine(
             lib_path=lib_path,
             is_cpu_bound=bool(host_info["is_cpu_bound"]),
+            omp_num_threads=eff_omp_threads,
             engine_threads=eff_engine_threads,
         )
         await engine.load(resolved_model_path)
@@ -691,6 +703,7 @@ def main() -> None:
     parser.add_argument("--api-key", default=os.environ.get("LOCALAI_API_KEY", ""))
     parser.add_argument("--mode", choices=["unpaused", "paused", "stream-only"], default="unpaused")
     parser.add_argument("--engine-threads", type=int, default=None)
+    parser.add_argument("--omp-threads", type=int, default=None, help="Override OMP_NUM_THREADS inside the native worker")
     parser.add_argument("--wav-path", default="tests/fixtures/audio/quiet_normal_speech.wav")
     args = parser.parse_args()
     asyncio.run(
@@ -702,6 +715,7 @@ def main() -> None:
             args.api_key,
             mode=args.mode,
             engine_threads=args.engine_threads,
+            omp_threads=args.omp_threads,
             wav_path=args.wav_path,
         )
     )
