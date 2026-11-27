@@ -295,3 +295,9 @@ def test_installer_forces_cpu_parakeet_on_non_nvidia_linux():
     assert "cpu-parakeet-cpp" in install_sh
     assert "LOCALAI_FORCE_META_BACKEND_CAPABILITY=cpu" in install_sh
     assert "LOCALAI_FORCE_META_BACKEND_CAPABILITY=cpu" in services_sh
+    assert "UV_TORCH_BACKEND=cpu" in install_sh
+    assert "parakeet-cpp-realtime_eou_120m-v1" in install_sh
+    assert "LOCAL_TTS_STARTUP_TIMEOUT_S" in services_sh
+
+    from app.api.gallery import GALLERY_CATALOG
+    assert any(m["id"] == "parakeet-cpp-realtime_eou_120m-v1" for m in GALLERY_CATALOG)

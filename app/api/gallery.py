@@ -49,6 +49,20 @@ GALLERY_CATALOG: List[Dict[str, Any]] = [
         "download_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2",
     },
     {
+        "id": "parakeet-cpp-realtime_eou_120m-v1",
+        "name": "Parakeet Realtime EOU 120M (Native Streaming)",
+        "category": "stt",
+        "provider": "localai",
+        "kind": "streaming",
+        "backend": "parakeet-cpp",
+        "size_mb": 266,
+        "ram_required_mb": 500,
+        "description": "Native parakeet.cpp streaming EOU 120M ASR model (ABI 11, 16 kHz PCM-16).",
+        "license": "CC-BY-4.0",
+        "quantization": "FP16/GGUF",
+        "tags": ["streaming", "realtime", "parakeet", "eou"],
+    },
+    {
         "id": "whisper-tiny",
         "name": "Whisper Tiny (Multilingual)",
         "category": "stt",
@@ -1462,9 +1476,9 @@ async def start_install_job(
                 models_dir = Path(settings.LOCALAI_MODELS_PATH if settings.LOCALAI_MODELS_PATH else "models")
                 configs_dir = models_dir / "configs"
                 configs_dir.mkdir(parents=True, exist_ok=True)
-                target_sub = models_dir / "weights" / ("stt/whisper" if cat == "stt" else "llm")
+                target_sub = models_dir / "weights" / ("stt/parakeet" if "parakeet" in mid.lower() else ("stt/whisper" if cat == "stt" else "llm"))
                 target_sub.mkdir(parents=True, exist_ok=True)
-                ext = "bin" if cat == "stt" else "gguf"
+                ext = "gguf" if ("parakeet" in mid.lower() or cat != "stt") else "bin"
                 weight_file = target_sub / f"{mid}.{ext}"
                 config_file = configs_dir / f"{mid}.yaml"
 
@@ -1516,7 +1530,8 @@ async def start_install_job(
                     except ValueError:
                         rel_model_path = effective_weight.name
                     if cat == "stt":
-                        yaml_content = f"name: {mid}\nbackend: whisper\nparameters:\n  model: {rel_model_path}\n"
+                        stt_backend = "parakeet-cpp" if "parakeet" in mid.lower() else "whisper"
+                        yaml_content = f"name: {mid}\nbackend: {stt_backend}\nparameters:\n  model: {rel_model_path}\n"
                     else:
                         yaml_content = f"name: {mid}\nbackend: llama-cpp\nparameters:\n  model: {rel_model_path}\ncontext_size: 4096\nf16: true\n"
                     config_file.write_text(yaml_content, encoding="utf-8")

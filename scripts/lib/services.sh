@@ -245,9 +245,10 @@ start_local_tts() {
     local pid
     pid="$(cat "${RUN_DIR}/local-tts.pid" 2>/dev/null || true)"
 
-    log_info "Waiting for local-tts (Kokoro) to be ready on port ${TTS_PORT}..."
+    local tts_wait_s="${LOCAL_TTS_STARTUP_TIMEOUT_S:-180}"
+    log_info "Waiting for local-tts (Kokoro) to be ready on port ${TTS_PORT} (up to ${tts_wait_s}s)..."
     local count=0
-    while [ "${count}" -lt 45 ]; do
+    while [ "${count}" -lt "${tts_wait_s}" ]; do
         if ! kill -0 "${pid}" 2>/dev/null; then
             log_err "local-tts process died unexpectedly (PID: ${pid}). Last 25 lines of log:"
             tail -n 25 "${LOGS_DIR}/local-tts.log" >&2 || true
@@ -263,10 +264,9 @@ start_local_tts() {
         count=$((count + 1))
     done
 
-    log_warn "local-tts started (PID: ${pid}) but health probe timed out after 45s. Last 15 lines of log:"
-    tail -n 15 "${LOGS_DIR}/local-tts.log" >&2 || true
+    log_warn "local-tts still initializing after ${tts_wait_s}s (PID: ${pid}; e.g. downloading Kokoro weights). Continuing startup; check logs/local-tts.log."
     TTS_AVAILABLE="false"
-    return 1
+    return 0
 }
 
 # Start Sherpa-ONNX streaming STT

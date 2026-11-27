@@ -245,6 +245,12 @@ ensure_cpu_parakeet_backend() {
     if [ -f "${target_lib}" ]; then
         log_ok "CPU parakeet-cpp backend verified at ${target_lib}"
     fi
+    if [ ! -f "${ROOT_DIR}/models/parakeet-cpp-realtime_eou_120m-v1.yaml" ]; then
+        log_info "Installing default parakeet-cpp-realtime_eou_120m-v1 model via LocalAI..."
+        LOCALAI_MODELS_PATH="${ROOT_DIR}/models" \
+            "${localai_bin}" models install parakeet-cpp-realtime_eou_120m-v1 >/dev/null 2>&1 || \
+            log_warn "Automated parakeet-cpp-realtime_eou_120m-v1 install failed; run 'LOCALAI_MODELS_PATH=./models local-ai models install parakeet-cpp-realtime_eou_120m-v1' if needed."
+    fi
 }
 
 # 5. Setup LocalAI binary
@@ -438,16 +444,20 @@ install_local_tts_engine() {
             }
         fi
 
-        # 5. Install dependencies via uv sync
+        # 5. Install dependencies via uv sync (CUDA only when NVIDIA GPU present; CPU torch otherwise)
         log_info "Installing local-tts dependencies via uv (per localtts.md)..."
         (
             cd "${target_tts_dir}"
-            # Try with CUDA extra first for GPU acceleration, fallback to standard sync for CPU
-            if "${uv_bin}" sync --extra cuda >/dev/null 2>&1; then
-                log_ok "local-tts dependencies synced with CUDA extra."
+            if [ "${HAS_NVIDIA_GPU:-false}" = "true" ] || command -v nvidia-smi >/dev/null 2>&1; then
+                if "${uv_bin}" sync --extra cuda >/dev/null 2>&1; then
+                    log_ok "local-tts dependencies synced with CUDA extra."
+                else
+                    log_info "CUDA extra sync unavailable; syncing standard CPU backend..."
+                    UV_TORCH_BACKEND=cpu "${uv_bin}" sync >/dev/null 2>&1 || true
+                fi
             else
-                log_info "CUDA extra sync unavailable; syncing standard backend..."
-                "${uv_bin}" sync >/dev/null 2>&1 || true
+                log_info "CPU-only host detected: syncing local-tts with UV_TORCH_BACKEND=cpu..."
+                UV_TORCH_BACKEND=cpu "${uv_bin}" sync >/dev/null 2>&1 || true
             fi
             # Install hf_transfer to support fast Hugging Face downloads on RunPod
             "${uv_bin}" pip install hf_transfer >/dev/null 2>&1 || true
